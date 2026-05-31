@@ -81,8 +81,10 @@ Filename: "{app}\python\pythonw.exe"; \
 [UninstallRun]
 ; Best-effort: kill any running WorkPulse tray + child processes before uninstall.
 ; (-ErrorAction SilentlyContinue so a missing process doesn't abort uninstall.)
+; NOTE: Inno Setup uses {} for constants. Curlies meant for PowerShell must be
+; doubled as {{ }} so they pass through literally. {app} still expands.
 Filename: "powershell.exe"; \
-    Parameters: "-NoProfile -Command ""Get-Process pythonw -ErrorAction SilentlyContinue | Where-Object { $_.Path -like '{app}\*' } | Stop-Process -Force -ErrorAction SilentlyContinue"""; \
+    Parameters: "-NoProfile -Command ""Get-Process pythonw -ErrorAction SilentlyContinue | Where-Object {{ $_.Path -like '{app}\*' }} | Stop-Process -Force -ErrorAction SilentlyContinue"""; \
     Flags: runhidden waituntilterminated
 
 [UninstallDelete]
