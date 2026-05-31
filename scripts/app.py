@@ -846,6 +846,52 @@ async def api_job_resume(job_id: str):
     return {"ok": True, **rec}
 
 
+# ── v1.2b: LLM-inferred job-name suggestions (Loop B for Jobs) ───────────────
+
+@app.get("/api/jobs/suggestions")
+def api_job_suggestions():
+    """Pending job-name suggestions per stream. Cached by activity fingerprint;
+    only invokes the LLM when activity has materially changed."""
+    from scripts.job_suggester import compute_suggestions
+    try:
+        out = compute_suggestions()
+    except Exception as e:
+        return JSONResponse({"suggestions": [], "error": str(e)[:200]}, status_code=200)
+    # Stamp each with the stream color for the dashboard
+    for s in out:
+        s["stream_color"] = STREAM_COLORS.get(s.get("stream") or "", "#6b7280")
+    return {"suggestions": out}
+
+
+@app.post("/api/jobs/suggestions/accept")
+async def api_job_suggestion_accept(payload: dict):
+    """Body: {stream, name}. Starts the job and records the acceptance.
+    The suggestion is naturally suppressed afterwards because there's now
+    an active job in the stream."""
+    from scripts.job_suggester import accept_suggestion
+    name = (payload.get("name") or "").strip()
+    stream = (payload.get("stream") or "").strip()
+    if not name or not stream:
+        return JSONResponse({"error": "name and stream required"}, status_code=400)
+    try:
+        rec = accept_suggestion(stream, name)
+    except ValueError as e:
+        return JSONResponse({"error": str(e)}, status_code=400)
+    return {"ok": True, **rec}
+
+
+@app.post("/api/jobs/suggestions/dismiss")
+async def api_job_suggestion_dismiss(payload: dict):
+    """Body: {stream}. Suppresses the same suggestion for 4 hours,
+    or until the activity in that stream changes materially."""
+    from scripts.job_suggester import dismiss_suggestion
+    stream = (payload.get("stream") or "").strip()
+    if not stream:
+        return JSONResponse({"error": "stream required"}, status_code=400)
+    dismiss_suggestion(stream)
+    return {"ok": True}
+
+
 @app.get("/api/jobs/{job_id}")
 def api_job_detail(job_id: str):
     """Full detail for one job — rollup + all sessions + lift opportunities."""
@@ -1172,6 +1218,25 @@ footer { margin-top: 64px; padding-top: 24px; border-top: 1px solid var(--border
 .lift-suggest { font-size: 12px; color: var(--text-soft); line-height: 1.5; }
 .job-lift-empty { font-size: 12px; color: var(--text-faint); font-style: italic; }
 
+/* Job-name suggestions (LLM-inferred, v1.2b) */
+.sg-block { margin-bottom: 20px; }
+.sg-card { display: flex; align-items: center; gap: 14px; padding: 14px 16px;
+  background: linear-gradient(180deg, #fdfbf3 0%, #f9f4e5 100%);
+  border: 1px solid var(--amber-br); border-radius: 12px; margin-bottom: 8px; }
+.sg-card.medium { background: var(--bg); border-color: var(--border); }
+.sg-bulb { font-size: 18px; line-height: 1; flex-shrink: 0; }
+.sg-body { flex: 1; min-width: 0; }
+.sg-line1 { font-size: 14px; color: var(--text); }
+.sg-line1 strong { font-weight: 600; }
+.sg-line2 { font-size: 12px; color: var(--text-soft); margin-top: 3px; }
+.sg-actions { display: flex; gap: 6px; flex-shrink: 0; }
+.sg-actions button { background: transparent; border: 1px solid var(--border);
+  color: var(--text-soft); font-size: 12px; padding: 5px 12px; border-radius: 6px;
+  cursor: pointer; font-family: inherit; transition: all 0.12s; }
+.sg-actions button:hover { background: var(--surface); color: var(--text); border-color: var(--border-d); }
+.sg-actions button.primary { background: var(--text); color: var(--bg); border-color: var(--text); }
+.sg-actions button.primary:hover { opacity: 0.88; }
+
 /* Recently ended jobs (mini-list under the active list) */
 .re-block { margin-top: 28px; padding-top: 18px; border-top: 1px solid var(--border); }
 .re-head { font-size: 11px; font-weight: 600; letter-spacing: 0.6px;
@@ -1240,12 +1305,13 @@ footer { margin-top: 64px; padding-top: 24px; border-top: 1px solid var(--border
   <div class="sub" id="hero-sub"></div>
 </div>
 
-<!-- Jobs in flight (the Coach surface — v1.1a + v1.2a) -->
+<!-- Jobs in flight (the Coach surface — v1.1a + v1.2a + v1.2b) -->
 <div class="card jobs-card">
   <div class="eyebrow jobs-eyebrow">
     <span>Jobs in flight</span>
     <button class="btn-start-job" onclick="openStartJob()">+ Start a job</button>
   </div>
+  <div id="suggestions-block" class="sg-block"></div>
   <div id="jobs-panel"><div class="empty">Loading…</div></div>
   <div id="recently-ended-block"></div>
 </div>
@@ -1801,19 +1867,22 @@ function isJobPaused(job) {
 }
 
 async function fetchJobs() {
-  let active = [], ended = [];
+  let active = [], ended = [], suggestions = [];
   try {
-    const [aResp, rResp] = await Promise.all([
+    const [aResp, rResp, sResp] = await Promise.all([
       fetch('/api/jobs/active'),
       fetch('/api/jobs/recent?days=14&only_ended=true'),
+      fetch('/api/jobs/suggestions'),
     ]);
     active = (await aResp.json()).jobs || [];
     ended  = (await rResp.json()).jobs || [];
+    suggestions = (await sResp.json()).suggestions || [];
   } catch (e) {
     document.getElementById('jobs-panel').innerHTML =
       '<div class="empty">Could not load jobs.</div>';
     return;
   }
+  renderSuggestions(suggestions);
   const panel = document.getElementById('jobs-panel');
   if (active.length === 0) {
     panel.innerHTML =
@@ -1956,6 +2025,88 @@ async function endJob(id, name) {
   } catch (e) {
     showToast('Error: ' + e.message);
   }
+}
+
+// ── Job-name suggestions (v1.2b) ───────────────────────────────────────────
+
+function renderSuggestions(suggestions) {
+  const block = document.getElementById('suggestions-block');
+  if (!suggestions || suggestions.length === 0) { block.innerHTML = ''; return; }
+  block.innerHTML = suggestions.map(s => {
+    const cls = s.confidence === 'high' ? '' : 'medium';
+    const streamLabel = escapeHtml(s.label || s.stream);
+    const name = escapeHtml(s.name);
+    const totalMin = fmtMins(s.total_minutes);
+    const confLabel = s.confidence === 'high' ? 'strong match' : 'possible';
+    return `
+      <div class="sg-card ${cls}">
+        <div class="sg-bulb">💡</div>
+        <div class="sg-body">
+          <div class="sg-line1">
+            Looks like you've been on a single piece of
+            <strong>${streamLabel}</strong> work — call it
+            <strong>"${name}"</strong>?
+          </div>
+          <div class="sg-line2">
+            ${totalMin} of activity in the last 4 hours · ${s.session_count} window${s.session_count===1?'':'s'} · ${confLabel}
+          </div>
+        </div>
+        <div class="sg-actions">
+          <button class="primary" onclick="acceptSuggestion('${escapeHtml(s.stream)}', '${escapeAttr(name)}')">Accept</button>
+          <button onclick="renameSuggestion('${escapeHtml(s.stream)}', '${escapeAttr(name)}')">Rename</button>
+          <button onclick="dismissSuggestion('${escapeHtml(s.stream)}', '${escapeAttr(name)}')">Dismiss</button>
+        </div>
+      </div>`;
+  }).join('');
+}
+
+function escapeAttr(s) {
+  return (s || '').replace(/'/g, "\\'").replace(/"/g, '&quot;');
+}
+
+async function acceptSuggestion(stream, name) {
+  try {
+    const r = await fetch('/api/jobs/suggestions/accept', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({ stream, name }),
+    });
+    const d = await r.json();
+    if (r.ok) {
+      showToast(`Started: ${name}`);
+      await fetchJobs();
+    } else {
+      showToast('Error: ' + (d.error || 'could not start job'));
+    }
+  } catch (e) { showToast('Error: ' + e.message); }
+}
+
+function renameSuggestion(stream, name) {
+  // Open the existing Start-Job modal, pre-filled with the suggested name + stream
+  openStartJob();
+  setTimeout(() => {
+    document.getElementById('sj-name').value = name;
+    const sel = document.getElementById('sj-stream');
+    if (sel) sel.value = stream;
+    document.getElementById('sj-name').focus();
+    document.getElementById('sj-name').select();
+  }, 80);
+}
+
+async function dismissSuggestion(stream, name) {
+  try {
+    const r = await fetch('/api/jobs/suggestions/dismiss', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({ stream }),
+    });
+    if (r.ok) {
+      showToast('Suggestion dismissed.');
+      await fetchJobs();
+    } else {
+      showToast('Could not dismiss.');
+    }
+  } catch (e) { showToast('Error: ' + e.message); }
 }
 
 async function resumeJob(id, name) {
