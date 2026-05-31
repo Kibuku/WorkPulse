@@ -116,11 +116,13 @@ def _fold(events: list[dict]) -> dict[str, dict]:
                 "actor_id":   e.get("actor_id", ""),
                 "created_at": e.get("ts"),
                 "ended_at":   None,
+                "ended_by":   None,   # 'user' | 'auto' | None
                 "note":       e.get("note", "") or "",
             }
-        elif ev == "end":
+        elif ev in ("end", "auto-end"):
             if jid in state:
                 state[jid]["ended_at"] = e.get("ts")
+                state[jid]["ended_by"] = "auto" if ev == "auto-end" else "user"
         elif ev == "rename":
             if jid in state:
                 state[jid]["name"] = e.get("name", state[jid]["name"])
@@ -199,7 +201,9 @@ def start_job(name: str, stream: str | None, note: str = "",
     }
 
 
-def end_job(job_id: str, cfg: dict | None = None) -> dict:
+def end_job(job_id: str, cfg: dict | None = None, auto: bool = False) -> dict:
+    """End an active job. Pass auto=True from the auto-close pass so the event
+    log distinguishes 'I'm done with this' from 'system noticed I moved on'."""
     if cfg is None:
         cfg = load_config()
     rec = get_job(job_id, cfg)
@@ -208,9 +212,123 @@ def end_job(job_id: str, cfg: dict | None = None) -> dict:
     if rec.get("ended_at"):
         return rec  # already ended
     ts = _now()
-    _append_event({"event": "end", "id": job_id, "ts": ts}, cfg)
+    ev = "auto-end" if auto else "end"
+    _append_event({"event": ev, "id": job_id, "ts": ts}, cfg)
     rec["ended_at"] = ts
+    rec["ended_by"] = "auto" if auto else "user"
     return rec
+
+
+# ── auto-close: detect when the user has clearly moved on ────────────────────
+
+# A job auto-closes when its stream has been silent this long AND...
+AUTOCLOSE_AFTER_S = 30 * 60
+# ...the user has spent at least this much time in OTHER streams since.
+# The second condition prevents auto-closing during long idle / lunch breaks.
+AUTOCLOSE_OTHER_STREAM_S = 5 * 60
+# Fresh jobs with zero sessions get this much grace before being auto-closed.
+AUTOCLOSE_FRESH_GRACE_S = 4 * 3600
+
+
+def _last_session_end_for_job(job: dict, cfg: dict) -> datetime | None:
+    """When did the last session attributed to this job actually end?
+    None if the job has no sessions yet."""
+    sessions = sessions_for_job(job["id"], cfg)
+    if not sessions:
+        return None
+    latest = max(
+        (s.get("end") or s.get("start") or "") for s in sessions
+    )
+    if not latest:
+        return None
+    try:
+        return datetime.fromisoformat(latest)
+    except ValueError:
+        return None
+
+
+def _other_stream_activity_since(since: datetime, exclude_stream: str | None,
+                                 cfg: dict) -> float:
+    """Total seconds of non-idle activity in streams OTHER than `exclude_stream`
+    since the given timestamp. Walks today's + yesterday's activity logs only —
+    auto-close decisions don't need deeper history."""
+    total = 0.0
+    log_dir = resolve(cfg["paths"]["logs"])
+    today = date.today()
+    for offset in (1, 0):  # yesterday, then today (chronological)
+        d = today - timedelta(days=offset)
+        p = log_dir / f"activity_{d.isoformat()}.jsonl"
+        if not p.exists():
+            continue
+        for line in p.read_text(encoding="utf-8").splitlines():
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                rec = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            if rec.get("idle"):
+                continue
+            if exclude_stream and rec.get("stream") == exclude_stream:
+                continue
+            try:
+                end_dt = datetime.fromisoformat(rec.get("end") or rec.get("start") or "")
+            except (ValueError, TypeError):
+                continue
+            if end_dt <= since:
+                continue
+            total += float(rec.get("duration_s") or 0)
+    return total
+
+
+def autoclose_stale_jobs(cfg: dict | None = None) -> list[dict]:
+    """Walk active jobs and close any where the user has clearly moved on.
+    Returns the list of jobs that were closed (each augmented with the reason).
+    Cheap enough to call on every dashboard refresh."""
+    if cfg is None:
+        cfg = load_config()
+    now = datetime.now().astimezone()
+    closed: list[dict] = []
+    for job in list_active(cfg):
+        last_end = _last_session_end_for_job(job, cfg)
+        if last_end is None:
+            # Fresh job with no sessions yet — close it only after a long grace
+            try:
+                created = datetime.fromisoformat(job["created_at"])
+            except (KeyError, ValueError):
+                continue
+            if (now - created).total_seconds() > AUTOCLOSE_FRESH_GRACE_S:
+                end_job(job["id"], cfg=cfg, auto=True)
+                closed.append({**job, "auto_reason": "no activity in 4h"})
+            continue
+        idle_s = (now - last_end).total_seconds()
+        if idle_s < AUTOCLOSE_AFTER_S:
+            continue
+        # Stream has been quiet long enough. Has the user actually moved on,
+        # or are they on a lunch break / mid-day pause?
+        other_s = _other_stream_activity_since(last_end, job.get("stream"), cfg)
+        if other_s >= AUTOCLOSE_OTHER_STREAM_S:
+            end_job(job["id"], cfg=cfg, auto=True)
+            closed.append({**job, "auto_reason": f"moved to another stream ({round(other_s/60)} min)"})
+    return closed
+
+
+def resume_job(job_id: str, cfg: dict | None = None) -> dict:
+    """Re-open a previously-ended job under a NEW job id (same name + stream).
+    Useful when auto-close fired too eagerly, or when picking work back up after
+    a break. The original record is preserved; a new job starts now."""
+    if cfg is None:
+        cfg = load_config()
+    rec = get_job(job_id, cfg)
+    if rec is None:
+        raise KeyError(f"no such job: {job_id}")
+    return start_job(
+        name=rec["name"],
+        stream=rec.get("stream"),
+        note=f"(resumed from {job_id})",
+        cfg=cfg,
+    )
 
 
 # ── session linkage + roll-up ────────────────────────────────────────────────
@@ -364,6 +482,164 @@ def rollup(job_id: str, include_sessions: bool = False,
             for s in sessions
         ]
     return out
+
+
+# ── Markdown export ──────────────────────────────────────────────────────────
+
+def _human_dur(seconds: float) -> str:
+    s = int(seconds or 0)
+    if s < 60: return f"{s}s"
+    m = s // 60
+    if m < 60: return f"{m} min"
+    h, mm = divmod(m, 60)
+    return f"{h}h {mm}m" if mm else f"{h}h"
+
+
+def _human_date(iso: str | None) -> str:
+    if not iso:
+        return "—"
+    try:
+        return datetime.fromisoformat(iso).strftime("%a, %b %d %Y")
+    except (ValueError, TypeError):
+        return iso[:10]
+
+
+def _human_time(iso: str | None) -> str:
+    if not iso:
+        return ""
+    try:
+        return datetime.fromisoformat(iso).strftime("%H:%M")
+    except (ValueError, TypeError):
+        return iso[11:16]
+
+
+def _narrative_summary(roll: dict, cfg: dict) -> str:
+    """Generate a 2-3 sentence narrative of how the job unfolded.
+    Uses scripts.llm (any configured backend); falls back to a deterministic
+    one-liner if no LLM is available."""
+    try:
+        from scripts.llm import ask_text
+        from scripts.ai_logger import log_session
+    except ImportError:
+        return ""
+
+    apps_summary = ", ".join(f"{a['app']} {_human_dur(a['seconds'])}"
+                             for a in (roll.get("apps") or [])[:5])
+    days_summary = ", ".join(f"{d['date']} ({_human_dur(d['minutes']*60)})"
+                             for d in (roll.get("day_breakdown") or [])[:7])
+    lift_summary = "; ".join(l["title"] for l in (roll.get("lift") or [])[:3]) or "none flagged"
+
+    prompt = (
+        "Write a 2-3 sentence factual summary of how this work was executed. "
+        "No coaching, no advice, no commentary on whether the user worked 'well' — "
+        "just observe the shape of the work.\n\n"
+        f"Job:        {roll.get('name')}\n"
+        f"Stream:     {roll.get('stream')}\n"
+        f"Total time: {_human_dur(roll.get('total_seconds') or 0)}\n"
+        f"Days:       {days_summary}\n"
+        f"Apps:       {apps_summary}\n"
+        f"AI-lift opportunities found: {lift_summary}\n\n"
+        "Reply with prose only. No bullet points, no headers, no leading label."
+    )
+    text, meta = ask_text(prompt, max_tokens=200, cfg=cfg)
+    if meta.get("backend") != "none":
+        try:
+            log_session(
+                stream=roll.get("stream"),
+                task_summary=f"Job export narrative: {roll.get('name','')}"[:200],
+                input_tokens=meta.get("input_tokens", 0),
+                output_tokens=meta.get("output_tokens", 0),
+                tool_used=f"workpulse-export-{meta.get('backend')}",
+                duration_minutes=round((meta.get("duration_s") or 0) / 60, 3),
+                cfg=cfg,
+            )
+        except Exception:
+            pass
+    return (text or "").strip()
+
+
+def export_job_markdown(job_id: str, *, include_titles: bool = True,
+                        cfg: dict | None = None) -> str | None:
+    """Build a self-contained markdown digest of a Job — suitable for emailing
+    a client, pasting into a timesheet, or filing as a personal record.
+    Returns None if the job doesn't exist."""
+    if cfg is None:
+        cfg = load_config()
+    roll = rollup(job_id, include_sessions=True, cfg=cfg)
+    if roll is None:
+        return None
+
+    streams_cfg = cfg.get("streams") or {}
+    stream_key = roll.get("stream") or ""
+    stream_label = streams_cfg.get(stream_key, stream_key or "(no stream)")
+
+    lines: list[str] = []
+    lines.append(f"# {roll.get('name', '(untitled job)')}")
+    lines.append("")
+    lines.append(f"**Stream:** {stream_label}  ")
+    lines.append(f"**Duration:** {_human_dur(roll.get('total_seconds') or 0)} "
+                 f"across {len(roll.get('day_breakdown') or [])} day"
+                 f"{'s' if len(roll.get('day_breakdown') or []) != 1 else ''}  ")
+    lines.append(f"**Started:** {_human_date(roll.get('created_at'))}  ")
+    if roll.get("ended_at"):
+        lines.append(f"**Ended:** {_human_date(roll['ended_at'])}  ")
+    if roll.get("note"):
+        lines.append(f"**Note:** {roll['note']}  ")
+    lines.append("")
+
+    # Narrative summary (LLM-generated, graceful when no key)
+    narrative = _narrative_summary(roll, cfg)
+    if narrative:
+        lines.append("## Summary")
+        lines.append("")
+        lines.append(narrative)
+        lines.append("")
+
+    # Day-by-day breakdown
+    if roll.get("day_breakdown"):
+        lines.append("## Day-by-day breakdown")
+        lines.append("")
+        # Group sessions by date
+        sessions_by_day: dict[str, list[dict]] = defaultdict(list)
+        for s in (roll.get("sessions") or []):
+            try:
+                day = datetime.fromisoformat(s.get("start") or "").date().isoformat()
+            except (ValueError, TypeError):
+                continue
+            sessions_by_day[day].append(s)
+        for day_block in roll["day_breakdown"]:
+            day = day_block["date"]
+            lines.append(f"### {_human_date(day)} — {_human_dur(day_block['minutes']*60)}")
+            for s in sessions_by_day.get(day, []):
+                t = _human_time(s.get("start"))
+                dur = _human_dur(s.get("duration_s") or 0)
+                app = s.get("app") or "(unknown)"
+                if include_titles and s.get("title"):
+                    title = (s["title"] or "")[:80]
+                    lines.append(f"- `{t}` {app} ({dur}) — {title}")
+                else:
+                    lines.append(f"- `{t}` {app} ({dur})")
+            lines.append("")
+
+    # Apps used
+    if roll.get("apps"):
+        lines.append("## Apps used")
+        lines.append("")
+        for a in roll["apps"]:
+            lines.append(f"- **{a['app']}** — {_human_dur(a['seconds'])}")
+        lines.append("")
+
+    # AI-lift opportunities
+    if roll.get("lift"):
+        lines.append("## AI-lift opportunities identified")
+        lines.append("")
+        for l in roll["lift"]:
+            lines.append(f"- **{l['title']}** — {l['suggestion']}")
+        lines.append("")
+
+    lines.append("---")
+    lines.append(f"*Generated by WorkPulse on {datetime.now().astimezone().strftime('%b %d, %Y at %H:%M')}.*")
+    return "\n".join(lines)
 
 
 # ── CLI: smoke + diagnostic ───────────────────────────────────────────────────

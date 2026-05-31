@@ -138,6 +138,21 @@ def ask_json(prompt: str, *, max_tokens: int = 128, cfg: dict | None = None) -> 
     return None, meta  # backend == "none"
 
 
+def ask_text(prompt: str, *, max_tokens: int = 600, cfg: dict | None = None) -> tuple[str | None, dict]:
+    """Single-shot prompt expecting a plain-text reply (for narrative summaries,
+    report blurbs, etc.). Returns (text_or_None, meta) — None if no backend
+    is configured or the call fails."""
+    if cfg is None:
+        cfg = load_config()
+    backend = active_backend(cfg)
+    meta = {"backend": backend, "input_tokens": 0, "output_tokens": 0, "duration_s": 0.0}
+    if backend == "anthropic":
+        return _ask_anthropic_text(prompt, max_tokens, cfg, meta)
+    if backend == "ollama":
+        return _ask_ollama_text(prompt, max_tokens, cfg, meta)
+    return None, meta
+
+
 # ── Anthropic backend ─────────────────────────────────────────────────────────
 
 def _ask_anthropic_json(prompt: str, max_tokens: int, cfg: dict, meta: dict):
@@ -196,6 +211,59 @@ def _ask_ollama_json(prompt: str, max_tokens: int, cfg: dict, meta: dict):
         log.warning("ollama call failed: %s", e)
         return None, meta
     return _parse_json_loose(raw), meta
+
+
+# ── text variants (for narrative summaries, no JSON parsing) ──────────────────
+
+def _ask_anthropic_text(prompt: str, max_tokens: int, cfg: dict, meta: dict):
+    try:
+        import anthropic
+    except ImportError:
+        return None, meta
+    api_key = get_secret("anthropic_key")
+    if not api_key:
+        return None, meta
+    try:
+        client = anthropic.Anthropic(api_key=api_key)
+        t0 = time.monotonic()
+        msg = client.messages.create(
+            model=cfg["llm"]["model"],
+            max_tokens=max_tokens,
+            messages=[{"role": "user", "content": prompt}],
+        )
+        meta["duration_s"] = round(time.monotonic() - t0, 3)
+        meta["input_tokens"]  = getattr(msg.usage, "input_tokens", 0)
+        meta["output_tokens"] = getattr(msg.usage, "output_tokens", 0)
+        return (msg.content[0].text or "").strip(), meta
+    except Exception as e:
+        log.warning("anthropic text call failed: %s", e)
+        return None, meta
+
+
+def _ask_ollama_text(prompt: str, max_tokens: int, cfg: dict, meta: dict):
+    import urllib.request
+    model = _local_model(cfg)
+    body = json.dumps({
+        "model":   model,
+        "messages":[{"role": "user", "content": prompt}],
+        "stream":  False,
+        "options": {"num_predict": max_tokens, "temperature": 0.3},
+    }).encode("utf-8")
+    req = urllib.request.Request(
+        f"{OLLAMA_URL}/api/chat", data=body, method="POST",
+        headers={"Content-Type": "application/json"},
+    )
+    try:
+        t0 = time.monotonic()
+        with urllib.request.urlopen(req, timeout=120) as resp:
+            payload = json.loads(resp.read().decode("utf-8"))
+        meta["duration_s"]    = round(time.monotonic() - t0, 3)
+        meta["input_tokens"]  = int(payload.get("prompt_eval_count", 0) or 0)
+        meta["output_tokens"] = int(payload.get("eval_count", 0) or 0)
+        return ((payload.get("message") or {}).get("content") or "").strip(), meta
+    except Exception as e:
+        log.warning("ollama text call failed: %s", e)
+        return None, meta
 
 
 # ── helper: forgiving JSON extraction ─────────────────────────────────────────

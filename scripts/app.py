@@ -778,8 +778,11 @@ async def api_set_email(payload: dict):
 @app.get("/api/jobs/active")
 def api_jobs_active():
     """Active jobs with their session rollup + AI-lift opportunities.
-    Drives the 'Jobs in flight' card on the dashboard."""
-    from scripts.jobs import list_active, rollup
+    Runs auto-close first so the response is consistent with what the user
+    would see if they refreshed twice in a row. Drives the 'Jobs in flight'
+    card on the dashboard."""
+    from scripts.jobs import list_active, rollup, autoclose_stale_jobs
+    auto_closed = autoclose_stale_jobs()   # idempotent; safe on every refresh
     out = []
     for rec in list_active():
         r = rollup(rec["id"])
@@ -787,22 +790,60 @@ def api_jobs_active():
             continue
         r["stream_color"] = STREAM_COLORS.get(r.get("stream") or "", "#6b7280")
         out.append(r)
-    return {"jobs": out}
+    return {"jobs": out, "auto_closed_count": len(auto_closed)}
 
 
 @app.get("/api/jobs/recent")
-def api_jobs_recent(days: int = 30):
-    """Active + ended jobs from the last N days, newest first.
-    Light payload — does NOT include session rollups or lift detection."""
+def api_jobs_recent(days: int = 14, only_ended: bool = False):
+    """Jobs from the last N days, newest first. Light payload — no session
+    rollups, no lift detection. Used for the 'Recently ended' mini-list on
+    the dashboard, the Resume affordance, and the export picker."""
     from scripts.jobs import list_all
     days = max(1, min(int(days), 365))
     out = []
     for rec in list_all(days_back=days):
+        if only_ended and not rec.get("ended_at"):
+            continue
         out.append({
             **rec,
             "stream_color": STREAM_COLORS.get(rec.get("stream") or "", "#6b7280"),
         })
     return {"jobs": out, "days": days}
+
+
+@app.get("/api/jobs/{job_id}/export")
+def api_job_export(job_id: str, include_titles: bool = True):
+    """Markdown digest of a Job — for sharing, archiving, or pasting into a
+    timesheet. Returns text/markdown with Content-Disposition: attachment so
+    browsers offer to save it; the dashboard also previews it inline."""
+    from scripts.jobs import export_job_markdown, get_job
+    rec = get_job(job_id)
+    if rec is None:
+        return JSONResponse({"error": "not found"}, status_code=404)
+    md = export_job_markdown(job_id, include_titles=bool(include_titles))
+    if md is None:
+        return JSONResponse({"error": "could not build export"}, status_code=500)
+    # Safe filename from the job name
+    safe = re.sub(r"[^A-Za-z0-9._-]+", "_", rec["name"]).strip("_") or "job"
+    filename = f"{safe}-{job_id}.md"
+    from fastapi.responses import PlainTextResponse
+    return PlainTextResponse(
+        md,
+        media_type="text/markdown; charset=utf-8",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
+
+
+@app.post("/api/jobs/{job_id}/resume")
+async def api_job_resume(job_id: str):
+    """Re-open an ended job as a new active job (same name + stream).
+    Used by the 'Resume' button on recently-ended cards."""
+    from scripts.jobs import resume_job
+    try:
+        rec = resume_job(job_id)
+    except KeyError as e:
+        return JSONResponse({"error": str(e)}, status_code=404)
+    return {"ok": True, **rec}
 
 
 @app.get("/api/jobs/{job_id}")
@@ -1131,6 +1172,35 @@ footer { margin-top: 64px; padding-top: 24px; border-top: 1px solid var(--border
 .lift-suggest { font-size: 12px; color: var(--text-soft); line-height: 1.5; }
 .job-lift-empty { font-size: 12px; color: var(--text-faint); font-style: italic; }
 
+/* Recently ended jobs (mini-list under the active list) */
+.re-block { margin-top: 28px; padding-top: 18px; border-top: 1px solid var(--border); }
+.re-head { font-size: 11px; font-weight: 600; letter-spacing: 0.6px;
+  text-transform: uppercase; color: var(--text-soft); margin-bottom: 10px; }
+.re-row { display: flex; align-items: center; gap: 12px; padding: 8px 0;
+  border-bottom: 1px dashed var(--border); }
+.re-row:last-child { border-bottom: none; }
+.re-name { flex: 1; font-size: 13px; min-width: 0;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.re-meta { font-size: 11px; color: var(--text-faint); font-variant-numeric: tabular-nums; }
+.re-actions { display: flex; gap: 4px; }
+.re-actions button { background: transparent; border: 1px solid var(--border);
+  color: var(--text-soft); font-size: 11px; padding: 3px 9px; border-radius: 5px;
+  cursor: pointer; font-family: inherit; transition: all 0.12s; }
+.re-actions button:hover { background: var(--bg); color: var(--text); border-color: var(--border-d); }
+.re-auto-tag { font-size: 10px; color: var(--text-faint); font-style: italic;
+  margin-left: 6px; }
+
+/* Export modal — markdown preview + copy/download */
+.export-modal .modal { max-width: 720px; }
+.export-meta { font-size: 12px; color: var(--text-soft); margin-bottom: 14px; }
+.export-preview { background: var(--bg); border: 1px solid var(--border);
+  border-radius: 10px; padding: 18px 22px; max-height: 50vh; overflow-y: auto;
+  font-family: ui-monospace, 'SF Mono', Menlo, Consolas, monospace;
+  font-size: 12px; line-height: 1.55; color: var(--text);
+  white-space: pre-wrap; word-break: break-word; }
+.export-loading { padding: 60px 0; text-align: center; color: var(--text-faint);
+  font-style: italic; }
+
 /* Start-Job modal — reuses .modal-bg + .modal styles */
 .sj-row { margin-bottom: 18px; }
 .sj-row label { display: block; font-size: 12px; font-weight: 500;
@@ -1170,13 +1240,14 @@ footer { margin-top: 64px; padding-top: 24px; border-top: 1px solid var(--border
   <div class="sub" id="hero-sub"></div>
 </div>
 
-<!-- Jobs in flight (the v1.1a Coach surface) -->
+<!-- Jobs in flight (the Coach surface — v1.1a + v1.2a) -->
 <div class="card jobs-card">
   <div class="eyebrow jobs-eyebrow">
     <span>Jobs in flight</span>
     <button class="btn-start-job" onclick="openStartJob()">+ Start a job</button>
   </div>
   <div id="jobs-panel"><div class="empty">Loading…</div></div>
+  <div id="recently-ended-block"></div>
 </div>
 
 <!-- Weekly heatmap -->
@@ -1290,6 +1361,28 @@ footer { margin-top: 64px; padding-top: 24px; border-top: 1px solid var(--border
     <div class="modal-actions">
       <button class="btn-ghost" onclick="closeSettings()">Cancel</button>
       <button class="btn-primary" onclick="saveSettings()">Save</button>
+    </div>
+  </div>
+</div>
+
+<!-- Job-Export modal -->
+<div class="modal-bg export-modal" id="export-modal" onclick="if(event.target===this)closeExport()">
+  <div class="modal" role="dialog" aria-labelledby="export-title">
+    <h2 id="export-title">Export job</h2>
+    <div class="sub" id="export-sub">Building digest…</div>
+    <div class="export-meta">
+      <label style="display:inline-flex;gap:6px;align-items:center;font-size:12px">
+        <input type="checkbox" id="export-include-titles" checked />
+        Include window titles in the day-by-day breakdown
+      </label>
+    </div>
+    <div class="export-preview" id="export-preview"><div class="export-loading">Generating…</div></div>
+    <div class="modal-actions">
+      <button class="btn-ghost" onclick="closeExport()">Close</button>
+      <div style="display:flex;gap:8px">
+        <button class="btn-link" onclick="copyExport()">Copy</button>
+        <button class="btn-primary" onclick="downloadExport()">Download .md</button>
+      </div>
     </div>
   </div>
 </div>
@@ -1708,22 +1801,50 @@ function isJobPaused(job) {
 }
 
 async function fetchJobs() {
-  let d;
+  let active = [], ended = [];
   try {
-    const r = await fetch('/api/jobs/active');
-    d = await r.json();
+    const [aResp, rResp] = await Promise.all([
+      fetch('/api/jobs/active'),
+      fetch('/api/jobs/recent?days=14&only_ended=true'),
+    ]);
+    active = (await aResp.json()).jobs || [];
+    ended  = (await rResp.json()).jobs || [];
   } catch (e) {
     document.getElementById('jobs-panel').innerHTML =
       '<div class="empty">Could not load jobs.</div>';
     return;
   }
-  const jobs = d.jobs || [];
-  if (jobs.length === 0) {
-    document.getElementById('jobs-panel').innerHTML =
+  const panel = document.getElementById('jobs-panel');
+  if (active.length === 0) {
+    panel.innerHTML =
       '<div class="empty">No jobs in flight. Hit "+ Start a job" to track a specific piece of work.</div>';
-    return;
+  } else {
+    panel.innerHTML = active.map(renderJobCard).join('');
   }
-  document.getElementById('jobs-panel').innerHTML = jobs.map(renderJobCard).join('');
+  // Recently-ended mini-list (newest first, cap at 5)
+  const reBlock = document.getElementById('recently-ended-block');
+  const recent = ended.slice(0, 5);
+  if (recent.length === 0) {
+    reBlock.innerHTML = '';
+  } else {
+    reBlock.innerHTML = `
+      <div class="re-block">
+        <div class="re-head">Recently ended</div>
+        ${recent.map(j => `
+          <div class="re-row">
+            <span class="lg-dot" style="background:${j.stream_color}"></span>
+            <div class="re-name">
+              ${escapeHtml(j.name)}
+              ${j.ended_by === 'auto' ? '<span class="re-auto-tag">auto-ended</span>' : ''}
+            </div>
+            <div class="re-meta">ended ${fmtRelative(j.ended_at)}</div>
+            <div class="re-actions">
+              <button onclick="openExport('${escapeHtml(j.id)}', '${escapeHtml(j.name)}')">Export</button>
+              <button onclick="resumeJob('${escapeHtml(j.id)}', '${escapeHtml(j.name)}')">Resume</button>
+            </div>
+          </div>`).join('')}
+      </div>`;
+  }
 }
 
 function renderJobCard(job) {
@@ -1766,6 +1887,7 @@ function renderJobCard(job) {
         <div class="job-name">${escapeHtml(job.name)}</div>
         <span class="chip" style="background:${job.stream_color}">${escapeHtml((job.stream||'').replace(/-/g,' '))}</span>
         <div class="job-actions">
+          <button class="job-end-btn" onclick="openExport('${escapeHtml(job.id)}', '${escapeHtml(job.name)}')">Export</button>
           <button class="job-end-btn" onclick="endJob('${escapeHtml(job.id)}', '${escapeHtml(job.name)}')">End job</button>
         </div>
       </div>
@@ -1834,6 +1956,92 @@ async function endJob(id, name) {
   } catch (e) {
     showToast('Error: ' + e.message);
   }
+}
+
+async function resumeJob(id, name) {
+  if (!confirm(`Resume "${name}"?\\n\\nStarts a new active job with the same name + stream. The previous job's record is preserved.`)) return;
+  try {
+    const r = await fetch(`/api/jobs/${id}/resume`, { method: 'POST' });
+    const d = await r.json();
+    if (r.ok) {
+      showToast(`Resumed: ${name}`);
+      await fetchJobs();
+    } else {
+      showToast('Error: ' + (d.error || 'could not resume'));
+    }
+  } catch (e) {
+    showToast('Error: ' + e.message);
+  }
+}
+
+// ── Job export modal ──────────────────────────────────────────────────────
+let _currentExportJobId = null;
+let _currentExportName = null;
+let _currentExportMarkdown = null;
+
+function openExport(jobId, name) {
+  _currentExportJobId = jobId;
+  _currentExportName = name;
+  _currentExportMarkdown = null;
+  document.getElementById('export-title').textContent = 'Export: ' + name;
+  document.getElementById('export-sub').textContent =
+    'A self-contained markdown digest you can paste into an email, timesheet, or shared note.';
+  document.getElementById('export-preview').innerHTML =
+    '<div class="export-loading">Generating digest…</div>';
+  document.getElementById('export-modal').classList.add('open');
+  loadExport();
+}
+
+function closeExport() {
+  document.getElementById('export-modal').classList.remove('open');
+  _currentExportJobId = null;
+  _currentExportMarkdown = null;
+}
+
+async function loadExport() {
+  if (!_currentExportJobId) return;
+  const includeTitles = document.getElementById('export-include-titles').checked;
+  try {
+    const r = await fetch(`/api/jobs/${_currentExportJobId}/export?include_titles=${includeTitles}`);
+    if (!r.ok) {
+      const err = await r.json().catch(() => ({error:'unknown'}));
+      document.getElementById('export-preview').innerHTML =
+        '<div class="export-loading">Error: ' + escapeHtml(err.error || 'failed') + '</div>';
+      return;
+    }
+    _currentExportMarkdown = await r.text();
+    document.getElementById('export-preview').textContent = _currentExportMarkdown;
+  } catch (e) {
+    document.getElementById('export-preview').innerHTML =
+      '<div class="export-loading">Error: ' + escapeHtml(e.message) + '</div>';
+  }
+}
+
+document.addEventListener('change', e => {
+  if (e.target && e.target.id === 'export-include-titles') loadExport();
+});
+
+async function copyExport() {
+  if (!_currentExportMarkdown) return;
+  try {
+    await navigator.clipboard.writeText(_currentExportMarkdown);
+    showToast('Copied to clipboard.');
+  } catch (e) {
+    showToast('Copy failed: ' + e.message);
+  }
+}
+
+function downloadExport() {
+  if (!_currentExportMarkdown) return;
+  const safe = (_currentExportName || 'job').replace(/[^A-Za-z0-9._-]+/g, '_').replace(/^_+|_+$/g, '');
+  const filename = `${safe}-${_currentExportJobId}.md`;
+  const blob = new Blob([_currentExportMarkdown], { type: 'text/markdown;charset=utf-8' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url; a.download = filename;
+  document.body.appendChild(a); a.click(); document.body.removeChild(a);
+  URL.revokeObjectURL(url);
+  showToast('Downloaded ' + filename);
 }
 
 // ── Weekly heatmap (last 14 days) ──────────────────────────────────────────
