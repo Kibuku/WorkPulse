@@ -28,32 +28,40 @@ Everything stays on your machine. Nothing is uploaded.
 
 ## Set up on a new Windows machine
 
-Three steps. Roughly 5 minutes.
+**Two ways.** Pick whichever fits.
 
-1. **Install Python 3.12+** from <https://www.python.org/downloads/>. During
-   the installer, tick *"Add python.exe to PATH"*.
+### Way 1 — The `.exe` installer (recommended for non-developers)
 
-2. **Get the WorkPulse files** onto your machine. Copy or clone the repo
-   somewhere — `C:\WorkPulse`, `D:\WorkPulse`, anywhere you like.
+1. Grab `WorkPulseSetup-<version>.exe` from the latest release (or build it
+   yourself; see `installer\README.md`)
+2. Double-click. Click Next, Next, Finish.
+3. Done.
 
-3. **Run the setup script** from that folder:
+The installer is self-contained (~40–60 MB) — bundles Python 3.12 and all
+dependencies. No prior install of Python required. Installs per-user (no
+admin prompt) at `%LOCALAPPDATA%\Programs\WorkPulse`. Auto-launches at every
+logon from then on.
+
+After install, click the WorkPulse tray icon → Open Dashboard, then click
+**Settings** to add an Anthropic API key if you want AI auto-tagging.
+
+### Way 2 — From source (for developers)
+
+1. **Install Python 3.12+** from <https://www.python.org/downloads/>. Tick
+   *"Add python.exe to PATH"*.
+2. Clone or copy the WorkPulse folder somewhere.
+3. Run the setup script:
 
    ```powershell
    powershell -ExecutionPolicy Bypass -File .\setup.ps1
    ```
 
-   It will:
-   - create a virtual environment under `.venv\`
-   - install dependencies from `requirements.txt`
-   - create your personal `config\config.yaml` from the template
-   - ask for your name and (optional) organization
-   - **optionally** prompt for an Anthropic API key and Gmail App Password —
-     both fully skippable; you can add them later from the Settings page
-   - register a Startup-folder shortcut so WorkPulse launches at every logon
-   - launch the tray and open the dashboard
+   Creates a `.venv\`, installs `requirements.txt`, generates your personal
+   config and identity files, registers the Startup shortcut, and optionally
+   launches the tray.
 
-When you're done, look for the WorkPulse icon in your system tray. Click it to
-open the dashboard.
+When you're done, look for the WorkPulse icon in your system tray. Click it
+to open the dashboard.
 
 ---
 

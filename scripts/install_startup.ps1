@@ -8,7 +8,15 @@
 # so the same installer works wherever the repo is copied.
 
 $Root      = (Resolve-Path (Join-Path $PSScriptRoot '..')).Path
-$Pythonw   = Join-Path $Root '.venv\Scripts\pythonw.exe'
+# Prefer the bundled embedded Python (installer scenario); fall back to .venv
+# (dev / git-clone scenario).
+$BundledPy = Join-Path $Root 'python\pythonw.exe'
+$VenvPy    = Join-Path $Root '.venv\Scripts\pythonw.exe'
+if (Test-Path $BundledPy) {
+    $Pythonw = $BundledPy
+} else {
+    $Pythonw = $VenvPy
+}
 $Script    = Join-Path $Root 'scripts\tray.py'
 $Startup   = [Environment]::GetFolderPath('Startup')
 $LinkPath  = Join-Path $Startup 'WorkPulse.lnk'

@@ -15,7 +15,10 @@
 
 param(
     [switch]$Yes,                       # answer "yes" to all optional prompts
-    [string]$ImportConfig               # path to an existing config.yaml to copy in
+    [switch]$SkipSecrets,               # don't prompt for API key / SMTP at all (installer use)
+    [switch]$SkipLaunch,                # don't ask whether to launch the tray (installer use)
+    [string]$ImportConfig,              # path to an existing config.yaml to copy in
+    [string]$BundledPython              # full path to a Python interpreter to use instead of `py`/`python` on PATH
 )
 
 $ErrorActionPreference = 'Stop'
@@ -38,19 +41,25 @@ function Confirm-YesNo($msg, $default = $true) {
 # ── 1. Python ────────────────────────────────────────────────────────────────
 Write-Step 1 "Checking for Python 3.12 or later..."
 $pythonExe = $null
-foreach ($cmd in @('py -3.12','py -3.13','py -3.14','py -3','python')) {
-    try {
-        $parts = $cmd -split ' '
-        $verRaw = & $parts[0] @($parts[1..($parts.Length-1)]) --version 2>&1
-        if ($verRaw -match 'Python (\d+)\.(\d+)') {
-            $major = [int]$matches[1]; $minor = [int]$matches[2]
-            if ($major -ge 3 -and ($major -gt 3 -or $minor -ge 12)) {
-                $pythonExe = $cmd
-                Write-Host "  Found: $verRaw  (using '$cmd')"
-                break
+# Installer use: a Python interpreter was bundled with the .exe and passed in.
+if ($BundledPython -and (Test-Path $BundledPython)) {
+    $pythonExe = "`"$BundledPython`""
+    Write-Host "  Using bundled Python: $BundledPython"
+} else {
+    foreach ($cmd in @('py -3.12','py -3.13','py -3.14','py -3','python')) {
+        try {
+            $parts = $cmd -split ' '
+            $verRaw = & $parts[0] @($parts[1..($parts.Length-1)]) --version 2>&1
+            if ($verRaw -match 'Python (\d+)\.(\d+)') {
+                $major = [int]$matches[1]; $minor = [int]$matches[2]
+                if ($major -ge 3 -and ($major -gt 3 -or $minor -ge 12)) {
+                    $pythonExe = $cmd
+                    Write-Host "  Found: $verRaw  (using '$cmd')"
+                    break
+                }
             }
-        }
-    } catch { }
+        } catch { }
+    }
 }
 if (-not $pythonExe) {
     Write-Host "  ERROR: Python 3.12+ not found on PATH." -ForegroundColor Red
@@ -60,18 +69,25 @@ if (-not $pythonExe) {
 }
 
 # ── 2. Virtual environment ───────────────────────────────────────────────────
-Write-Step 2 "Setting up Python virtual environment in .venv\..."
-$venvPython = Join-Path $Root '.venv\Scripts\python.exe'
-if (-not (Test-Path $venvPython)) {
-    $parts = $pythonExe -split ' '
-    & $parts[0] @($parts[1..($parts.Length-1)]) -m venv .venv
-    Write-Host "  Created .venv"
+if ($BundledPython) {
+    Write-Step 2 "Using bundled Python (skipping .venv creation and pip install)..."
+    $venvPython = $BundledPython
+    Write-Host "  Python: $BundledPython"
+    Write-Host "  Dependencies were pre-installed in the bundle."
 } else {
-    Write-Host "  .venv already exists; reusing"
+    Write-Step 2 "Setting up Python virtual environment in .venv\..."
+    $venvPython = Join-Path $Root '.venv\Scripts\python.exe'
+    if (-not (Test-Path $venvPython)) {
+        $parts = $pythonExe -split ' '
+        & $parts[0] @($parts[1..($parts.Length-1)]) -m venv .venv
+        Write-Host "  Created .venv"
+    } else {
+        Write-Host "  .venv already exists; reusing"
+    }
+    & $venvPython -m pip install --upgrade pip --quiet
+    & $venvPython -m pip install -r requirements.txt --quiet
+    Write-Host "  Installed dependencies from requirements.txt"
 }
-& $venvPython -m pip install --upgrade pip --quiet
-& $venvPython -m pip install -r requirements.txt --quiet
-Write-Host "  Installed dependencies from requirements.txt"
 
 # ── 3. Config bootstrap ──────────────────────────────────────────────────────
 Write-Step 3 "Bootstrapping config\..."
@@ -127,7 +143,7 @@ Write-Host "  stay off until you configure them. You can add them anytime from"
 Write-Host "  the dashboard Settings page (top-right corner) - no terminal needed."
 Write-Host ""
 
-if (Confirm-YesNo "  Add an Anthropic API key now? (enables smart auto-tagging)" $false) {
+if (-not $SkipSecrets -and (Confirm-YesNo "  Add an Anthropic API key now? (enables smart auto-tagging)" $false)) {
     Write-Host ""
     Write-Host "  Get one from: https://console.anthropic.com/settings/keys"
     Write-Host "  (Sign up, add a payment method, click 'Create Key'.)"
@@ -142,7 +158,7 @@ if (Confirm-YesNo "  Add an Anthropic API key now? (enables smart auto-tagging)"
     Write-Host "  Skipped. Add later from the dashboard."
 }
 
-if (Confirm-YesNo "  Set up Gmail email reports now? (off by default)" $false) {
+if (-not $SkipSecrets -and (Confirm-YesNo "  Set up Gmail email reports now? (off by default)" $false)) {
     Write-Host ""
     Write-Host "  You need a Gmail App Password (not your normal password)."
     Write-Host "  Create one at: https://myaccount.google.com/apppasswords"
@@ -168,7 +184,7 @@ Write-Host "WorkPulse will auto-launch at every logon from now on." -ForegroundC
 Write-Host "Dashboard will be at http://127.0.0.1:5700/"
 Write-Host ""
 
-if (Confirm-YesNo "  Launch WorkPulse now?" $true) {
+if (-not $SkipLaunch -and (Confirm-YesNo "  Launch WorkPulse now?" $true)) {
     $startup  = [Environment]::GetFolderPath('Startup')
     $linkPath = Join-Path $startup 'WorkPulse.lnk'
     Invoke-Item -Path $linkPath

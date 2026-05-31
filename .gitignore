@@ -38,6 +38,13 @@ config/learned_tags.json.tmp
 scripts/_*.ps1
 scripts/_*.py
 
+# ── Installer build artefacts ───────────────────────────────────────────────
+# The Inno Setup script and build.ps1 ARE committed (installer/*.iss, *.ps1, *.md).
+# Build inputs (downloaded Python, get-pip.py) and outputs (.exe) are not.
+installer/build/
+installer/dist/
+installer/cache/
+
 # ── Legacy env-var files ────────────────────────────────────────────────────
 .env
 *.env
