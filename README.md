@@ -4,6 +4,9 @@ A local-first personal productivity tracker. Sits in your system tray,
 watches what you actually work on, and shows you where the day went —
 without sending your data anywhere.
 
+**Platform support — v1.0.0:** Windows 10 / 11 only. macOS port planned
+(see Vision doc roadmap, v1.6). Linux is not on the roadmap.
+
 > WorkPulse is **v1: Personal Tracker** — the foundation layer.
 > The full architecture (Personal WorkPulse + Institution Brain) is described
 > in `WorkPulse_Vision_v1.1.docx`. Institutional layers (v3 Fingerprint Engine,
