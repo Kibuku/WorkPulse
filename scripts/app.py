@@ -773,6 +773,74 @@ async def api_set_email(payload: dict):
     return {"ok": True, "email": email}
 
 
+# ── Jobs API (v1.1a Coach surface) ───────────────────────────────────────────
+
+@app.get("/api/jobs/active")
+def api_jobs_active():
+    """Active jobs with their session rollup + AI-lift opportunities.
+    Drives the 'Jobs in flight' card on the dashboard."""
+    from scripts.jobs import list_active, rollup
+    out = []
+    for rec in list_active():
+        r = rollup(rec["id"])
+        if r is None:
+            continue
+        r["stream_color"] = STREAM_COLORS.get(r.get("stream") or "", "#6b7280")
+        out.append(r)
+    return {"jobs": out}
+
+
+@app.get("/api/jobs/recent")
+def api_jobs_recent(days: int = 30):
+    """Active + ended jobs from the last N days, newest first.
+    Light payload — does NOT include session rollups or lift detection."""
+    from scripts.jobs import list_all
+    days = max(1, min(int(days), 365))
+    out = []
+    for rec in list_all(days_back=days):
+        out.append({
+            **rec,
+            "stream_color": STREAM_COLORS.get(rec.get("stream") or "", "#6b7280"),
+        })
+    return {"jobs": out, "days": days}
+
+
+@app.get("/api/jobs/{job_id}")
+def api_job_detail(job_id: str):
+    """Full detail for one job — rollup + all sessions + lift opportunities."""
+    from scripts.jobs import rollup
+    r = rollup(job_id, include_sessions=True)
+    if r is None:
+        return JSONResponse({"error": "not found"}, status_code=404)
+    r["stream_color"] = STREAM_COLORS.get(r.get("stream") or "", "#6b7280")
+    return r
+
+
+@app.post("/api/jobs/start")
+async def api_job_start(payload: dict):
+    """Body: {name, stream, note?}. Auto-ends any existing job in the same stream."""
+    from scripts.jobs import start_job
+    try:
+        rec = start_job(
+            name=payload.get("name") or "",
+            stream=payload.get("stream"),
+            note=payload.get("note") or "",
+        )
+    except ValueError as e:
+        return JSONResponse({"error": str(e)}, status_code=400)
+    return {"ok": True, **rec}
+
+
+@app.post("/api/jobs/{job_id}/end")
+async def api_job_end(job_id: str):
+    from scripts.jobs import end_job
+    try:
+        rec = end_job(job_id)
+    except KeyError as e:
+        return JSONResponse({"error": str(e)}, status_code=404)
+    return {"ok": True, **rec}
+
+
 # ── dashboard HTML ────────────────────────────────────────────────────────────
 
 DASHBOARD_HTML = """<!DOCTYPE html>
@@ -1028,6 +1096,51 @@ footer { margin-top: 64px; padding-top: 24px; border-top: 1px solid var(--border
   box-shadow: 0 8px 24px rgba(28,28,26,0.25); opacity: 0; transition: opacity 0.2s;
   pointer-events: none; }
 .toast.show { opacity: 1; }
+
+/* Jobs in flight (Coach card) */
+.jobs-eyebrow { display: flex; justify-content: space-between; align-items: center; }
+.btn-start-job { background: var(--text); color: var(--bg); border: none;
+  font-size: 12px; font-weight: 500; padding: 7px 14px; border-radius: 8px;
+  cursor: pointer; font-family: inherit; text-transform: none; letter-spacing: 0; }
+.btn-start-job:hover { opacity: 0.88; }
+
+.job-card { padding: 18px 0; border-bottom: 1px dashed var(--border); }
+.job-card:last-child { border-bottom: none; padding-bottom: 4px; }
+.job-card:first-of-type { padding-top: 4px; }
+.job-head { display: flex; align-items: center; gap: 12px; margin-bottom: 8px; }
+.job-name { font-size: 17px; font-weight: 600; letter-spacing: -0.3px; flex: 1;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.job-actions { display: flex; gap: 4px; }
+.job-end-btn { background: transparent; border: 1px solid var(--border);
+  color: var(--text-soft); font-size: 12px; padding: 5px 12px; border-radius: 6px;
+  cursor: pointer; font-family: inherit; transition: all 0.12s; }
+.job-end-btn:hover { background: var(--bg); color: var(--text); border-color: var(--border-d); }
+.job-meta { font-size: 13px; color: var(--text-soft); margin-bottom: 10px; }
+.job-paused { color: var(--text-faint); font-style: italic; margin-left: 8px; }
+.job-apps { font-size: 13px; color: var(--text-soft); margin-bottom: 14px; line-height: 1.7; }
+.job-apps .app-tag { white-space: nowrap; margin-right: 14px; }
+.job-apps .app-tag strong { color: var(--text); font-weight: 500; }
+
+.job-lift { background: var(--bg); border-radius: 10px; padding: 14px 16px;
+  border: 1px solid var(--border); }
+.job-lift-head { font-size: 11px; font-weight: 600; letter-spacing: 0.6px;
+  text-transform: uppercase; color: var(--text-soft); margin-bottom: 10px; }
+.lift-item { padding: 8px 0; border-top: 1px dashed var(--border); }
+.lift-item:first-of-type { border-top: none; padding-top: 0; }
+.lift-title { font-size: 13px; font-weight: 500; color: var(--text); margin-bottom: 2px; }
+.lift-suggest { font-size: 12px; color: var(--text-soft); line-height: 1.5; }
+.job-lift-empty { font-size: 12px; color: var(--text-faint); font-style: italic; }
+
+/* Start-Job modal — reuses .modal-bg + .modal styles */
+.sj-row { margin-bottom: 18px; }
+.sj-row label { display: block; font-size: 12px; font-weight: 500;
+  color: var(--text-soft); margin-bottom: 6px; }
+.sj-row input, .sj-row select, .sj-row textarea {
+  width: 100%; padding: 10px 12px; border: 1px solid var(--border); border-radius: 8px;
+  font-family: inherit; font-size: 14px; color: var(--text); background: var(--bg); }
+.sj-row input:focus, .sj-row select:focus, .sj-row textarea:focus {
+  outline: none; border-color: var(--text-soft); background: var(--surface); }
+.sj-row textarea { resize: vertical; min-height: 60px; }
 </style>
 </head>
 <body>
@@ -1055,6 +1168,15 @@ footer { margin-top: 64px; padding-top: 24px; border-top: 1px solid var(--border
 <div class="hero">
   <h1 id="hero-headline">Loading…</h1>
   <div class="sub" id="hero-sub"></div>
+</div>
+
+<!-- Jobs in flight (the v1.1a Coach surface) -->
+<div class="card jobs-card">
+  <div class="eyebrow jobs-eyebrow">
+    <span>Jobs in flight</span>
+    <button class="btn-start-job" onclick="openStartJob()">+ Start a job</button>
+  </div>
+  <div id="jobs-panel"><div class="empty">Loading…</div></div>
 </div>
 
 <!-- Weekly heatmap -->
@@ -1168,6 +1290,30 @@ footer { margin-top: 64px; padding-top: 24px; border-top: 1px solid var(--border
     <div class="modal-actions">
       <button class="btn-ghost" onclick="closeSettings()">Cancel</button>
       <button class="btn-primary" onclick="saveSettings()">Save</button>
+    </div>
+  </div>
+</div>
+
+<!-- Start-Job modal -->
+<div class="modal-bg" id="sj-modal" onclick="if(event.target===this)closeStartJob()">
+  <div class="modal" role="dialog" aria-labelledby="sj-title">
+    <h2 id="sj-title">Start a job</h2>
+    <div class="sub">A job is a coherent unit of work — "NKCC Q3 report", "Chapter 3 lit review". Sessions inside this stream from now until you end the job will roll up to it.</div>
+    <div class="sj-row">
+      <label for="sj-name">What are you working on?</label>
+      <input type="text" id="sj-name" placeholder="e.g. NKCC Q3 report" autocomplete="off" />
+    </div>
+    <div class="sj-row">
+      <label for="sj-stream">Stream</label>
+      <select id="sj-stream"></select>
+    </div>
+    <div class="sj-row">
+      <label for="sj-note">Note (optional)</label>
+      <textarea id="sj-note" placeholder="A line or two about the goal of this job — used later when reviewing how it went."></textarea>
+    </div>
+    <div class="modal-actions">
+      <button class="btn-ghost" onclick="closeStartJob()">Cancel</button>
+      <button class="btn-primary" onclick="submitStartJob()">Start job</button>
     </div>
   </div>
 </div>
@@ -1537,6 +1683,159 @@ async function fetchAI() {
     </div>`;
 }
 
+// ── Jobs in flight (v1.1a Coach surface) ───────────────────────────────────
+
+function fmtRelative(iso) {
+  if (!iso) return '';
+  try {
+    const t = new Date(iso);
+    const diffMin = Math.floor((Date.now() - t.getTime()) / 60000);
+    if (diffMin < 2) return 'just now';
+    if (diffMin < 60) return `${diffMin} min ago`;
+    const diffH = Math.floor(diffMin / 60);
+    if (diffH < 24) return `${diffH}h ago`;
+    const diffD = Math.floor(diffH / 24);
+    if (diffD === 1) return 'yesterday';
+    if (diffD < 7) return `${diffD} days ago`;
+    return t.toLocaleDateString(undefined, {month:'short', day:'numeric'});
+  } catch (e) { return ''; }
+}
+
+function isJobPaused(job) {
+  if (!job.last_active) return job.session_count === 0 ? false : true;
+  const diffMs = Date.now() - new Date(job.last_active).getTime();
+  return diffMs > 30 * 60 * 1000;   // >30 min since last session = paused
+}
+
+async function fetchJobs() {
+  let d;
+  try {
+    const r = await fetch('/api/jobs/active');
+    d = await r.json();
+  } catch (e) {
+    document.getElementById('jobs-panel').innerHTML =
+      '<div class="empty">Could not load jobs.</div>';
+    return;
+  }
+  const jobs = d.jobs || [];
+  if (jobs.length === 0) {
+    document.getElementById('jobs-panel').innerHTML =
+      '<div class="empty">No jobs in flight. Hit "+ Start a job" to track a specific piece of work.</div>';
+    return;
+  }
+  document.getElementById('jobs-panel').innerHTML = jobs.map(renderJobCard).join('');
+}
+
+function renderJobCard(job) {
+  const total = fmtMins(job.total_minutes);
+  const started = fmtRelative(job.created_at);
+  const sessions = job.session_count || 0;
+  const paused = isJobPaused(job);
+
+  // Apps line: top 4
+  const appsLine = (job.apps || []).slice(0, 4).map(a =>
+    `<span class="app-tag"><strong>${escapeHtml(a.app)}</strong> ${fmtMins(a.minutes)}</span>`
+  ).join('');
+
+  // Lift block
+  let liftBlock = '';
+  if (sessions === 0) {
+    liftBlock = `<div class="job-lift">
+      <div class="job-lift-head">Where AI could lift this job</div>
+      <div class="job-lift-empty">No activity logged inside this job yet. Once you start working, AI-lift opportunities appear here.</div>
+    </div>`;
+  } else if ((job.lift || []).length === 0) {
+    liftBlock = `<div class="job-lift">
+      <div class="job-lift-head">Where AI could lift this job</div>
+      <div class="job-lift-empty">Nothing stands out yet. Lift opportunities surface as the session data builds up.</div>
+    </div>`;
+  } else {
+    liftBlock = `<div class="job-lift">
+      <div class="job-lift-head">Where AI could lift this job</div>
+      ${job.lift.map(l => `
+        <div class="lift-item">
+          <div class="lift-title">${escapeHtml(l.title)}</div>
+          <div class="lift-suggest">${escapeHtml(l.suggestion)}</div>
+        </div>`).join('')}
+    </div>`;
+  }
+
+  return `
+    <div class="job-card" data-job="${escapeHtml(job.id)}">
+      <div class="job-head">
+        <div class="job-name">${escapeHtml(job.name)}</div>
+        <span class="chip" style="background:${job.stream_color}">${escapeHtml((job.stream||'').replace(/-/g,' '))}</span>
+        <div class="job-actions">
+          <button class="job-end-btn" onclick="endJob('${escapeHtml(job.id)}', '${escapeHtml(job.name)}')">End job</button>
+        </div>
+      </div>
+      <div class="job-meta">
+        ${total} total · started ${started} · ${sessions} session${sessions===1?'':'s'}
+        ${paused ? `<span class="job-paused">paused — last touch ${fmtRelative(job.last_active)}</span>` : ''}
+      </div>
+      ${sessions > 0 ? `<div class="job-apps">${appsLine || '<span style="color:var(--text-faint)">(no app data yet)</span>'}</div>` : ''}
+      ${liftBlock}
+    </div>
+  `;
+}
+
+function openStartJob() {
+  // Populate stream dropdown from systemSnapshot (already fetched)
+  const sel = document.getElementById('sj-stream');
+  const streams = (systemSnapshot && systemSnapshot.streams) || availableStreams || [];
+  sel.innerHTML = streams.map(s =>
+    `<option value="${escapeHtml(s.key)}">${escapeHtml(s.label)}</option>`
+  ).join('');
+  document.getElementById('sj-name').value = '';
+  document.getElementById('sj-note').value = '';
+  document.getElementById('sj-modal').classList.add('open');
+  setTimeout(() => document.getElementById('sj-name').focus(), 60);
+}
+
+function closeStartJob() {
+  document.getElementById('sj-modal').classList.remove('open');
+}
+
+async function submitStartJob() {
+  const name = document.getElementById('sj-name').value.trim();
+  const stream = document.getElementById('sj-stream').value;
+  const note = document.getElementById('sj-note').value.trim();
+  if (!name) { showToast('Job needs a name.'); return; }
+  try {
+    const r = await fetch('/api/jobs/start', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({ name, stream, note })
+    });
+    const d = await r.json();
+    if (r.ok) {
+      showToast(`Started: ${name}`);
+      closeStartJob();
+      await fetchJobs();
+    } else {
+      showToast('Error: ' + (d.error || 'could not start job'));
+    }
+  } catch (e) {
+    showToast('Error: ' + e.message);
+  }
+}
+
+async function endJob(id, name) {
+  if (!confirm(`End job "${name}"?\\n\\nSessions stop rolling up to it. The job's history is preserved.`)) return;
+  try {
+    const r = await fetch(`/api/jobs/${id}/end`, { method: 'POST' });
+    const d = await r.json();
+    if (r.ok) {
+      showToast(`Ended: ${name}`);
+      await fetchJobs();
+    } else {
+      showToast('Error: ' + (d.error || 'could not end job'));
+    }
+  } catch (e) {
+    showToast('Error: ' + e.message);
+  }
+}
+
 // ── Weekly heatmap (last 14 days) ──────────────────────────────────────────
 async function fetchHeatmap() {
   let d;
@@ -1688,7 +1987,7 @@ async function saveSettings() {
 
 // ── Refresh orchestration ──────────────────────────────────────────────────
 async function refreshDayPanels() {
-  await Promise.all([fetchRealWork(), fetchLastActive(), fetchAI()]);
+  await Promise.all([fetchRealWork(), fetchLastActive(), fetchAI(), fetchJobs()]);
   await fetchHeatmap();   // re-render so selected day highlights
 }
 
