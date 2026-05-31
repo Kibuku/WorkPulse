@@ -2,7 +2,11 @@
 activity.py — WorkPulse-native activity tracker.
 
 Replaces ActivityWatch. Samples the foreground window + idle state every
-few seconds using pure Win32 APIs (ctypes + psutil) — no external daemon.
+few seconds using the platform-appropriate API — no external daemon.
+
+Backends (auto-selected from sys.platform):
+  • Windows: activity_win.py     — ctypes + Win32 (user32 / kernel32)
+  • macOS:   activity_mac.py     — PyObjC + AppKit + Quartz
 
 Output: logs/activity_YYYY-MM-DD.jsonl, one record per *contiguous session*
 of the same (app, title, stream). Each record has start, end, duration_s.
@@ -22,12 +26,10 @@ Record schema:
 
 from __future__ import annotations
 
-import ctypes
 import io
 import json
 import sys
 import time
-from ctypes import wintypes
 from datetime import datetime
 from pathlib import Path
 
@@ -40,47 +42,26 @@ if hasattr(sys.stdout, "buffer"):
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from scripts.common import ensure_dir, load_config, resolve
 
-# ── Win32 bindings ────────────────────────────────────────────────────────────
+# ── platform backend ──────────────────────────────────────────────────────────
+# Each backend exposes:
+#   foreground_window() -> (title, pid) | None
+#   idle_seconds()      -> float
+# The shim names below (_foreground_window, _idle_seconds) keep the rest of
+# this file platform-agnostic.
 
-user32 = ctypes.WinDLL("user32", use_last_error=True)
-
-class LASTINPUTINFO(ctypes.Structure):
-    _fields_ = [("cbSize", wintypes.UINT), ("dwTime", wintypes.DWORD)]
-
-user32.GetForegroundWindow.restype = wintypes.HWND
-user32.GetWindowTextLengthW.argtypes = [wintypes.HWND]
-user32.GetWindowTextLengthW.restype = ctypes.c_int
-user32.GetWindowTextW.argtypes = [wintypes.HWND, wintypes.LPWSTR, ctypes.c_int]
-user32.GetWindowTextW.restype = ctypes.c_int
-user32.GetWindowThreadProcessId.argtypes = [wintypes.HWND, ctypes.POINTER(wintypes.DWORD)]
-user32.GetWindowThreadProcessId.restype = wintypes.DWORD
-user32.GetLastInputInfo.argtypes = [ctypes.POINTER(LASTINPUTINFO)]
-user32.GetLastInputInfo.restype = wintypes.BOOL
-
-kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
-kernel32.GetTickCount.restype = wintypes.DWORD
-
-
-def _foreground_window() -> tuple[str, int] | None:
-    """Return (title, pid) of foreground window, or None if unavailable."""
-    hwnd = user32.GetForegroundWindow()
-    if not hwnd:
-        return None
-    length = user32.GetWindowTextLengthW(hwnd)
-    buf = ctypes.create_unicode_buffer(length + 1)
-    user32.GetWindowTextW(hwnd, buf, length + 1)
-    pid = wintypes.DWORD()
-    user32.GetWindowThreadProcessId(hwnd, ctypes.byref(pid))
-    return buf.value, pid.value
-
-
-def _idle_seconds() -> float:
-    """Seconds since last mouse/keyboard input."""
-    lii = LASTINPUTINFO()
-    lii.cbSize = ctypes.sizeof(lii)
-    if not user32.GetLastInputInfo(ctypes.byref(lii)):
-        return 0.0
-    return (kernel32.GetTickCount() - lii.dwTime) / 1000.0
+if sys.platform == "win32":
+    from scripts.activity_win import foreground_window as _foreground_window
+    from scripts.activity_win import idle_seconds      as _idle_seconds
+elif sys.platform == "darwin":
+    from scripts.activity_mac import foreground_window as _foreground_window
+    from scripts.activity_mac import idle_seconds      as _idle_seconds
+else:
+    # Linux + others: surface a clear error rather than crash later. Per Vision
+    # roadmap, Linux is not planned.
+    raise NotImplementedError(
+        f"WorkPulse activity tracker doesn't support platform '{sys.platform}'. "
+        "Supported: Windows (v1.0), macOS (v1.6)."
+    )
 
 
 def _process_info(pid: int) -> tuple[str, str]:

@@ -1,0 +1,25 @@
+# Shell scripts MUST stay LF — bash won't run scripts with CRLF line endings.
+# Without this rule, autocrlf on Windows checkouts would corrupt setup.sh.
+*.sh   text eol=lf
+
+# Python files: LF preferred (works on every platform; tools assume it).
+*.py   text eol=lf
+
+# YAML configs: LF (parsers tolerate either, but consistency helps diffs).
+*.yaml text eol=lf
+*.yml  text eol=lf
+
+# PowerShell and .bat keep CRLF — Windows-native callers expect it.
+*.ps1  text eol=crlf
+*.bat  text eol=crlf
+*.cmd  text eol=crlf
+
+# Markdown: LF (consistent across platforms; GitHub renders either).
+*.md   text eol=lf
+
+# .docx / .pdf / .png — always binary, never line-end conversion.
+*.docx binary
+*.pdf  binary
+*.png  binary
+*.jpg  binary
+*.jpeg binary

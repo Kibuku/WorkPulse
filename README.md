@@ -4,8 +4,8 @@ A local-first personal productivity tracker. Sits in your system tray,
 watches what you actually work on, and shows you where the day went —
 without sending your data anywhere.
 
-**Platform support — v1.0.0:** Windows 10 / 11 only. macOS port planned
-(see Vision doc roadmap, v1.6). Linux is not on the roadmap.
+**Platform support:** Windows 10 / 11 (v1.0) and macOS 13+ (v1.6). Linux
+is not on the roadmap.
 
 > WorkPulse is **v1: Personal Tracker** — the foundation layer.
 > The full architecture (Personal WorkPulse + Institution Brain) is described
@@ -65,6 +65,62 @@ After install, click the WorkPulse tray icon → Open Dashboard, then click
 
 When you're done, look for the WorkPulse icon in your system tray. Click it
 to open the dashboard.
+
+---
+
+## Set up on a new macOS machine (v1.6+)
+
+1. **Install Python 3.12+** if you don't already have it. Easiest:
+   ```bash
+   brew install python@3.13
+   ```
+   Or download from <https://www.python.org/downloads/>.
+
+2. **Clone or copy** WorkPulse somewhere — e.g. `~/WorkPulse`.
+
+3. **Run setup**:
+   ```bash
+   cd ~/WorkPulse
+   bash setup.sh
+   ```
+
+   This creates a `.venv/`, installs `requirements.txt` + PyObjC bridges,
+   generates your personal config + identity files, installs a LaunchAgent
+   so the tray runs at every login, and optionally prompts for an API key.
+
+4. **Grant Accessibility permission** — this is a one-time manual step
+   Apple requires. Without it, WorkPulse can see which app is frontmost
+   but window titles come back empty.
+
+   - Open **System Settings → Privacy & Security → Accessibility**
+   - Click **[+]** and add: `~/WorkPulse/.venv/bin/python`
+   - Toggle it on.
+
+   You only do this once per install. setup.sh prints the exact path
+   you need to add.
+
+5. **Open the dashboard** at <http://127.0.0.1:5700/>. The WorkPulse icon
+   lives in the menu bar (top-right of the screen) — click it for
+   Open Dashboard / Quit options.
+
+### macOS uninstall / debug
+
+```bash
+# Check the LaunchAgent is loaded
+launchctl list | grep workpulse
+
+# Restart it now
+launchctl stop  com.workpulse.tray && launchctl start com.workpulse.tray
+
+# Disable autostart
+launchctl unload ~/Library/LaunchAgents/com.workpulse.tray.plist
+
+# Tail startup errors
+tail -f ~/WorkPulse/logs/launchagent.err.log
+```
+
+A `.pkg` installer for non-developer Mac distribution is planned for v1.7.
+Today's Mac install requires cloning the repo and running setup.sh.
 
 ---
 

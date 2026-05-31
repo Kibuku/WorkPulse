@@ -1,0 +1,10 @@
+# macOS-only dependencies on top of requirements.txt.
+# Installed automatically by setup.sh on Mac.
+#
+# These give us the PyObjC bridge to:
+#   - NSWorkspace       (frontmost app detection)
+#   - CGWindowList*     (per-window titles, with Accessibility permission)
+#   - CGEventSource*    (idle-time detection)
+
+pyobjc-framework-Cocoa>=10.0
+pyobjc-framework-Quartz>=10.0
