@@ -697,7 +697,7 @@ def api_system():
         },
         "streams": [
             {"key": k, "label": v, "color": STREAM_COLORS.get(k, "#6b7280")}
-            for k, v in cfg.get("streams", {}).items()
+            for k, v in (cfg.get("streams") or {}).items()
         ],
         "today": date.today().isoformat(),
     }

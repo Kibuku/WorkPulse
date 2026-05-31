@@ -123,7 +123,7 @@ def _tag_stream(title: str, exe_path: str, cfg: dict, pid: int = 0) -> str | Non
         if needle in haystack or needle.replace("/", " ") in haystack:
             return p["stream"]
     # 3. Bare stream keywords (e.g. window title "Water Kiosk.xlsx")
-    for key, label in cfg["streams"].items():
+    for key, label in (cfg.get("streams") or {}).items():
         if key.replace("-", " ") in haystack or label.lower() in haystack:
             return key
 
