@@ -1,0 +1,51 @@
+# ── Python ──────────────────────────────────────────────────────────────────
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+*.egg-info/
+.mypy_cache/
+.ruff_cache/
+.pytest_cache/
+.Python
+
+# ── Virtual environment (per-machine) ───────────────────────────────────────
+.venv/
+venv/
+
+# ── User data — NEVER commit ────────────────────────────────────────────────
+# Per WorkPulse Vision §9: personal activity stays on the user's machine.
+logs/
+vault/
+reports/
+WorkPulse_Vision_*.docx
+WorkPulse_PDD_*.docx
+
+# ── Per-install configuration ───────────────────────────────────────────────
+# Each user's project rules, identity, and secrets stay local. The example
+# template (config.example.yaml) IS committed; the personal copy is not.
+config/config.yaml
+config/identity.yaml
+config/secrets.json
+config/secrets.json.tmp
+# (Note: the secrets STORE is at config/secrets.json; the storage MODULE is
+# scripts/wp_secrets.py — renamed to avoid shadowing Python's stdlib `secrets`.)
+config/learned_tags.json
+config/learned_tags.json.tmp
+
+# ── Disposable / dev scratch ────────────────────────────────────────────────
+# Throwaway scripts must be prefixed with an underscore to be ignored.
+scripts/_*.ps1
+scripts/_*.py
+
+# ── Legacy env-var files ────────────────────────────────────────────────────
+.env
+*.env
+
+# ── OS / IDE ────────────────────────────────────────────────────────────────
+.DS_Store
+Thumbs.db
+desktop.ini
+.idea/
+.vscode/
+*.swp

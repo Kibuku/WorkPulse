@@ -1,0 +1,26 @@
+# WorkPulse v1 — runtime dependencies.
+# Install with:  pip install -r requirements.txt
+#
+# Pinned to currently-tested versions; bump deliberately, not casually.
+
+# ── Web / API ───────────────────────────────────────────────────────────────
+fastapi==0.136.0
+uvicorn==0.44.0
+starlette==1.0.0
+
+# ── File watching ───────────────────────────────────────────────────────────
+watchdog==6.0.0
+
+# ── Process / window inspection ─────────────────────────────────────────────
+psutil==7.2.2
+
+# ── System tray ─────────────────────────────────────────────────────────────
+pystray==0.19.5
+Pillow==12.2.0
+
+# ── LLM client ──────────────────────────────────────────────────────────────
+# Optional at runtime — the app degrades gracefully without a key.
+anthropic==0.96.0
+
+# ── Config / utilities ──────────────────────────────────────────────────────
+PyYAML==6.0.3

@@ -1,0 +1,36 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(pandoc --track-changes=all WorkPulse_PDD_v1.docx -o /tmp/workpulse_pdd.md)",
+      "Read(//tmp/**)",
+      "Bash(python \"C:/Users/PC/AppData/Roaming/Claude/local-agent-mode-sessions/skills-plugin/4349f19d-2692-40e2-a0af-7a6be8fb49cb/ab175950-748f-4898-a9a6-ad5217fed57b/skills/docx/scripts/office/unpack.py\" WorkPulse_PDD_v1.docx /tmp/wp_unpacked/)",
+      "Bash(powershell -Command 'Get-Process python* -ErrorAction SilentlyContinue | Select-Object Id, ProcessName, StartTime, @{n='\\\\''CmdLine'\\\\'';e={\\(Get-CimInstance Win32_Process -Filter \"ProcessId=$\\($_.Id\\)\"\\).CommandLine}}')",
+      "Bash(powershell -Command \"Get-ScheduledTask -TaskName 'WorkPulse-*' | Select-Object TaskName, State | Format-Table -AutoSize\")",
+      "Bash(powershell -Command \"Get-ChildItem D:\\\\WorkPulse\\\\logs\\\\file_events_*.jsonl | Select-Object Name, Length, LastWriteTime | Sort-Object LastWriteTime\")",
+      "Bash(powershell -Command \"cd D:\\\\WorkPulse; Start-Process -FilePath '.\\\\.venv\\\\Scripts\\\\python.exe' -ArgumentList 'scripts\\\\tray.py' -WorkingDirectory 'D:\\\\WorkPulse' -RedirectStandardOutput 'D:\\\\WorkPulse\\\\logs\\\\tray_stdout.log' -RedirectStandardError 'D:\\\\WorkPulse\\\\logs\\\\tray_stderr.log' -WindowStyle Hidden; Start-Sleep 5; Get-NetTCPConnection -LocalPort 5700 -ErrorAction SilentlyContinue | Select-Object LocalAddress, State; Write-Host '-- stderr --'; Get-Content D:\\\\WorkPulse\\\\logs\\\\tray_stderr.log -ErrorAction SilentlyContinue; Write-Host '-- stdout --'; Get-Content D:\\\\WorkPulse\\\\logs\\\\tray_stdout.log -ErrorAction SilentlyContinue\")",
+      "Bash(powershell -Command \"Get-Process python,pythonw -ErrorAction SilentlyContinue | Select-Object Id, ProcessName, StartTime; Write-Host '---'; Get-CimInstance Win32_Process -Filter \\\\\"Name='python.exe' OR Name='pythonw.exe'\\\\\" | Select-Object ProcessId, CommandLine | Format-List\")",
+      "Bash(powershell -Command \"Get-Process python,pythonw -ErrorAction SilentlyContinue | Stop-Process -Force; Start-Sleep 2; Start-Process -FilePath 'D:\\\\WorkPulse\\\\.venv\\\\Scripts\\\\python.exe' -ArgumentList 'scripts\\\\tray.py' -WorkingDirectory 'D:\\\\WorkPulse' -RedirectStandardOutput 'D:\\\\WorkPulse\\\\logs\\\\tray_stdout.log' -RedirectStandardError 'D:\\\\WorkPulse\\\\logs\\\\tray_stderr.log' -WindowStyle Hidden; Start-Sleep 5; Get-NetTCPConnection -LocalPort 5700 -ErrorAction SilentlyContinue | Select-Object State -First 1; Get-Content D:\\\\WorkPulse\\\\logs\\\\tray_stderr.log -ErrorAction SilentlyContinue\")",
+      "Bash(powershell -Command 'Get-ChildItem '\\\\''C:\\\\Users\\\\PC\\\\Desktop\\\\Strathmore'\\\\'' -Force -ErrorAction SilentlyContinue | Select-Object @{N='\\\\''Type'\\\\'';E={if \\($_.PSIsContainer\\) {'\\\\''D'\\\\''} else {'\\\\''F'\\\\''}}}, Name | Format-Table -AutoSize')",
+      "Bash(powershell -NoProfile -ExecutionPolicy Bypass -File D:\\\\WorkPulse\\\\scripts\\\\_check.ps1)",
+      "Bash(powershell -NoProfile -ExecutionPolicy Bypass -File \"D:/WorkPulse/scripts/_check.ps1\")",
+      "Bash(powershell -NoProfile -ExecutionPolicy Bypass -File \"D:/WorkPulse/scripts/_gen_strathmore_keywords.ps1\")",
+      "Bash(powershell -NoProfile -Command \"& 'D:\\\\WorkPulse\\\\.venv\\\\Scripts\\\\python.exe' -c 'import docx; print\\(docx.__version__\\)' 2>&1; & 'D:\\\\WorkPulse\\\\.venv\\\\Scripts\\\\python.exe' -c 'import anthropic; print\\(anthropic.__version__\\)' 2>&1\")",
+      "Bash(powershell -NoProfile -ExecutionPolicy Bypass -File \"D:/WorkPulse/scripts/_diag_startup.ps1\")",
+      "Bash(powershell -NoProfile -ExecutionPolicy Bypass -File \"D:/WorkPulse/scripts/_relaunch_via_explorer.ps1\")",
+      "Bash(powershell -NoProfile -Command \"\\(Invoke-WebRequest -UseBasicParsing -TimeoutSec 4 http://127.0.0.1:5700/\\).StatusCode\")",
+      "Bash(Start-Sleep -Seconds 6)",
+      "Bash(Write-Host '')",
+      "Bash(Write-Host '=== Now ===')",
+      "Bash(Get-Process pythonw *)",
+      "Bash(Select-Object Id,StartTime)",
+      "Bash(Get-NetTCPConnection -LocalPort 5700 -State Listen -ErrorAction SilentlyContinue)",
+      "Bash(Select-Object LocalAddress,LocalPort,OwningProcess)",
+      "Bash(Get-Content 'D:/WorkPulse/logs/tray.log' -Tail 6)",
+      "Bash(ls \"C:/Users/PC/AppData/Roaming/Claude/local-agent-mode-sessions/skills-plugin/4349f19d-2692-40e2-a0af-7a6be8fb49cb/ab175950-748f-4898-a9a6-ad5217fed57b/skills/docx/scripts/\")",
+      "Bash(mkdir -p /tmp/wpvision)",
+      "Bash(cp /d/WorkPulse/WorkPulse_Vision_v1.1.docx /tmp/wpvision/source.docx)",
+      "Bash(python /c/Users/PC/AppData/Roaming/Claude/local-agent-mode-sessions/skills-plugin/4349f19d-2692-40e2-a0af-7a6be8fb49cb/ab175950-748f-4898-a9a6-ad5217fed57b/skills/docx/scripts/office/unpack.py /tmp/wpvision/source.docx /tmp/wpvision/unpacked)",
+      "Bash(/d/WorkPulse/.venv/Scripts/python.exe /c/Users/PC/AppData/Roaming/Claude/local-agent-mode-sessions/skills-plugin/4349f19d-2692-40e2-a0af-7a6be8fb49cb/ab175950-748f-4898-a9a6-ad5217fed57b/skills/docx/scripts/office/unpack.py /tmp/wpvision/source.docx /tmp/wpvision/unpacked)"
+    ]
+  }
+}
