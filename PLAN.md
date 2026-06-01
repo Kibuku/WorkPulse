@@ -197,11 +197,39 @@ Each phase is independently useful. Mark progress here as we go.
   - [ ] After 2–3 weeks of data, refine report prompts based on output quality
   - [ ] Review success metrics (PDD §9)
 
-- [ ] **Phase 7 — System tray app** (future)
-  - [ ] `scripts\tray.py` using `pystray` — replaces invisible daemon with a controllable tray icon
-  - [ ] Right-click menu: Start/Stop Watcher, Today's Stats, Run Report Now, Open Logs Folder
-  - [ ] `install_tasks.ps1` launches tray app at logon instead of raw `watcher.py`
-  - [ ] Visual indicator: green (running) / grey (stopped)
+- [x] **Phase 7 — System tray app** ✓ (Windows: shipped pre-v1.6; macOS port: v1.6, June 2026)
+  - [x] `scripts/tray.py` using `pystray` (Win) / `rumps` (mac) — menu-bar icon replaces invisible daemon
+  - [x] Menu items: Open Dashboard, Quit
+  - [x] macOS LaunchAgent (`~/Library/LaunchAgents/com.workpulse.tray.plist`) launches tray at login
+    - **Gotcha (macOS 15+):** launchd's `StandardOutPath` / `StandardErrorPath` must live outside `~/Documents` (TCC-protected). Use `~/Library/Logs/WorkPulse/` instead. Without this, launchd exits 78 silently before Python starts. Fixed 2026-06-01.
+    - **Permissions required on macOS:** Screen Recording (not Accessibility) for the framework Python binary at `/opt/homebrew/Cellar/python@3.13/<ver>/Frameworks/Python.framework/Versions/3.13/Resources/Python.app`. Without it, `kCGWindowName` returns empty and window titles fall back to app names.
+    - **TCC / venv quirk:** `python -m venv --copies` produces a relocatable launcher but on macOS framework Python the launcher *still* re-execs into the framework binary, so TCC permissions must be granted to `Python.app`, not to `.venv/bin/python`. Granting the launcher path is a no-op.
+
+- [x] **v1.1a — Jobs (Coach surface, per Vision §12.2)** ✓ (May 2026)
+  - [x] `scripts/jobs.py` — JSONL event store, fold-to-state, rollup
+  - [x] Manual Start/End Job from dashboard + tray
+  - [x] AI-lift detector library (`scripts/lift.py`)
+  - [x] Coach card: "Jobs in flight"
+  - [x] Per-Job markdown export (v1.2a) — `GET /api/jobs/{id}/export`
+  - [x] Auto-close idle Jobs (v1.2a) — `autoclose_stale_jobs` runs on every dashboard refresh
+  - [x] LLM-inferred Job-name suggestions (v1.2b) — Loop B for Jobs
+
+- [x] **v1.7 — Morning Plan (intent capture, per Vision §12.2 extension)** ✓ (June 2026)
+  - [x] `scripts/plans.py` — markdown source-of-truth (`plans/YYYY-MM-DD.md`), parse / render / suggestions / job-materialisation / reconciliation
+  - [x] Endpoints: `GET /api/plans/today`, `POST /api/plans/today`, `GET /api/plans/suggestions`
+  - [x] Dashboard "Today's plan" card above Jobs in flight
+  - [x] Modal: paused-job suggestions (carry over) + free-form textarea (new items, optional `(~N min)`)
+  - [x] Each plan item materialises into a Job at submit time so sessions roll up
+  - [x] Per-item reconciliation: `actual_minutes_today` / `actual_minutes_total` rendered next to `planned_minutes` with progress bar (red when over)
+  - [x] Top-line summary: "N of M done · X min logged of Y min planned"
+  - [x] Bug-fix landed: `plans.materialise_jobs` writes start events directly instead of calling `jobs.start_job`, so the one-active-per-stream rule does NOT cascade-end same-stream plan items. The morning plan is the explicit exception to one-per-stream.
+  - [x] Untagged-time alert: prominent amber banner when today's untagged total ≥20 min; one-click Tag-as on the top 3 patterns; auto-hides once threshold drops
+  - [x] Override behaviour confirmed: `learning.py:125` — newer verdict wins, so manual Tag-as always supersedes AI auto-classification for the same pattern. No code change needed for overrides.
+  - [ ] **Open / follow-ups:**
+    - [ ] End-of-day reconciliation fold into daily report (blocked on Phase 4 report engine)
+    - [ ] Voice input — Apple Speech framework (on-device, per §9.2 local-first) feeds the same textarea
+    - [ ] Trigger automation — currently click-driven; first-wake-of-day or fixed time TBD
+    - [ ] Configurable untagged-alert threshold via `config.yaml` (currently hardcoded 20 min in dashboard JS)
 
 - [ ] **Phase 8 — Browser extension + local API** (future)
   - [ ] `scripts\server.py` — lightweight FastAPI server on `localhost:5700`

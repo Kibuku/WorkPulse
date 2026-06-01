@@ -223,7 +223,8 @@ def _ask_llm(title: str, app: str, duration_s: float, cfg: dict) -> tuple[str | 
     """Classify one window via whichever LLM backend is configured.
     Returns (stream_key_or_None, anchor_phrase). Backend selection (cloud
     Claude vs local Ollama vs no-op) is handled by scripts.llm."""
-    streams = cfg["streams"]
+    from scripts.tree import labels as _stream_labels
+    streams = _stream_labels(cfg)
     # Enrich each stream's description with the config patterns mapped to it
     # AND the patterns the system has already learned. Massively improves
     # accuracy — the model sees that "NKCC" maps to consulting, etc.

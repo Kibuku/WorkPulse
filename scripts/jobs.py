@@ -129,6 +129,13 @@ def _fold(events: list[dict]) -> dict[str, dict]:
         elif ev == "note":
             if jid in state:
                 state[jid]["note"] = e.get("text", "")
+        elif ev == "move":
+            # v1.7 stream-hierarchy migration: re-home a Job under a different
+            # stream. Append-only — the original start event is preserved, the
+            # move event simply overrides the effective stream in the folded
+            # state. Repeated moves are allowed (last wins).
+            if jid in state:
+                state[jid]["stream"] = e.get("stream")
     return state
 
 
@@ -312,6 +319,30 @@ def autoclose_stale_jobs(cfg: dict | None = None) -> list[dict]:
             end_job(job["id"], cfg=cfg, auto=True)
             closed.append({**job, "auto_reason": f"moved to another stream ({round(other_s/60)} min)"})
     return closed
+
+
+def move_job(job_id: str, new_stream: str | None,
+             cfg: dict | None = None) -> dict:
+    """Re-home a Job under a different stream. Appends a 'move' event so the
+    history is preserved (this is auditable, not a destructive rename).
+    Used by the v1.7 taxonomy-migration flow. ``new_stream`` may be None to
+    detach a Job from any stream — useful when the original stream is being
+    deleted and the Job hasn't been re-homed yet."""
+    if cfg is None:
+        cfg = load_config()
+    rec = get_job(job_id, cfg)
+    if rec is None:
+        raise KeyError(f"no such job: {job_id}")
+    if new_stream and new_stream not in (cfg.get("streams") or {}):
+        raise ValueError(f"unknown stream: {new_stream}")
+    _append_event({
+        "event":  "move",
+        "id":     job_id,
+        "stream": new_stream,
+        "ts":     _now(),
+    }, cfg)
+    rec["stream"] = new_stream
+    return rec
 
 
 def resume_job(job_id: str, cfg: dict | None = None) -> dict:
@@ -569,9 +600,13 @@ def export_job_markdown(job_id: str, *, include_titles: bool = True,
     if roll is None:
         return None
 
-    streams_cfg = cfg.get("streams") or {}
+    from scripts.tree import breadcrumb, labels as _stream_labels
+    streams_cfg = _stream_labels(cfg)
     stream_key = roll.get("stream") or ""
-    stream_label = streams_cfg.get(stream_key, stream_key or "(no stream)")
+    # Use the breadcrumb (Work › Verst Carbon › Uganda MEMD) when the tree
+    # has depth; falls back to the bare label for flat configs.
+    stream_label = (breadcrumb(stream_key, cfg) if stream_key else None) \
+                   or streams_cfg.get(stream_key, stream_key or "(no stream)")
 
     lines: list[str] = []
     lines.append(f"# {roll.get('name', '(untitled job)')}")

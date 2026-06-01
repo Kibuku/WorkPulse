@@ -74,6 +74,33 @@ STREAM_COLORS = {
     "personal-comms": "#ec4899",
 }
 
+def stream_color(key: str) -> str:
+    """Pick a colour for any stream key. Curated entries win; everything else
+    gets a deterministic hue derived from a stable hash of the key, so the
+    same user-created stream always renders in the same colour across reloads
+    and across machines without storing the colour in config."""
+    if not key:
+        return "#6b7280"
+    if key in STREAM_COLORS:
+        return STREAM_COLORS[key]
+    import hashlib
+    h = int(hashlib.sha1(key.encode("utf-8")).hexdigest()[:6], 16)
+    hue = h % 360
+    # HSL → hex via a fixed-S/L pairing tuned to match the curated palette weight.
+    sat, light = 62, 52
+    # Convert HSL to RGB then hex (pure math, no deps)
+    c = (1 - abs(2 * light / 100 - 1)) * (sat / 100)
+    x = c * (1 - abs((hue / 60) % 2 - 1))
+    m = light / 100 - c / 2
+    if   0   <= hue < 60:  r, g, b = c, x, 0
+    elif 60  <= hue < 120: r, g, b = x, c, 0
+    elif 120 <= hue < 180: r, g, b = 0, c, x
+    elif 180 <= hue < 240: r, g, b = 0, x, c
+    elif 240 <= hue < 300: r, g, b = x, 0, c
+    else:                  r, g, b = c, 0, x
+    rr, gg, bb = int((r + m) * 255), int((g + m) * 255), int((b + m) * 255)
+    return f"#{rr:02x}{gg:02x}{bb:02x}"
+
 # ── watcher process management ────────────────────────────────────────────────
 
 _watcher_proc: Optional[subprocess.Popen] = None
@@ -308,7 +335,7 @@ def api_activity():
             {
                 "stream": k,
                 "count": v,
-                "color": STREAM_COLORS.get(k, "#6b7280"),
+                "color": stream_color(k),
                 "pct": round(v / tagged_total * 100) if tagged_total else 0,
             }
             for k, v in sorted(by_stream.items(), key=lambda x: -x[1])
@@ -379,7 +406,7 @@ def api_realwork(date: Optional[str] = None):  # noqa: A002 — param name is th
         {
             "stream": k,
             "minutes": round(v / 60, 1),
-            "color": STREAM_COLORS.get(k, "#6b7280"),
+            "color": stream_color(k),
             "pct": round(v / total_active_s * 100) if total_active_s else 0,
         }
         for k, v in sorted(by_stream_secs.items(), key=lambda x: -x[1])
@@ -415,7 +442,7 @@ def api_realwork(date: Optional[str] = None):  # noqa: A002 — param name is th
             "app": s.get("app", ""),
             "title": (s.get("title") or "")[:90],
             "stream": s.get("stream"),
-            "color": STREAM_COLORS.get(s.get("stream") or "", "#6b7280"),
+            "color": stream_color(s.get("stream") or ""),
         }
         for s in recent
     ]
@@ -442,7 +469,7 @@ def api_recent(n: int = 20):
             "time": r["timestamp"][11:19],
             "type": r["event_type"],
             "stream": r.get("stream"),
-            "color": STREAM_COLORS.get(r.get("stream") or "", "#6b7280"),
+            "color": stream_color(r.get("stream") or ""),
             "name": Path(r["path"]).name,
             "size": r.get("size_bytes"),
         }
@@ -498,7 +525,7 @@ def api_ai(date: Optional[str] = None):  # noqa: A002
                 "stream": k,
                 "count": v["count"],
                 "cost": round(v["cost"], 4),
-                "color": STREAM_COLORS.get(k, "#6b7280"),
+                "color": stream_color(k),
             }
             for k, v in sorted(by_stream.items(), key=lambda x: -x[1]["count"])
         ],
@@ -506,7 +533,7 @@ def api_ai(date: Optional[str] = None):  # noqa: A002
             {
                 "time": s["timestamp"][11:16],
                 "stream": s.get("stream"),
-                "color": STREAM_COLORS.get(s.get("stream") or "", "#6b7280"),
+                "color": stream_color(s.get("stream") or ""),
                 "task": s.get("task_summary", "")[:60],
                 "tool": s.get("tool_used", ""),
                 "cost": round(s.get("estimated_cost_usd", 0), 4),
@@ -536,7 +563,8 @@ def api_focus(date: Optional[str] = None):  # noqa: A002
     target = _parse_date_q(date)
     del date
     events = _load_file_events(days=1, for_date=target)
-    streams = cfg["streams"]
+    from scripts.tree import labels as _stream_labels
+    streams = _stream_labels(cfg)
 
     # Last touched per stream
     last_seen: dict[str, str] = {}
@@ -564,7 +592,7 @@ def api_focus(date: Optional[str] = None):  # noqa: A002
             "stream": stream,
             "label": label,
             "last_ago": ago,
-            "color": STREAM_COLORS.get(stream, "#6b7280"),
+            "color": stream_color(stream),
         })
 
     # Timeline: events per hour per stream (last 12 hours)
@@ -659,7 +687,7 @@ def api_calendar(days: int = 14):
             "total_minutes": round(total / 60, 1),
             "by_stream": [
                 {"stream": k, "minutes": round(v / 60, 1),
-                 "color": STREAM_COLORS.get(k, "#6b7280")}
+                 "color": stream_color(k)}
                 for k, v in sorted(by_stream.items(), key=lambda x: -x[1])
             ],
         })
@@ -695,12 +723,48 @@ def api_system():
             "actor_label":  identity.get("actor_label", ""),
             "organization": identity.get("organization", ""),
         },
-        "streams": [
-            {"key": k, "label": v, "color": STREAM_COLORS.get(k, "#6b7280")}
-            for k, v in (cfg.get("streams") or {}).items()
-        ],
-        "today": date.today().isoformat(),
+        # Streams normalised into the hierarchical shape — every entry carries
+        # parent + breadcrumb so the UI can render a tree without re-fetching.
+        # Back-compat: flat string entries in config.yaml degrade to top-level
+        # nodes (parent=None, breadcrumb=label). See scripts/tree.py.
+        "streams":            _streams_payload(cfg),
+        # Trivial-tree signal — the dashboard uses this to auto-open the
+        # taxonomy wizard on first load. "Trivial" = only the legacy 'misc'
+        # placeholder, or fewer than 2 nodes, or no parent relationships.
+        # Once the user builds anything resembling a real tree, the wizard
+        # stops auto-opening (they can still open it from Settings).
+        "taxonomy_trivial":   _taxonomy_is_trivial(cfg),
+        "today":              date.today().isoformat(),
     }
+
+
+def _taxonomy_is_trivial(cfg: dict) -> bool:
+    from scripts.tree import normalise
+    tree = normalise(cfg)
+    if len(tree) < 2:
+        return True
+    # If nothing has a parent, the user hasn't engaged with the hierarchy.
+    if not any(r.get("parent") for r in tree.values()):
+        # Two top-level streams without parents could still be intentional;
+        # only treat as trivial if one of them is the legacy 'misc' default.
+        return "misc" in tree
+    return False
+
+
+def _streams_payload(cfg: dict) -> list[dict]:
+    from scripts.tree import normalise, breadcrumb, ancestors
+    tree = normalise(cfg)
+    return [
+        {
+            "key":        k,
+            "label":      rec["label"],
+            "parent":     rec.get("parent"),
+            "color":      stream_color(k),
+            "ancestors":  ancestors(k, cfg),
+            "breadcrumb": breadcrumb(k, cfg),
+        }
+        for k, rec in tree.items()
+    ]
 
 
 # ── Loop A: user correction → permanent learned rule ─────────────────────────
@@ -777,20 +841,39 @@ async def api_set_email(payload: dict):
 
 @app.get("/api/jobs/active")
 def api_jobs_active():
-    """Active jobs with their session rollup + AI-lift opportunities.
+    """Active jobs with their session rollup + AI-lift opportunities +
+    cross-Job remembrance (top 3 prior Jobs with semantic overlap).
     Runs auto-close first so the response is consistent with what the user
     would see if they refreshed twice in a row. Drives the 'Jobs in flight'
     card on the dashboard."""
     from scripts.jobs import list_active, rollup, autoclose_stale_jobs
+    from scripts.remembrance import remembrance_for
     auto_closed = autoclose_stale_jobs()   # idempotent; safe on every refresh
     out = []
     for rec in list_active():
         r = rollup(rec["id"])
         if r is None:
             continue
-        r["stream_color"] = STREAM_COLORS.get(r.get("stream") or "", "#6b7280")
+        r["stream_color"] = stream_color(r.get("stream") or "")
+        # Cross-Job remembrance — deterministic, local, no LLM in v1.
+        try:
+            r["remembrance"] = remembrance_for(rec["id"], limit=3)
+        except Exception:
+            r["remembrance"] = []
         out.append(r)
     return {"jobs": out, "auto_closed_count": len(auto_closed)}
+
+
+@app.get("/api/jobs/{job_id}/remembrance")
+def api_job_remembrance(job_id: str, limit: int = 3):
+    """Standalone endpoint for cross-Job remembrance. Useful for the
+    per-Job detail view and for diagnostic / debugging callers."""
+    from scripts.remembrance import remembrance_for
+    try:
+        out = remembrance_for(job_id, limit=max(1, min(int(limit), 10)))
+    except Exception as e:
+        return JSONResponse({"error": str(e)}, status_code=500)
+    return {"job_id": job_id, "matches": out}
 
 
 @app.get("/api/jobs/recent")
@@ -806,7 +889,7 @@ def api_jobs_recent(days: int = 14, only_ended: bool = False):
             continue
         out.append({
             **rec,
-            "stream_color": STREAM_COLORS.get(rec.get("stream") or "", "#6b7280"),
+            "stream_color": stream_color(rec.get("stream") or ""),
         })
     return {"jobs": out, "days": days}
 
@@ -859,7 +942,7 @@ def api_job_suggestions():
         return JSONResponse({"suggestions": [], "error": str(e)[:200]}, status_code=200)
     # Stamp each with the stream color for the dashboard
     for s in out:
-        s["stream_color"] = STREAM_COLORS.get(s.get("stream") or "", "#6b7280")
+        s["stream_color"] = stream_color(s.get("stream") or "")
     return {"suggestions": out}
 
 
@@ -899,7 +982,7 @@ def api_job_detail(job_id: str):
     r = rollup(job_id, include_sessions=True)
     if r is None:
         return JSONResponse({"error": "not found"}, status_code=404)
-    r["stream_color"] = STREAM_COLORS.get(r.get("stream") or "", "#6b7280")
+    r["stream_color"] = stream_color(r.get("stream") or "")
     return r
 
 
@@ -928,6 +1011,259 @@ async def api_job_end(job_id: str):
     return {"ok": True, **rec}
 
 
+@app.post("/api/jobs/{job_id}/restream")
+async def api_job_restream(job_id: str, payload: dict):
+    """Body: {stream: str | null}. Move a Job under a different stream.
+    Used by the v1.7 taxonomy migration flow. Append-only — preserves the
+    Job's original start event and prior sessions; only the effective stream
+    going forward (and as folded from the event log) changes."""
+    from scripts.jobs import move_job
+    new_stream = payload.get("stream")
+    if isinstance(new_stream, str):
+        new_stream = new_stream.strip() or None
+    try:
+        rec = move_job(job_id, new_stream)
+    except KeyError as e:
+        return JSONResponse({"error": str(e)}, status_code=404)
+    except ValueError as e:
+        return JSONResponse({"error": str(e)}, status_code=400)
+    return {"ok": True, **rec}
+
+
+# ── Streams: add a new stream from the UI without editing YAML ───────────────
+
+@app.post("/api/streams")
+async def api_streams_add(payload: dict):
+    """Body: {key, label, parent?}. Append a new stream to config.yaml.
+      • key must be lowercase letters/digits/hyphens, 2–30 chars, not used.
+      • parent (optional) must reference an existing stream — used to build
+        the v1.7 stream hierarchy. Omit / null → top-level node.
+    On success the stream is written in the hierarchical {label, parent}
+    shape so the tree primitive remains the source of truth."""
+    import re as _re, yaml as _yaml
+    key    = (payload.get("key") or "").strip().lower()
+    label  = (payload.get("label") or "").strip()
+    parent = payload.get("parent")
+    parent = parent.strip().lower() if isinstance(parent, str) and parent.strip() else None
+
+    if not _re.fullmatch(r"[a-z0-9][a-z0-9\-]{1,29}", key):
+        return JSONResponse(
+            {"error": "key must be lowercase letters/digits/hyphens, 2–30 chars"},
+            status_code=400)
+    if not label:
+        return JSONResponse({"error": "label is required"}, status_code=400)
+    if len(label) > 60:
+        return JSONResponse({"error": "label too long (60 char max)"}, status_code=400)
+    if parent and parent == key:
+        return JSONResponse({"error": "stream cannot be its own parent"}, status_code=400)
+
+    cfg_path = resolve("config/config.yaml")
+    if not cfg_path.exists():
+        return JSONResponse({"error": "config.yaml not found"}, status_code=500)
+    cfg = _yaml.safe_load(cfg_path.read_text(encoding="utf-8")) or {}
+    streams = cfg.setdefault("streams", {}) or {}
+    if not isinstance(streams, dict):
+        return JSONResponse({"error": "streams block is malformed in config.yaml"},
+                            status_code=500)
+    if key in streams:
+        return JSONResponse({"error": f"stream '{key}' already exists"}, status_code=409)
+    if parent and parent not in streams:
+        return JSONResponse({"error": f"parent '{parent}' is not a known stream"},
+                            status_code=400)
+    # Always write the dict shape — keeps the file uniform once any stream
+    # acquires a parent. Existing string-shape entries can stay; the
+    # normaliser handles them.
+    streams[key] = {"label": label}
+    if parent:
+        streams[key]["parent"] = parent
+    cfg["streams"] = streams
+    cfg_path.write_text(_yaml.safe_dump(cfg, sort_keys=False, allow_unicode=True),
+                        encoding="utf-8")
+    from scripts.tree import breadcrumb
+    return {
+        "ok":         True,
+        "key":        key,
+        "label":      label,
+        "parent":     parent,
+        "color":      stream_color(key),
+        "breadcrumb": breadcrumb(key, cfg),
+    }
+
+
+@app.patch("/api/streams/{key}")
+async def api_streams_patch(key: str, payload: dict):
+    """Body: {label?, parent?}. Update a stream's display label and/or parent.
+    Refuses moves that would create a cycle (key cannot become a descendant
+    of itself)."""
+    import yaml as _yaml
+    cfg_path = resolve("config/config.yaml")
+    if not cfg_path.exists():
+        return JSONResponse({"error": "config.yaml not found"}, status_code=500)
+    cfg = _yaml.safe_load(cfg_path.read_text(encoding="utf-8")) or {}
+    streams = cfg.get("streams") or {}
+    if not isinstance(streams, dict) or key not in streams:
+        return JSONResponse({"error": f"stream '{key}' not found"}, status_code=404)
+
+    # Normalise the entry to dict shape so partial updates compose cleanly.
+    cur = streams[key]
+    if isinstance(cur, str):
+        cur = {"label": cur}
+    elif not isinstance(cur, dict):
+        cur = {"label": key}
+
+    if "label" in payload:
+        lbl = (payload["label"] or "").strip()
+        if not lbl:
+            return JSONResponse({"error": "label cannot be empty"}, status_code=400)
+        if len(lbl) > 60:
+            return JSONResponse({"error": "label too long (60 char max)"}, status_code=400)
+        cur["label"] = lbl
+
+    if "parent" in payload:
+        new_parent = payload.get("parent")
+        new_parent = (new_parent or "").strip().lower() or None
+        if new_parent == key:
+            return JSONResponse({"error": "stream cannot be its own parent"}, status_code=400)
+        if new_parent and new_parent not in streams:
+            return JSONResponse({"error": f"parent '{new_parent}' is not a known stream"},
+                                status_code=400)
+        # Cycle guard: walk up from new_parent — if we encounter `key`, abort.
+        # We use the in-memory `streams` to traverse, treating strings as
+        # parent-less.
+        cur_p = new_parent
+        seen = set()
+        while cur_p:
+            if cur_p == key:
+                return JSONResponse(
+                    {"error": f"cannot make '{key}' a descendant of itself"},
+                    status_code=400)
+            if cur_p in seen:
+                break
+            seen.add(cur_p)
+            up = streams.get(cur_p)
+            cur_p = up.get("parent") if isinstance(up, dict) else None
+        if new_parent:
+            cur["parent"] = new_parent
+        else:
+            cur.pop("parent", None)
+
+    streams[key] = cur
+    cfg["streams"] = streams
+    cfg_path.write_text(_yaml.safe_dump(cfg, sort_keys=False, allow_unicode=True),
+                        encoding="utf-8")
+    from scripts.tree import breadcrumb
+    return {"ok": True, "key": key, "label": cur.get("label"),
+            "parent": cur.get("parent"), "breadcrumb": breadcrumb(key, cfg)}
+
+
+@app.delete("/api/streams/{key}")
+def api_streams_delete(key: str):
+    """Remove a stream. Refused if it has children OR any Job attached.
+    Caller can move/end Jobs first via the migration UI, then retry."""
+    import yaml as _yaml
+    cfg_path = resolve("config/config.yaml")
+    if not cfg_path.exists():
+        return JSONResponse({"error": "config.yaml not found"}, status_code=500)
+    cfg = _yaml.safe_load(cfg_path.read_text(encoding="utf-8")) or {}
+    streams = cfg.get("streams") or {}
+    if key not in streams:
+        return JSONResponse({"error": f"stream '{key}' not found"}, status_code=404)
+
+    # Children check (depends on parent links in the on-disk shape).
+    kids = [k for k, v in streams.items()
+            if isinstance(v, dict) and v.get("parent") == key]
+    if kids:
+        return JSONResponse(
+            {"error": f"stream '{key}' has children: {kids}. Re-parent or delete them first."},
+            status_code=400)
+
+    # Job attachment check.
+    from scripts.jobs import list_all
+    attached = [j["id"] for j in list_all(days_back=3650, cfg=cfg)
+                if j.get("stream") == key]
+    if attached:
+        return JSONResponse(
+            {"error": f"stream '{key}' has {len(attached)} job(s) attached. Re-home them first."},
+            status_code=400)
+
+    del streams[key]
+    cfg["streams"] = streams
+    cfg_path.write_text(_yaml.safe_dump(cfg, sort_keys=False, allow_unicode=True),
+                        encoding="utf-8")
+    return {"ok": True, "deleted": key}
+
+
+# ── Plans API (v1.7 Morning Plan — intent capture) ───────────────────────────
+
+@app.get("/api/plans/today")
+def api_plans_today():
+    """Today's plan, if one has been written. Items are enriched in-place
+    with reconciliation fields (actual_minutes_today / actual_minutes_total)
+    so the dashboard can show planned-vs-actual without a second request.
+    Returns the empty-state shape when no plan exists yet."""
+    from datetime import date as _date
+    from scripts.plans import plan_for, reconcile
+    today = _date.today()
+    p = plan_for(today)
+    if p is None:
+        return {"exists": False, "date": today.isoformat(),
+                "items": [], "created_at": None,
+                "planned_minutes": 0, "actual_minutes_today": 0.0}
+    rec = reconcile(today, p.get("items") or [])
+    return {"exists": True, **p,
+            "planned_minutes":      rec["planned_minutes"],
+            "actual_minutes_today": rec["actual_minutes_today"]}
+
+
+@app.get("/api/plans/suggestions")
+def api_plans_suggestions():
+    """Carry-over candidates for the morning plan: in-flight jobs, jobs touched
+    yesterday, and jobs touched in the past week. UI decides what to show."""
+    from scripts.plans import suggestions
+    return suggestions()
+
+
+@app.post("/api/plans/today")
+async def api_plans_save_today(payload: dict):
+    """Body: {items: [{name, planned_minutes?, job_id?, stream?, section?, done?}, ...]}.
+
+    Any item without a job_id gets a fresh Job created on the spot (so the
+    rest of the day's activity rolls up under it). Returns the written plan
+    with all items now job-linked where possible.
+    """
+    from datetime import date as _date
+    from scripts.plans import materialise_jobs, save_plan_for, plan_for
+    items = list(payload.get("items") or [])
+    # Normalise + drop empties.
+    cleaned: list[dict] = []
+    for raw in items:
+        if not isinstance(raw, dict):
+            continue
+        name = (raw.get("name") or "").strip()
+        if not name:
+            continue
+        cleaned.append({
+            "name":            name,
+            "done":            bool(raw.get("done")),
+            "planned_minutes": (int(raw["planned_minutes"])
+                                if raw.get("planned_minutes") not in (None, "", 0)
+                                else None),
+            "job_id":          (raw.get("job_id") or None),
+            "stream":          (raw.get("stream") or None),
+            "section":         ("carried" if raw.get("section") == "carried"
+                                else "new"),
+        })
+    today = _date.today()
+    cleaned = materialise_jobs(today, cleaned)
+    save_plan_for(today, cleaned)
+    out = plan_for(today) or {}
+    from scripts.plans import reconcile
+    rec = reconcile(today, out.get("items") or [])
+    return {"ok": True, **out,
+            "planned_minutes":      rec["planned_minutes"],
+            "actual_minutes_today": rec["actual_minutes_today"]}
+
+
 # ── dashboard HTML ────────────────────────────────────────────────────────────
 
 DASHBOARD_HTML = """<!DOCTYPE html>
@@ -938,29 +1274,57 @@ DASHBOARD_HTML = """<!DOCTYPE html>
 <title>WorkPulse</title>
 <style>
 :root {
-  --bg:        #faf9f6;
+  --bg:        #fbf8f1;
+  --bg-warm:   #fff6e0;
   --surface:   #ffffff;
-  --border:    #ece9e1;
-  --border-d:  #d9d6cd;
+  --border:    #eee5d2;
+  --border-d:  #ddd0b3;
   --text:      #1c1c1a;
   --text-soft: #6b6b62;
   --text-faint:#a8a8a0;
-  --shadow:    0 1px 3px rgba(28,28,26,0.05), 0 4px 16px rgba(28,28,26,0.03);
+  --muted:     #6b6b62;
+  --shadow:    0 1px 3px rgba(28,28,26,0.04), 0 6px 22px rgba(28,28,26,0.04);
+  --shadow-lift: 0 4px 12px rgba(28,28,26,0.07), 0 12px 36px rgba(28,28,26,0.06);
   --radius:    16px;
+  --radius-sm: 12px;
   --green:     #22c55e;
   --green-d:   #16a34a;
   --amber-bg:  #fef7e6;
   --amber-br:  #f5d77a;
   --amber-tx:  #6b4a0f;
+  --accent:    #d97757;
+  --accent-soft:#fbe4d4;
+  --bg-soft:   #f5f1e6;
 }
 * { box-sizing: border-box; margin: 0; padding: 0; }
 html { background: var(--bg); }
 body {
-  background: var(--bg); color: var(--text);
+  background:
+    radial-gradient(circle at 0% 0%, #fff1d6 0%, transparent 45%),
+    radial-gradient(circle at 100% 8%, #f1ebd8 0%, transparent 35%),
+    var(--bg);
+  color: var(--text);
   font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI Variable', 'Segoe UI', 'Inter', system-ui, sans-serif;
   font-size: 15px; line-height: 1.55;
   -webkit-font-smoothing: antialiased; -moz-osx-font-smoothing: grayscale;
-  max-width: 1080px; margin: 0 auto; padding: 56px 40px 96px;
+  max-width: 1320px; margin: 0 auto; padding: 48px 40px 96px;
+  min-height: 100vh;
+}
+@media (max-width: 900px) { body { padding: 32px 20px 80px; } }
+
+/* Master grid for the cards region */
+.cards-grid {
+  display: grid;
+  grid-template-columns: repeat(12, 1fr);
+  gap: 18px;
+  margin-top: 28px;
+}
+.span-12 { grid-column: span 12; }
+.span-8  { grid-column: span 8; }
+.span-6  { grid-column: span 6; }
+.span-4  { grid-column: span 4; }
+@media (max-width: 1100px) {
+  .span-8, .span-6, .span-4 { grid-column: span 12; }
 }
 
 /* Top bar */
@@ -975,15 +1339,41 @@ body {
 .date { color: var(--text-soft); font-size: 14px; }
 
 /* Hero */
-.hero { margin-bottom: 56px; }
-.hero h1 { font-size: 30px; font-weight: 500; letter-spacing: -0.7px; line-height: 1.3;
-  max-width: 780px; margin-bottom: 12px; }
+.hero { margin-bottom: 28px; display: grid; grid-template-columns: 1fr auto; gap: 32px; align-items: end; }
+.hero-text { min-width: 0; }
+.hero-greeting { font-size: 13px; font-weight: 600; letter-spacing: 1px; text-transform: uppercase;
+  color: var(--accent); margin-bottom: 8px; display: flex; align-items: center; gap: 8px; }
+.hero-greeting .sun { font-size: 20px; line-height: 1; }
+.hero h1 { font-size: 32px; font-weight: 500; letter-spacing: -0.7px; line-height: 1.25;
+  max-width: 780px; margin-bottom: 10px; }
 .hero h1 .strong { font-weight: 700; }
 .hero .sub { color: var(--text-soft); font-size: 15px; }
+.hero-cta { display: flex; flex-direction: column; gap: 8px; align-items: flex-end; }
+.btn-hero {
+  background: var(--text); color: var(--bg);
+  border: none; border-radius: 14px;
+  padding: 14px 22px; font-size: 14px; font-weight: 600;
+  cursor: pointer; font-family: inherit; letter-spacing: -0.1px;
+  display: inline-flex; align-items: center; gap: 10px;
+  box-shadow: 0 2px 6px rgba(28,28,26,0.16), 0 8px 24px rgba(28,28,26,0.10);
+  transition: transform 0.15s ease, box-shadow 0.15s ease;
+}
+.btn-hero:hover { transform: translateY(-2px);
+  box-shadow: 0 4px 10px rgba(28,28,26,0.2), 0 14px 32px rgba(28,28,26,0.14); }
+.btn-hero .ic { font-size: 18px; line-height: 1; }
+.btn-hero.subtle { background: var(--surface); color: var(--text); border: 1px solid var(--border); box-shadow: var(--shadow); }
+.hero-cta-note { font-size: 12px; color: var(--text-faint); }
+@media (max-width: 800px) {
+  .hero { grid-template-columns: 1fr; gap: 18px; align-items: start; }
+  .hero-cta { align-items: flex-start; }
+}
 
 /* Card */
 .card { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius);
-  padding: 28px 30px; margin-bottom: 18px; box-shadow: var(--shadow); }
+  padding: 24px 26px; box-shadow: var(--shadow);
+  transition: box-shadow 0.18s ease, transform 0.18s ease; }
+.card:hover { box-shadow: var(--shadow-lift); }
+.card.interactive:hover { transform: translateY(-2px); }
 .card-row { display: grid; grid-template-columns: 1.4fr 1fr; gap: 18px; margin-bottom: 18px; }
 .eyebrow { font-size: 11px; font-weight: 600; letter-spacing: 1.6px; text-transform: uppercase;
   color: var(--text-soft); margin-bottom: 22px; }
@@ -1184,6 +1574,90 @@ footer { margin-top: 64px; padding-top: 24px; border-top: 1px solid var(--border
   pointer-events: none; }
 .toast.show { opacity: 1; }
 
+/* Untagged-time alert (v1.7) — surfaces when ≥ALERT_THRESHOLD min go untagged */
+.alert-card { border: 1px solid #d4a017; background: #fffaeb;
+  border-radius: 10px; padding: 12px 16px; margin: 14px 0; }
+.alert-head { display: flex; align-items: center; gap: 8px;
+  font-weight: 500; font-size: 14px; color: #7a5b0a; margin-bottom: 8px; }
+.alert-icon { font-size: 16px; }
+.alert-row { display: flex; align-items: center; gap: 10px; padding: 5px 0;
+  border-top: 1px dashed #e8d28a; font-size: 13px; }
+.alert-row:first-of-type { border-top: none; }
+.alert-row .alert-title { flex: 1; min-width: 0; color: #5a4408;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.alert-row .alert-min { color: #7a5b0a; font-size: 12px; }
+
+/* Today's plan (Morning Plan card — v1.7) */
+.plan-eyebrow { display: flex; justify-content: space-between; align-items: center; }
+.plan-section-label { font-size: 10px; text-transform: uppercase; letter-spacing: 0.12em;
+  color: var(--muted); margin: 18px 0 10px; font-weight: 600; }
+
+/* Plan items as a responsive grid of mini-cards */
+.plan-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(240px, 1fr));
+  gap: 12px; }
+.plan-item {
+  position: relative;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  padding: 14px 16px 16px;
+  display: flex; flex-direction: column; gap: 10px;
+  transition: transform 0.18s ease, box-shadow 0.18s ease, border-color 0.18s ease;
+  overflow: hidden;
+}
+.plan-item::before {
+  content: ''; position: absolute; left: 0; top: 0; bottom: 0; width: 4px;
+  background: var(--stream-color, #6b7280);
+  border-radius: var(--radius-sm) 0 0 var(--radius-sm);
+}
+.plan-item::after {
+  content: ''; position: absolute; right: -40px; top: -40px;
+  width: 140px; height: 140px; border-radius: 50%;
+  background: var(--stream-color, #6b7280);
+  opacity: 0.05;
+  transition: opacity 0.18s ease;
+  pointer-events: none;
+}
+.plan-item:hover { transform: translateY(-2px);
+  box-shadow: 0 4px 12px rgba(28,28,26,0.08); border-color: var(--border-d); }
+.plan-item:hover::after { opacity: 0.10; }
+.plan-item.done { opacity: 0.55; background: var(--bg-soft); }
+.plan-item.done .plan-item-name { text-decoration: line-through; color: var(--muted); }
+
+.plan-item-top { display: flex; align-items: flex-start; gap: 10px; }
+.plan-item-icon { font-size: 24px; line-height: 1; flex-shrink: 0;
+  filter: drop-shadow(0 1px 2px rgba(0,0,0,0.06)); }
+.plan-item-body { flex: 1; min-width: 0; }
+.plan-item-name { font-size: 14px; font-weight: 600; line-height: 1.35;
+  color: var(--text); word-wrap: break-word; }
+.plan-item-stream { font-size: 11px; color: var(--stream-color, var(--muted));
+  font-weight: 600; letter-spacing: 0.04em; text-transform: lowercase;
+  margin-top: 4px; }
+.plan-item-bottom { display: flex; align-items: center; justify-content: space-between;
+  gap: 10px; }
+.plan-item-time { font-size: 12px; color: var(--muted); font-variant-numeric: tabular-nums; }
+.plan-item-time .actual { color: var(--text); font-weight: 600; }
+.plan-item-check { width: 18px; height: 18px; accent-color: var(--stream-color, var(--text));
+  cursor: pointer; flex-shrink: 0; }
+
+.plan-bar-wrap { height: 4px; background: var(--border);
+  border-radius: 2px; overflow: hidden; }
+.plan-bar { height: 100%; background: var(--stream-color, var(--text));
+  border-radius: 2px; transition: width 0.4s ease; }
+.plan-bar-over { background: #c44; }
+.plan-sg-block { background: var(--bg-soft, #fafafa); border: 1px solid var(--border);
+  border-radius: 8px; padding: 10px 12px; margin: 8px 0 14px;
+  max-height: 220px; overflow-y: auto; }
+.plan-sg-label { font-size: 11px; text-transform: uppercase; letter-spacing: 0.08em;
+  color: var(--muted); margin: 6px 0 4px; }
+.plan-sg-row { display: flex; align-items: center; gap: 8px; padding: 4px 0; font-size: 13px; }
+.plan-sg-row input[type="checkbox"] { width: 14px; height: 14px; accent-color: var(--text);
+  cursor: pointer; }
+.plan-sg-row .meta { color: var(--muted); font-size: 12px; margin-left: auto; }
+.plan-hint { margin-top: 4px; font-size: 11px; }
+.plan-hint code { background: var(--bg-soft, #f3f3f3); padding: 1px 5px; border-radius: 4px;
+  font-family: ui-monospace, SFMono-Regular, monospace; font-size: 11px; }
+
 /* Jobs in flight (Coach card) */
 .jobs-eyebrow { display: flex; justify-content: space-between; align-items: center; }
 .btn-start-job { background: var(--text); color: var(--bg); border: none;
@@ -1191,10 +1665,20 @@ footer { margin-top: 64px; padding-top: 24px; border-top: 1px solid var(--border
   cursor: pointer; font-family: inherit; text-transform: none; letter-spacing: 0; }
 .btn-start-job:hover { opacity: 0.88; }
 
-.job-card { padding: 18px 0; border-bottom: 1px dashed var(--border); }
-.job-card:last-child { border-bottom: none; padding-bottom: 4px; }
-.job-card:first-of-type { padding-top: 4px; }
+.job-card { position: relative; padding: 20px 22px; margin-bottom: 14px;
+  background: linear-gradient(135deg,
+    color-mix(in srgb, var(--stream-color, #6b7280) 7%, var(--surface)),
+    var(--surface));
+  border: 1px solid var(--border);
+  border-left: 4px solid var(--stream-color, #6b7280);
+  border-radius: var(--radius-sm);
+  transition: transform 0.18s ease, box-shadow 0.18s ease;
+}
+.job-card:hover { transform: translateY(-2px); box-shadow: var(--shadow); }
+.job-card:last-child { margin-bottom: 4px; }
 .job-head { display: flex; align-items: center; gap: 12px; margin-bottom: 8px; }
+.job-icon { font-size: 22px; line-height: 1; flex-shrink: 0;
+  filter: drop-shadow(0 1px 2px rgba(0,0,0,0.06)); }
 .job-name { font-size: 17px; font-weight: 600; letter-spacing: -0.3px; flex: 1;
   white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .job-actions { display: flex; gap: 4px; }
@@ -1207,6 +1691,18 @@ footer { margin-top: 64px; padding-top: 24px; border-top: 1px solid var(--border
 .job-apps { font-size: 13px; color: var(--text-soft); margin-bottom: 14px; line-height: 1.7; }
 .job-apps .app-tag { white-space: nowrap; margin-right: 14px; }
 .job-apps .app-tag strong { color: var(--text); font-weight: 500; }
+
+/* Cross-Job remembrance (v1.7 Coach — Slice A) */
+.job-rem { background: #f5f6fb; border-left: 3px solid #6b7280;
+  border-radius: 8px; padding: 12px 14px; margin-top: 12px; }
+.job-rem-head { font-size: 11px; font-weight: 600; letter-spacing: 0.6px;
+  text-transform: uppercase; color: var(--muted); margin-bottom: 8px; }
+.rem-item { padding: 6px 0; border-top: 1px dashed #d8dae3; cursor: pointer;
+  transition: background 0.12s; border-radius: 4px; }
+.rem-item:first-of-type { border-top: none; }
+.rem-item:hover { background: #ebedf3; padding-left: 6px; padding-right: 6px; }
+.rem-name { font-size: 13px; font-weight: 500; color: var(--text); }
+.rem-meta { font-size: 11px; color: var(--muted); margin-top: 2px; }
 
 .job-lift { background: var(--bg); border-radius: 10px; padding: 14px 16px;
   border: 1px solid var(--border); }
@@ -1266,6 +1762,47 @@ footer { margin-top: 64px; padding-top: 24px; border-top: 1px solid var(--border
 .export-loading { padding: 60px 0; text-align: center; color: var(--text-faint);
   font-style: italic; }
 
+/* Taxonomy wizard (v1.7 Slice 2) */
+.tx-qs-btn { background: var(--surface); color: var(--text); border: 1px solid var(--border);
+  font-size: 13px; font-weight: 500; padding: 8px 14px; border-radius: 8px;
+  cursor: pointer; font-family: inherit; transition: all 0.12s; }
+.tx-qs-btn:hover { background: var(--bg-soft); border-color: var(--border-d); }
+.tx-tree-list { list-style: none; padding: 0; margin: 0; }
+.tx-tree-list ul { list-style: none; padding: 0; margin: 4px 0 0 22px; border-left: 1px dashed var(--border); padding-left: 14px; }
+.tx-node { display: flex; align-items: center; gap: 8px; padding: 8px 10px; border-radius: 8px;
+  transition: background 0.12s; margin-bottom: 4px; }
+.tx-node:hover { background: var(--bg-soft); }
+.tx-node-color { width: 10px; height: 10px; border-radius: 50%; flex-shrink: 0; }
+.tx-node-label { flex: 1; font-size: 14px; min-width: 0;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.tx-node-key { font-size: 11px; color: var(--text-faint); font-family: ui-monospace, monospace; }
+.tx-node-actions { display: flex; gap: 4px; opacity: 0.4; transition: opacity 0.12s; }
+.tx-node:hover .tx-node-actions { opacity: 1; }
+.tx-icon-btn { background: transparent; border: none; cursor: pointer; padding: 4px 8px;
+  border-radius: 5px; color: var(--text-soft); font-family: inherit; font-size: 12px;
+  transition: all 0.12s; }
+.tx-icon-btn:hover { background: var(--surface); color: var(--text); }
+.tx-icon-btn.danger:hover { background: #fde8e6; color: #b13a2b; }
+.tx-add-form { display: grid; grid-template-columns: 0.7fr 1.3fr auto auto; gap: 8px;
+  padding: 10px 12px; margin: 4px 0 4px 22px;
+  background: var(--bg-soft); border-radius: 8px; border: 1px dashed var(--border-d); }
+.tx-add-form input { padding: 7px 10px; border: 1px solid var(--border); border-radius: 6px;
+  font-family: inherit; font-size: 13px; background: var(--surface); }
+.tx-add-form button { padding: 6px 12px; border-radius: 6px; font-family: inherit;
+  font-size: 12px; cursor: pointer; border: 1px solid var(--border); background: var(--surface);
+  color: var(--text); }
+.tx-add-form button.primary { background: var(--text); color: var(--bg); border-color: var(--text); }
+.tx-rename-form { display: flex; gap: 6px; flex: 1; }
+.tx-rename-form input { flex: 1; padding: 6px 9px; border: 1px solid var(--border-d);
+  border-radius: 6px; font-family: inherit; font-size: 14px; }
+.tx-mig-row { display: flex; align-items: center; gap: 10px; padding: 8px 0;
+  border-bottom: 1px dashed var(--border); }
+.tx-mig-row:last-child { border-bottom: none; }
+.tx-mig-name { flex: 1; font-size: 13px; min-width: 0;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.tx-mig-row select { padding: 6px 10px; border: 1px solid var(--border-d); border-radius: 6px;
+  font-family: inherit; font-size: 13px; min-width: 180px; }
+
 /* Start-Job modal — reuses .modal-bg + .modal styles */
 .sj-row { margin-bottom: 18px; }
 .sj-row label { display: block; font-size: 12px; font-weight: 500;
@@ -1301,67 +1838,99 @@ footer { margin-top: 64px; padding-top: 24px; border-top: 1px solid var(--border
 <div class="datebar" id="datebar"></div>
 
 <div class="hero">
-  <h1 id="hero-headline">Loading…</h1>
-  <div class="sub" id="hero-sub"></div>
-</div>
-
-<!-- Jobs in flight (the Coach surface — v1.1a + v1.2a + v1.2b) -->
-<div class="card jobs-card">
-  <div class="eyebrow jobs-eyebrow">
-    <span>Jobs in flight</span>
-    <button class="btn-start-job" onclick="openStartJob()">+ Start a job</button>
+  <div class="hero-text">
+    <div class="hero-greeting"><span class="sun" id="hero-icon">☀️</span><span id="hero-greeting-text">Good morning</span></div>
+    <h1 id="hero-headline">Loading…</h1>
+    <div class="sub" id="hero-sub"></div>
   </div>
-  <div id="suggestions-block" class="sg-block"></div>
-  <div id="jobs-panel"><div class="empty">Loading…</div></div>
-  <div id="recently-ended-block"></div>
+  <div class="hero-cta">
+    <button class="btn-hero" id="hero-primary-btn" onclick="heroPrimaryAction()">
+      <span class="ic" id="hero-primary-icon">🌅</span>
+      <span id="hero-primary-label">Plan your day</span>
+    </button>
+    <button class="btn-hero subtle" onclick="openStartJob()">
+      <span class="ic">＋</span><span>Start a job</span>
+    </button>
+  </div>
 </div>
 
-<!-- Weekly heatmap -->
-<div class="card">
-  <div class="eyebrow">Last 14 days</div>
-  <div class="heatmap" id="heatmap"><div class="empty">Loading…</div></div>
+<!-- Untagged-time alert (shows only when threshold crossed) -->
+<div class="alert-card" id="untagged-alert" style="display:none">
+  <div class="alert-head">
+    <span class="alert-icon">⚠</span>
+    <span id="untagged-alert-text"></span>
+  </div>
+  <div id="untagged-alert-items"></div>
 </div>
 
-<div class="card-row">
-  <div class="card">
+<div class="cards-grid">
+
+  <!-- Today's plan (v1.7 intent capture — the Morning Plan surface) -->
+  <div class="card plan-card span-12">
+    <div class="eyebrow plan-eyebrow">
+      <span>Today's plan</span>
+      <button class="btn-start-job" id="plan-action-btn" onclick="openPlanModal()">+ Plan your day</button>
+    </div>
+    <div id="plan-panel"><div class="empty">Loading…</div></div>
+  </div>
+
+  <!-- Jobs in flight (the Coach surface — v1.1a + v1.2a + v1.2b) -->
+  <div class="card jobs-card span-12">
+    <div class="eyebrow jobs-eyebrow">
+      <span>Jobs in flight</span>
+    </div>
+    <div id="suggestions-block" class="sg-block"></div>
+    <div id="jobs-panel"><div class="empty">Loading…</div></div>
+    <div id="recently-ended-block"></div>
+  </div>
+
+  <!-- Weekly heatmap -->
+  <div class="card span-12">
+    <div class="eyebrow">Last 14 days</div>
+    <div class="heatmap" id="heatmap"><div class="empty">Loading…</div></div>
+  </div>
+
+  <div class="card span-8">
     <div class="eyebrow">Where the time went</div>
     <div id="donut-panel"><div class="empty">Loading…</div></div>
   </div>
-  <div class="card">
+  <div class="card span-4">
     <div class="eyebrow">Last active</div>
     <div id="last-active"><div class="empty">Loading…</div></div>
   </div>
-</div>
 
-<div class="card">
-  <div class="eyebrow">Today's flow</div>
-  <div class="tl-wrap">
-    <div class="tl" id="timeline"></div>
-    <div class="tl-axis" id="tl-axis"></div>
+  <div class="card span-12">
+    <div class="eyebrow">Today's flow</div>
+    <div class="tl-wrap">
+      <div class="tl" id="timeline"></div>
+      <div class="tl-axis" id="tl-axis"></div>
+    </div>
   </div>
-</div>
 
-<div class="card">
-  <div class="eyebrow">Needs your attention</div>
-  <div id="attn-panel"><div class="empty">Nothing untagged today.</div></div>
-</div>
-
-<div class="card">
-  <div class="eyebrow">Apps used</div>
-  <div id="apps-panel"><div class="empty">Loading…</div></div>
-</div>
-
-<div class="card">
-  <div class="eyebrow">AI sessions</div>
-  <div id="ai-panel"><div class="empty">Loading…</div></div>
-</div>
-
-<details>
-  <summary>Show every window visit today</summary>
-  <div class="card" style="margin-top: 12px">
-    <div id="sessions-panel"><div class="empty">Loading…</div></div>
+  <div class="card span-8">
+    <div class="eyebrow">Needs your attention</div>
+    <div id="attn-panel"><div class="empty">Nothing untagged today.</div></div>
   </div>
-</details>
+  <div class="card span-4">
+    <div class="eyebrow">Apps used</div>
+    <div id="apps-panel"><div class="empty">Loading…</div></div>
+  </div>
+
+  <div class="card span-12">
+    <div class="eyebrow">AI sessions</div>
+    <div id="ai-panel"><div class="empty">Loading…</div></div>
+  </div>
+
+  <div class="span-12">
+    <details>
+      <summary style="cursor:pointer; color:var(--text-soft); font-size:13px; padding:8px 4px;">Show every window visit today</summary>
+      <div class="card" style="margin-top: 8px">
+        <div id="sessions-panel"><div class="empty">Loading…</div></div>
+      </div>
+    </details>
+  </div>
+
+</div>
 
 <footer>
   <div class="foot-status">
@@ -1376,6 +1945,14 @@ footer { margin-top: 64px; padding-top: 24px; border-top: 1px solid var(--border
   <div class="modal" role="dialog" aria-labelledby="set-title">
     <h2 id="set-title">Settings</h2>
     <div class="sub">All values stay on this machine. Nothing is sent anywhere except direct API calls you make.</div>
+
+    <div class="modal-row" style="background:var(--bg);padding:14px 16px;border-radius:10px;border:1px solid var(--border);margin-bottom:14px">
+      <label style="margin-bottom:8px">Taxonomy (stream hierarchy)</label>
+      <div style="font-size:13px;color:var(--text-soft);line-height:1.6;margin-bottom:10px">
+        Tree of contexts that everything you do gets tagged under.
+      </div>
+      <button class="btn-hero subtle" style="font-size:13px;padding:8px 14px" onclick="closeSettings(); openTaxonomy('edit');">Edit taxonomy</button>
+    </div>
 
     <!-- AI backend status block (read-only summary) -->
     <div class="modal-row" style="background:var(--bg);padding:14px 16px;border-radius:10px;border:1px solid var(--border)">
@@ -1453,6 +2030,57 @@ footer { margin-top: 64px; padding-top: 24px; border-top: 1px solid var(--border
   </div>
 </div>
 
+<!-- Taxonomy / stream-tree wizard (v1.7 Slice 2) -->
+<div class="modal-bg" id="tx-modal" onclick="if(event.target===this)closeTaxonomy()">
+  <div class="modal" role="dialog" aria-labelledby="tx-title" style="max-width: 720px">
+    <h2 id="tx-title">Set up your taxonomy</h2>
+    <div class="sub" id="tx-intro">
+      WorkPulse organises your work as a tree of contexts. Build the tree once;
+      every Job and every window's time rolls up through it. You can edit this any time
+      from Settings.
+    </div>
+
+    <div id="tx-quickstart" style="margin: 18px 0; display: none;">
+      <div class="plan-sg-label">Quick start — tap to add a top-level domain</div>
+      <div style="display:flex; flex-wrap:wrap; gap:8px; margin-top:8px;">
+        <button class="tx-qs-btn" onclick="txQuickAdd('personal','Personal')">+ Personal</button>
+        <button class="tx-qs-btn" onclick="txQuickAdd('masters','Master\\'s')">+ Master's</button>
+        <button class="tx-qs-btn" onclick="txQuickAdd('work','Work')">+ Work</button>
+      </div>
+    </div>
+
+    <div id="tx-tree" style="margin-top: 18px;"></div>
+
+    <div id="tx-migration" style="margin-top: 18px; display: none;"></div>
+
+    <div class="modal-actions">
+      <button class="btn-ghost" onclick="closeTaxonomy()">Close</button>
+      <button class="btn-primary" onclick="finishTaxonomy()">Done</button>
+    </div>
+  </div>
+</div>
+
+<!-- Plan-the-day modal -->
+<div class="modal-bg" id="plan-modal" onclick="if(event.target===this)closePlanModal()">
+  <div class="modal" role="dialog" aria-labelledby="plan-title">
+    <h2 id="plan-title">Plan today</h2>
+    <div class="sub">Declare what you intend to work on. Each item becomes a Job — sessions roll up to it automatically. End-of-day you can see planned vs actual.</div>
+
+    <div id="plan-suggestions" class="plan-sg-block"></div>
+
+    <div class="sj-row">
+      <label for="plan-new-items">New items (one per line)</label>
+      <textarea id="plan-new-items" rows="6" placeholder="One item per line, e.g.&#10;NKCC Q3 narrative (~120 min)&#10;Call Mwangi (~30 min)&#10;Review v1.7 brief"></textarea>
+      <div class="sub plan-hint">Tip: add <code>(~N min)</code> for an optional time target.</div>
+    </div>
+
+    <div class="modal-actions">
+      <button class="btn-ghost" onclick="closePlanModal()">Cancel</button>
+      <button class="btn-primary" onclick="submitPlan()">Save plan</button>
+    </div>
+  </div>
+</div>
+
 <!-- Start-Job modal -->
 <div class="modal-bg" id="sj-modal" onclick="if(event.target===this)closeStartJob()">
   <div class="modal" role="dialog" aria-labelledby="sj-title">
@@ -1464,7 +2092,16 @@ footer { margin-top: 64px; padding-top: 24px; border-top: 1px solid var(--border
     </div>
     <div class="sj-row">
       <label for="sj-stream">Stream</label>
-      <select id="sj-stream"></select>
+      <select id="sj-stream" onchange="onStreamSelectChange()"></select>
+      <div id="sj-newstream" style="display:none; margin-top:10px; padding:12px; background:var(--bg-soft); border-radius:8px; border:1px dashed var(--border-d)">
+        <div style="display:grid; grid-template-columns: 1fr 1.4fr; gap:8px; margin-bottom:8px">
+          <input type="text" id="sj-newstream-key" placeholder="key (e.g. client-x)" />
+          <input type="text" id="sj-newstream-label" placeholder="label (e.g. Client X — Consulting)" />
+        </div>
+        <div style="font-size:11px; color:var(--text-faint)">
+          Key: lowercase letters / digits / hyphens. The label is what shows on the dashboard.
+        </div>
+      </div>
     </div>
     <div class="sj-row">
       <label for="sj-note">Note (optional)</label>
@@ -1573,6 +2210,9 @@ async function fetchSystem() {
     'status-dot' + (d.secrets.anthropic_key.configured ? '' : ' off');
   document.getElementById('smtp-status').className =
     'status-dot' + (d.secrets.smtp_password.configured ? '' : ' off');
+
+  // Taxonomy wizard auto-open (once per browser session while tree is trivial)
+  maybeAutoOpenTaxonomy();
 }
 
 async function toggleWatcher() {
@@ -1684,6 +2324,40 @@ async function fetchRealWork() {
       </div>
       <div class="legend">${legend}</div>
     </div>`;
+
+  // ── Untagged-time alert (v1.7) ────────────────────────────────────────
+  // Fires when today's untagged time crosses the threshold. Reuses the
+  // same Tag-as dropdown UX as the lower "Needs your attention" panel but
+  // makes the worst offenders impossible to miss.
+  const UNTAGGED_ALERT_MIN = 20;
+  const alertEl = document.getElementById('untagged-alert');
+  const untaggedMin = d.untagged_minutes || 0;
+  const topUntagged = (d.untagged_windows || []).filter(w => w.minutes >= 3).slice(0, 3);
+  if (untaggedMin >= UNTAGGED_ALERT_MIN && topUntagged.length > 0) {
+    document.getElementById('untagged-alert-text').textContent =
+      `${fmtMins(untaggedMin)} untagged today — tag the patterns below so future activity rolls up.`;
+    document.getElementById('untagged-alert-items').innerHTML = topUntagged.map((w, i) => `
+      <div class="alert-row">
+        <span class="alert-title" title="${escapeHtml(w.title)}">${escapeHtml(w.title)}</span>
+        <span class="alert-min">${fmtMins(w.minutes)}</span>
+        <div class="attn-tag">
+          <button class="tag-btn" onclick="toggleTagMenu('alert-${i}')">Tag as ▾</button>
+          <div class="tag-menu" id="tag-menu-alert-${i}">
+            ${availableStreams.map(s => `
+              <div class="tag-opt" onclick="learn('${escapeHtml(w.title)}', '${s.key}')">
+                <span class="lg-dot" style="background:${s.color}"></span>
+                <span>${escapeHtml(s.label)}</span>
+              </div>`).join('')}
+            <div class="tag-opt ignore" onclick="learn('${escapeHtml(w.title)}', null)">
+              Never tag this (ignore)
+            </div>
+          </div>
+        </div>
+      </div>`).join('');
+    alertEl.style.display = '';
+  } else {
+    alertEl.style.display = 'none';
+  }
 
   // ── Needs your attention (with Loop A tag-as dropdown) ───────────────
   const attn = (d.untagged_windows || []).filter(w => w.minutes >= 1).slice(0, 10);
@@ -1927,6 +2601,25 @@ function renderJobCard(job) {
     `<span class="app-tag"><strong>${escapeHtml(a.app)}</strong> ${fmtMins(a.minutes)}</span>`
   ).join('');
 
+  // Cross-Job remembrance block — surfaces prior Jobs with semantic overlap.
+  // Local-only, deterministic match. Click a row → opens that Job's export
+  // (which contains the full session breakdown + apps + LLM narrative if
+  // a key was configured at export time).
+  let remBlock = '';
+  const rem = job.remembrance || [];
+  if (rem.length > 0) {
+    remBlock = `<div class="job-rem">
+      <div class="job-rem-head">Worth knowing from before</div>
+      ${rem.map(m => `
+        <div class="rem-item" onclick="openExport('${escapeHtml(m.job_id)}', '${escapeHtml(m.name)}')">
+          <div class="rem-name">${escapeHtml(m.name)}</div>
+          <div class="rem-meta">
+            ${m.total_minutes > 0 ? fmtMins(m.total_minutes) + ' · ' : ''}${escapeHtml(m.reason)}
+          </div>
+        </div>`).join('')}
+    </div>`;
+  }
+
   // Lift block
   let liftBlock = '';
   if (sessions === 0) {
@@ -1950,9 +2643,11 @@ function renderJobCard(job) {
     </div>`;
   }
 
+  const jic = workIcon(job.name);
   return `
-    <div class="job-card" data-job="${escapeHtml(job.id)}">
+    <div class="job-card" data-job="${escapeHtml(job.id)}" style="--stream-color:${job.stream_color}">
       <div class="job-head">
+        <span class="job-icon">${jic}</span>
         <div class="job-name">${escapeHtml(job.name)}</div>
         <span class="chip" style="background:${job.stream_color}">${escapeHtml((job.stream||'').replace(/-/g,' '))}</span>
         <div class="job-actions">
@@ -1965,22 +2660,41 @@ function renderJobCard(job) {
         ${paused ? `<span class="job-paused">paused — last touch ${fmtRelative(job.last_active)}</span>` : ''}
       </div>
       ${sessions > 0 ? `<div class="job-apps">${appsLine || '<span style="color:var(--text-faint)">(no app data yet)</span>'}</div>` : ''}
+      ${remBlock}
       ${liftBlock}
     </div>
   `;
 }
 
 function openStartJob() {
-  // Populate stream dropdown from systemSnapshot (already fetched)
+  // Populate stream dropdown from systemSnapshot (already fetched).
+  // Append a sentinel "+ Create new stream…" option so users aren't locked
+  // into the streams currently in config.yaml.
   const sel = document.getElementById('sj-stream');
   const streams = (systemSnapshot && systemSnapshot.streams) || availableStreams || [];
-  sel.innerHTML = streams.map(s =>
+  const opts = streams.map(s =>
     `<option value="${escapeHtml(s.key)}">${escapeHtml(s.label)}</option>`
-  ).join('');
+  );
+  opts.push('<option value="__new__">+ Create new stream…</option>');
+  sel.innerHTML = opts.join('');
+  document.getElementById('sj-newstream').style.display = 'none';
+  document.getElementById('sj-newstream-key').value = '';
+  document.getElementById('sj-newstream-label').value = '';
   document.getElementById('sj-name').value = '';
   document.getElementById('sj-note').value = '';
   document.getElementById('sj-modal').classList.add('open');
   setTimeout(() => document.getElementById('sj-name').focus(), 60);
+}
+
+function onStreamSelectChange() {
+  const sel = document.getElementById('sj-stream');
+  const block = document.getElementById('sj-newstream');
+  if (sel.value === '__new__') {
+    block.style.display = '';
+    setTimeout(() => document.getElementById('sj-newstream-key').focus(), 40);
+  } else {
+    block.style.display = 'none';
+  }
 }
 
 function closeStartJob() {
@@ -1989,9 +2703,38 @@ function closeStartJob() {
 
 async function submitStartJob() {
   const name = document.getElementById('sj-name').value.trim();
-  const stream = document.getElementById('sj-stream').value;
+  let stream = document.getElementById('sj-stream').value;
   const note = document.getElementById('sj-note').value.trim();
   if (!name) { showToast('Job needs a name.'); return; }
+
+  // If the user picked "Create new stream", create it first.
+  if (stream === '__new__') {
+    const key   = document.getElementById('sj-newstream-key').value.trim().toLowerCase();
+    const label = document.getElementById('sj-newstream-label').value.trim();
+    if (!key || !label) {
+      showToast('New stream needs both a key and a label.');
+      return;
+    }
+    try {
+      const r = await fetch('/api/streams', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({ key, label })
+      });
+      const d = await r.json();
+      if (!r.ok) {
+        showToast('New stream error: ' + (d.error || 'could not create'));
+        return;
+      }
+      stream = key;
+      // Refresh systemSnapshot so the new stream is available everywhere
+      await fetchSystem();
+    } catch (e) {
+      showToast('New stream error: ' + e.message);
+      return;
+    }
+  }
+
   try {
     const r = await fetch('/api/jobs/start', {
       method: 'POST',
@@ -2005,6 +2748,555 @@ async function submitStartJob() {
       await fetchJobs();
     } else {
       showToast('Error: ' + (d.error || 'could not start job'));
+    }
+  } catch (e) {
+    showToast('Error: ' + e.message);
+  }
+}
+
+// ── Taxonomy wizard (v1.7 Slice 2) ──────────────────────────────────────
+// Build / edit the stream hierarchy on the dashboard. Auto-opens once per
+// browser session while the tree is "trivial" (per /api/system). After
+// closing, the user can re-open from Settings.
+
+let taxonomyOpen = false;
+
+function maybeAutoOpenTaxonomy() {
+  // Only auto-open once per session, and only if the tree is still trivial.
+  if (taxonomyOpen) return;
+  if (sessionStorage.getItem('wp.taxWizardSeen')) return;
+  if (!systemSnapshot || !systemSnapshot.taxonomy_trivial) return;
+  openTaxonomy('first-load');
+}
+
+function openTaxonomy(reason) {
+  taxonomyOpen = true;
+  document.getElementById('tx-modal').classList.add('open');
+  document.getElementById('tx-title').textContent =
+    reason === 'first-load' ? 'Set up your taxonomy' : 'Edit your taxonomy';
+  // Show quick-start chips only on the first-time setup
+  document.getElementById('tx-quickstart').style.display =
+    (systemSnapshot && systemSnapshot.taxonomy_trivial) ? '' : 'none';
+  renderTaxonomyTree();
+  document.getElementById('tx-migration').style.display = 'none';
+  document.getElementById('tx-migration').innerHTML = '';
+}
+
+function closeTaxonomy() {
+  taxonomyOpen = false;
+  document.getElementById('tx-modal').classList.remove('open');
+  sessionStorage.setItem('wp.taxWizardSeen', '1');
+}
+
+async function finishTaxonomy() {
+  // Check whether any active Jobs sit in trivial / legacy streams and offer
+  // to re-home them under the new tree.
+  try {
+    const ar = await fetch('/api/jobs/active');
+    const ad = await ar.json();
+    const streams = (systemSnapshot && systemSnapshot.streams) || [];
+    const validKeys = new Set(streams.map(s => s.key));
+    // Candidates for migration: Jobs whose stream is 'misc' OR whose stream
+    // is a top-level domain when descendants exist (i.e. user could go
+    // more specific). Conservative: just flag 'misc' for the first pass.
+    const candidates = (ad.jobs || []).filter(j => j.stream === 'misc' && streams.length > 1);
+    if (candidates.length === 0) {
+      closeTaxonomy();
+      await fetchSystem();
+      await refreshDayPanels();
+      showToast('Taxonomy saved.');
+      return;
+    }
+    renderMigration(candidates, streams);
+  } catch (e) {
+    closeTaxonomy();
+    showToast('Taxonomy saved.');
+  }
+}
+
+function renderMigration(jobs, streams) {
+  const block = document.getElementById('tx-migration');
+  const opts = streams.filter(s => s.key !== 'misc').map(s =>
+    `<option value="${escapeHtml(s.key)}">${escapeHtml(s.breadcrumb || s.label)}</option>`
+  ).join('');
+  block.innerHTML = `
+    <div class="plan-sg-label" style="margin-top:8px">Re-home these Jobs from <code>misc</code></div>
+    <div style="margin-top:6px">
+      ${jobs.map(j => `
+        <div class="tx-mig-row">
+          <span class="tx-mig-name" title="${escapeHtml(j.name)}">${escapeHtml(j.name)}</span>
+          <select data-jobid="${escapeHtml(j.id)}">
+            <option value="">— keep in misc —</option>
+            ${opts}
+          </select>
+        </div>`).join('')}
+    </div>
+    <div style="display:flex; gap:8px; justify-content:flex-end; margin-top:12px">
+      <button class="btn-ghost" onclick="skipMigration()">Skip</button>
+      <button class="btn-primary" onclick="applyMigration()">Apply</button>
+    </div>`;
+  block.style.display = '';
+}
+
+async function applyMigration() {
+  const rows = document.querySelectorAll('#tx-migration select[data-jobid]');
+  let moved = 0, errored = 0;
+  for (const sel of rows) {
+    const target = sel.value;
+    if (!target) continue;
+    try {
+      const r = await fetch(`/api/jobs/${sel.dataset.jobid}/restream`, {
+        method: 'POST',
+        headers: {'Content-Type':'application/json'},
+        body: JSON.stringify({ stream: target })
+      });
+      if (r.ok) moved++; else errored++;
+    } catch (e) { errored++; }
+  }
+  closeTaxonomy();
+  await fetchSystem();
+  await refreshDayPanels();
+  showToast(`Migrated ${moved} job${moved===1?'':'s'}${errored?` (${errored} failed)`:''}.`);
+}
+
+function skipMigration() { closeTaxonomy(); fetchSystem(); refreshDayPanels(); }
+
+async function txQuickAdd(key, label) {
+  try {
+    const r = await fetch('/api/streams', {
+      method: 'POST',
+      headers: {'Content-Type':'application/json'},
+      body: JSON.stringify({ key, label })
+    });
+    const d = await r.json();
+    if (!r.ok) { showToast(d.error || 'could not add'); return; }
+    await fetchSystem();
+    renderTaxonomyTree();
+  } catch (e) { showToast('Error: ' + e.message); }
+}
+
+function renderTaxonomyTree() {
+  const streams = (systemSnapshot && systemSnapshot.streams) || [];
+  // Build adjacency: parent → [children]
+  const byParent = {};
+  streams.forEach(s => {
+    const p = s.parent || '__root__';
+    (byParent[p] = byParent[p] || []).push(s);
+  });
+  function renderLevel(parentKey) {
+    const kids = byParent[parentKey] || [];
+    if (kids.length === 0) return '';
+    kids.sort((a, b) => (a.label || '').localeCompare(b.label || ''));
+    return `<ul class="tx-tree-list">${kids.map(s => `
+      <li>
+        <div class="tx-node" id="tx-node-${escapeHtml(s.key)}">
+          <span class="tx-node-color" style="background:${s.color}"></span>
+          <span class="tx-node-label">${escapeHtml(s.label)}</span>
+          <span class="tx-node-key">${escapeHtml(s.key)}</span>
+          <div class="tx-node-actions">
+            <button class="tx-icon-btn" onclick="txBeginRename('${escapeHtml(s.key)}')">rename</button>
+            <button class="tx-icon-btn" onclick="txShowAddChild('${escapeHtml(s.key)}')">+ child</button>
+            <button class="tx-icon-btn danger" onclick="txDelete('${escapeHtml(s.key)}','${escapeHtml(s.label)}')">×</button>
+          </div>
+        </div>
+        <div id="tx-form-${escapeHtml(s.key)}"></div>
+        ${renderLevel(s.key)}
+      </li>`).join('')}
+    </ul>`;
+  }
+  const tree = document.getElementById('tx-tree');
+  const rootHTML = renderLevel('__root__');
+  if (!rootHTML) {
+    tree.innerHTML = `
+      <div class="empty" style="text-align:left">
+        No streams yet — use the quick-start chips above or
+        <button class="tx-icon-btn" onclick="txShowAddChild('')" style="text-decoration:underline">+ add a top-level domain</button>.
+      </div>
+      <div id="tx-form-"></div>`;
+    return;
+  }
+  tree.innerHTML = `
+    ${rootHTML}
+    <div style="margin-top:12px"><button class="tx-icon-btn" onclick="txShowAddChild('')">+ add another top-level domain</button></div>
+    <div id="tx-form-"></div>`;
+}
+
+function txShowAddChild(parentKey) {
+  // Replace the form slot under this node with an inline form.
+  const slot = document.getElementById(`tx-form-${parentKey}`);
+  if (!slot) return;
+  slot.innerHTML = `
+    <div class="tx-add-form">
+      <input type="text" placeholder="key (e.g. uganda-memd)" id="tx-new-key-${parentKey}" />
+      <input type="text" placeholder="label (e.g. Uganda MEMD Project)" id="tx-new-label-${parentKey}" />
+      <button onclick="txAddChild('${parentKey}')" class="primary">Add</button>
+      <button onclick="txCancelAdd('${parentKey}')">Cancel</button>
+    </div>`;
+  setTimeout(() => document.getElementById(`tx-new-key-${parentKey}`).focus(), 30);
+}
+
+function txCancelAdd(parentKey) {
+  const slot = document.getElementById(`tx-form-${parentKey}`);
+  if (slot) slot.innerHTML = '';
+}
+
+async function txAddChild(parentKey) {
+  const key   = document.getElementById(`tx-new-key-${parentKey}`).value.trim().toLowerCase();
+  const label = document.getElementById(`tx-new-label-${parentKey}`).value.trim();
+  if (!key || !label) { showToast('Both key and label are required.'); return; }
+  try {
+    const body = { key, label };
+    if (parentKey) body.parent = parentKey;
+    const r = await fetch('/api/streams', {
+      method: 'POST',
+      headers: {'Content-Type':'application/json'},
+      body: JSON.stringify(body)
+    });
+    const d = await r.json();
+    if (!r.ok) { showToast(d.error || 'could not add'); return; }
+    await fetchSystem();
+    renderTaxonomyTree();
+  } catch (e) { showToast('Error: ' + e.message); }
+}
+
+function txBeginRename(key) {
+  const node = document.getElementById(`tx-node-${key}`);
+  const label = node.querySelector('.tx-node-label').textContent;
+  // Replace the label + actions with an inline edit form.
+  node.querySelector('.tx-node-label').outerHTML = `
+    <div class="tx-rename-form">
+      <input type="text" id="tx-rename-${key}" value="${escapeHtml(label)}" />
+    </div>`;
+  node.querySelector('.tx-node-actions').innerHTML = `
+    <button class="tx-icon-btn" onclick="txCommitRename('${key}')">save</button>
+    <button class="tx-icon-btn" onclick="renderTaxonomyTree()">cancel</button>`;
+  setTimeout(() => {
+    const inp = document.getElementById(`tx-rename-${key}`);
+    inp.focus(); inp.select();
+  }, 30);
+}
+
+async function txCommitRename(key) {
+  const label = document.getElementById(`tx-rename-${key}`).value.trim();
+  if (!label) { showToast('Label cannot be empty.'); return; }
+  try {
+    const r = await fetch(`/api/streams/${encodeURIComponent(key)}`, {
+      method: 'PATCH',
+      headers: {'Content-Type':'application/json'},
+      body: JSON.stringify({ label })
+    });
+    const d = await r.json();
+    if (!r.ok) { showToast(d.error || 'could not rename'); renderTaxonomyTree(); return; }
+    await fetchSystem();
+    renderTaxonomyTree();
+  } catch (e) { showToast('Error: ' + e.message); renderTaxonomyTree(); }
+}
+
+async function txDelete(key, label) {
+  if (!confirm(`Delete stream "${label}"?\\n\\nRefused if it has children or any Job attached.`)) return;
+  try {
+    const r = await fetch(`/api/streams/${encodeURIComponent(key)}`, { method: 'DELETE' });
+    const d = await r.json();
+    if (!r.ok) { showToast(d.error || 'could not delete'); return; }
+    await fetchSystem();
+    renderTaxonomyTree();
+    showToast(`Deleted "${label}".`);
+  } catch (e) { showToast('Error: ' + e.message); }
+}
+
+
+// ── Today's plan (Morning Plan — v1.7 intent capture) ─────────────────────
+
+let planState = null;  // last response from GET /api/plans/today
+
+async function fetchPlan() {
+  try {
+    const r = await fetch('/api/plans/today');
+    const d = await r.json();
+    planState = d;
+    renderPlan(d);
+  } catch (e) {
+    document.getElementById('plan-panel').innerHTML =
+      '<div class="empty">Could not load plan.</div>';
+  }
+}
+
+// Work-type emoji — picked from item name keywords with a sensible default.
+// Keyword groups intentionally ordered: the FIRST hit wins, so put the more
+// specific ones first (e.g. "model" before "data").
+const WORK_ICONS = [
+  [/\\b(report|memo|narrative|brief|letter|draft)/i, '📝'],
+  [/\\b(call|meeting|sync|standup|huddle|interview)/i, '🗣'],
+  [/\\b(review|read|skim|notes?)\\b/i, '📖'],
+  [/\\b(research|study|baseline|survey|literature)/i, '🔬'],
+  [/\\b(code|build|implement|ship|deploy|refactor|debug)/i, '💻'],
+  [/\\b(model|forecast|reforecast|projection)/i, '📈'],
+  [/\\b(data|analysis|analyse|analyze|crunch|excel|sheet|kpi)/i, '📊'],
+  [/\\b(plan|roadmap|strategy|scoping|design)/i, '🗺'],
+  [/\\b(email|inbox|reply|respond|follow.?up)/i, '📧'],
+  [/\\b(slide|deck|presentation|pitch)/i, '🎤'],
+  [/\\b(carbon|climate|sustainab)/i, '🌱'],
+  [/\\b(workpulse|feature|coach|jobs?|plan)/i, '🛠'],
+  [/\\b(client|customer|stakeholder)/i, '🤝'],
+];
+function workIcon(name) {
+  for (const [re, ic] of WORK_ICONS) { if (re.test(name)) return ic; }
+  return '✦';
+}
+
+// Time-of-day-aware greeting + matching icon.
+function greetingForNow() {
+  const h = new Date().getHours();
+  if (h < 5)  return { icon: '🌙', text: 'Working late' };
+  if (h < 12) return { icon: '☀️', text: 'Good morning' };
+  if (h < 17) return { icon: '🌤️', text: 'Good afternoon' };
+  if (h < 21) return { icon: '🌇', text: 'Good evening' };
+  return { icon: '🌙', text: 'Late shift' };
+}
+
+// Primary CTA: if no plan today → "Plan your day". If plan exists → "Edit plan".
+function refreshHero() {
+  const g = greetingForNow();
+  document.getElementById('hero-icon').textContent = g.icon;
+  document.getElementById('hero-greeting-text').textContent = g.text;
+  const hasPlan = planState && planState.exists && (planState.items || []).length > 0;
+  document.getElementById('hero-primary-icon').textContent = hasPlan ? '✎' : '🌅';
+  document.getElementById('hero-primary-label').textContent = hasPlan ? 'Edit plan' : 'Plan your day';
+}
+function heroPrimaryAction() { openPlanModal(); }
+
+function renderPlan(p) {
+  const panel = document.getElementById('plan-panel');
+  const btn = document.getElementById('plan-action-btn');
+  refreshHero();
+  if (!p || !p.exists || !p.items || p.items.length === 0) {
+    btn.textContent = '+ Plan your day';
+    panel.innerHTML = '<div class="empty">No plan yet for today. ' +
+      'Take 30 seconds to declare what you\\'re working on — ' +
+      'each item becomes a Job that sessions roll up to.</div>';
+    return;
+  }
+  btn.textContent = 'Edit plan';
+  const carried = p.items.filter(it => it.section === 'carried');
+  const fresh   = p.items.filter(it => it.section !== 'carried');
+  const done    = p.items.filter(it => it.done).length;
+  const html = [];
+
+  // Top-line summary: actual vs planned for the whole day
+  const actual = p.actual_minutes_today || 0;
+  const planned = p.planned_minutes || 0;
+  let summary = `${done} of ${p.items.length} done`;
+  if (actual > 0 || planned > 0) {
+    summary += ` · ${fmtMins(actual)} logged` +
+      (planned > 0 ? ` of ${fmtMins(planned)} planned` : '');
+  }
+  html.push(`<div class="sub" style="margin-bottom:14px">${summary}</div>`);
+
+  function gridFor(items, label) {
+    if (!items.length) return '';
+    return `
+      <div class="plan-section-label">${label}</div>
+      <div class="plan-grid">
+        ${items.map(it => renderPlanItem(it, p.items.indexOf(it))).join('')}
+      </div>`;
+  }
+  html.push(gridFor(carried, 'Carried over'));
+  html.push(gridFor(fresh, 'New today'));
+  panel.innerHTML = html.join('');
+}
+
+function renderPlanItem(it, idx) {
+  const checked = it.done ? 'checked' : '';
+  const cls = it.done ? 'plan-item done' : 'plan-item';
+
+  const planned = it.planned_minutes || 0;
+  const actual  = it.actual_minutes_today || 0;
+
+  // Stream color: pulled from systemSnapshot.streams (already fetched).
+  let streamColor = '#6b7280';
+  if (it.stream && systemSnapshot && systemSnapshot.streams) {
+    const found = systemSnapshot.streams.find(s => s.key === it.stream);
+    if (found) streamColor = found.color;
+  }
+
+  const ic = workIcon(it.name);
+
+  // Time line: "45m / 2h planned" or "45m planned" or "45m logged".
+  let timeLine = '';
+  if (planned > 0 && actual > 0) {
+    timeLine = `<span class="actual">${fmtMins(actual)}</span> / ${fmtMins(planned)}`;
+  } else if (planned > 0) {
+    timeLine = `${fmtMins(planned)} planned`;
+  } else if (actual > 0) {
+    timeLine = `<span class="actual">${fmtMins(actual)}</span> logged`;
+  }
+
+  // Progress bar — only when there's a planned target.
+  let barHTML = '';
+  if (planned > 0) {
+    const pct = Math.min(100, Math.round((actual / planned) * 100));
+    const over = actual > planned;
+    const cls2 = over ? 'plan-bar plan-bar-over' : 'plan-bar';
+    barHTML = `<div class="plan-bar-wrap" title="${fmtMins(actual)} of ${fmtMins(planned)} planned">
+      <div class="${cls2}" style="width:${pct}%"></div>
+    </div>`;
+  }
+
+  const streamLabel = it.stream ? `<div class="plan-item-stream">${escapeHtml(it.stream)}</div>` : '';
+
+  return `
+    <div class="${cls}" style="--stream-color:${streamColor}">
+      <div class="plan-item-top">
+        <div class="plan-item-icon">${ic}</div>
+        <div class="plan-item-body">
+          <div class="plan-item-name">${escapeHtml(it.name)}</div>
+          ${streamLabel}
+        </div>
+        <input class="plan-item-check" type="checkbox" ${checked} onchange="togglePlanItem(${idx})" />
+      </div>
+      ${barHTML}
+      <div class="plan-item-bottom">
+        <span class="plan-item-time">${timeLine || '<span style="color:var(--text-faint)">no target set</span>'}</span>
+      </div>
+    </div>`;
+}
+
+async function togglePlanItem(idx) {
+  if (!planState || !planState.items || !planState.items[idx]) return;
+  planState.items[idx].done = !planState.items[idx].done;
+  try {
+    const r = await fetch('/api/plans/today', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({ items: planState.items })
+    });
+    if (r.ok) {
+      planState = await r.json();
+      renderPlan(planState);
+    }
+  } catch (e) {
+    showToast('Could not update plan: ' + e.message);
+  }
+}
+
+async function openPlanModal() {
+  // Load suggestions on each open so paused-jobs list is fresh.
+  let sg = { paused: [], yesterday: [], recent: [] };
+  try {
+    const r = await fetch('/api/plans/suggestions');
+    sg = await r.json();
+  } catch (e) {}
+  const block = document.getElementById('plan-suggestions');
+  const sections = [];
+  if (sg.paused && sg.paused.length) {
+    sections.push('<div class="plan-sg-label">Still in flight — carry over?</div>');
+    sg.paused.forEach(j => {
+      sections.push(`
+        <label class="plan-sg-row">
+          <input type="checkbox" data-jobid="${escapeHtml(j.job_id)}"
+                 data-name="${escapeHtml(j.name)}"
+                 data-stream="${escapeHtml(j.stream || '')}"
+                 data-section="carried" />
+          <span>${escapeHtml(j.name)}</span>
+          <span class="meta">${escapeHtml(j.stream || '—')}</span>
+        </label>`);
+    });
+  }
+  if (sg.yesterday && sg.yesterday.length) {
+    sections.push('<div class="plan-sg-label">Touched yesterday</div>');
+    sg.yesterday.forEach(j => {
+      sections.push(`
+        <label class="plan-sg-row">
+          <input type="checkbox" data-jobid="${escapeHtml(j.job_id)}"
+                 data-name="${escapeHtml(j.name)}"
+                 data-stream="${escapeHtml(j.stream || '')}"
+                 data-section="carried" />
+          <span>${escapeHtml(j.name)}</span>
+          <span class="meta">${escapeHtml(j.stream || '—')}</span>
+        </label>`);
+    });
+  }
+  if (sg.recent && sg.recent.length) {
+    sections.push('<div class="plan-sg-label">Recent (last 7 days)</div>');
+    sg.recent.slice(0, 8).forEach(j => {
+      sections.push(`
+        <label class="plan-sg-row">
+          <input type="checkbox" data-jobid="${escapeHtml(j.job_id)}"
+                 data-name="${escapeHtml(j.name)}"
+                 data-stream="${escapeHtml(j.stream || '')}"
+                 data-section="carried" />
+          <span>${escapeHtml(j.name)}</span>
+          <span class="meta">${escapeHtml(j.last_day || '')}</span>
+        </label>`);
+    });
+  }
+  if (sections.length === 0) {
+    block.innerHTML = '<div class="sub">No previous jobs to carry over yet — just add new items below.</div>';
+  } else {
+    block.innerHTML = sections.join('');
+  }
+  // Pre-populate the textarea with existing "new" items if a plan already exists today
+  const existingNew = (planState && planState.items)
+    ? planState.items.filter(it => it.section !== 'carried' && !it.job_id)
+                     .map(it => it.planned_minutes
+                       ? `${it.name} (~${it.planned_minutes} min)`
+                       : it.name)
+                     .join('\\n')
+    : '';
+  document.getElementById('plan-new-items').value = existingNew;
+  document.getElementById('plan-modal').classList.add('open');
+  setTimeout(() => document.getElementById('plan-new-items').focus(), 60);
+}
+
+function closePlanModal() {
+  document.getElementById('plan-modal').classList.remove('open');
+}
+
+function parsePlanLine(line) {
+  // "Foo bar (~30 min)" -> { name: "Foo bar", planned_minutes: 30 }
+  const trimmed = line.trim();
+  if (!trimmed) return null;
+  const m = trimmed.match(/^(.*?)\\s*\\(\\s*~?\\s*(\\d+)\\s*min\\s*\\)\\s*$/i);
+  if (m) return { name: m[1].trim(), planned_minutes: parseInt(m[2], 10) };
+  return { name: trimmed, planned_minutes: null };
+}
+
+async function submitPlan() {
+  const items = [];
+  // Carried-over (checkbox-selected) suggestions
+  document.querySelectorAll('#plan-suggestions input[type="checkbox"]:checked').forEach(cb => {
+    items.push({
+      name:    cb.dataset.name,
+      job_id:  cb.dataset.jobid,
+      stream:  cb.dataset.stream || null,
+      section: 'carried',
+    });
+  });
+  // New items typed in the textarea
+  const raw = document.getElementById('plan-new-items').value || '';
+  raw.split('\\n').forEach(line => {
+    const it = parsePlanLine(line);
+    if (it) items.push({ ...it, section: 'new' });
+  });
+  if (items.length === 0) {
+    showToast('Nothing to save — pick at least one item or type a new one.');
+    return;
+  }
+  try {
+    const r = await fetch('/api/plans/today', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({ items })
+    });
+    const d = await r.json();
+    if (r.ok) {
+      planState = d;
+      renderPlan(d);
+      closePlanModal();
+      showToast('Plan saved — ' + items.length + ' item' + (items.length===1?'':'s'));
+      fetchJobs();  // refresh Jobs in flight since new Jobs may have been created
+    } else {
+      showToast('Error saving plan: ' + (d.error || 'unknown'));
     }
   } catch (e) {
     showToast('Error: ' + e.message);
@@ -2346,7 +3638,7 @@ async function saveSettings() {
 
 // ── Refresh orchestration ──────────────────────────────────────────────────
 async function refreshDayPanels() {
-  await Promise.all([fetchRealWork(), fetchLastActive(), fetchAI(), fetchJobs()]);
+  await Promise.all([fetchRealWork(), fetchLastActive(), fetchAI(), fetchJobs(), fetchPlan()]);
   await fetchHeatmap();   // re-render so selected day highlights
 }
 

@@ -18,6 +18,7 @@ venv/
 logs/
 vault/
 reports/
+plans/
 WorkPulse_Vision_*.docx
 WorkPulse_PDD_*.docx
 

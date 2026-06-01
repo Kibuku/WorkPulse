@@ -260,7 +260,8 @@ def compute_suggestions(cfg: dict | None = None) -> list[dict]:
     changed since the last proposal for a stream."""
     if cfg is None:
         cfg = load_config()
-    streams_cfg = cfg.get("streams") or {}
+    from scripts.tree import labels as _stream_labels
+    streams_cfg = _stream_labels(cfg)
     if not streams_cfg:
         return []
 

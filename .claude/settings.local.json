@@ -30,7 +30,22 @@
       "Bash(mkdir -p /tmp/wpvision)",
       "Bash(cp /d/WorkPulse/WorkPulse_Vision_v1.1.docx /tmp/wpvision/source.docx)",
       "Bash(python /c/Users/PC/AppData/Roaming/Claude/local-agent-mode-sessions/skills-plugin/4349f19d-2692-40e2-a0af-7a6be8fb49cb/ab175950-748f-4898-a9a6-ad5217fed57b/skills/docx/scripts/office/unpack.py /tmp/wpvision/source.docx /tmp/wpvision/unpacked)",
-      "Bash(/d/WorkPulse/.venv/Scripts/python.exe /c/Users/PC/AppData/Roaming/Claude/local-agent-mode-sessions/skills-plugin/4349f19d-2692-40e2-a0af-7a6be8fb49cb/ab175950-748f-4898-a9a6-ad5217fed57b/skills/docx/scripts/office/unpack.py /tmp/wpvision/source.docx /tmp/wpvision/unpacked)"
+      "Bash(/d/WorkPulse/.venv/Scripts/python.exe /c/Users/PC/AppData/Roaming/Claude/local-agent-mode-sessions/skills-plugin/4349f19d-2692-40e2-a0af-7a6be8fb49cb/ab175950-748f-4898-a9a6-ad5217fed57b/skills/docx/scripts/office/unpack.py /tmp/wpvision/source.docx /tmp/wpvision/unpacked)",
+      "Bash(launchctl list *)",
+      "Bash(curl -s -o /dev/null -w \"dashboard: %{http_code}\\\\n\" http://127.0.0.1:5700/ --max-time 3)",
+      "Bash(tail -30 /Users/georgekibuku/Documents/WorkPulse/logs/launchagent.err.log 2>/dev/null; echo \"---plist---\"; cat ~/Library/LaunchAgents/com.workpulse.tray.plist 2>/dev/null)",
+      "Bash(log show *)",
+      "Bash(/usr/bin/log show *)",
+      "Bash(mkdir -p ~/Library/Logs/WorkPulse)",
+      "Bash(awk '{print $2, $11}')",
+      "Bash(curl -s -o /dev/null -w \"%{http_code}\\\\n\" http://127.0.0.1:5700/ --max-time 3)",
+      "Bash(curl -s \"http://127.0.0.1:5700/api/today\")",
+      "Bash(python3 -m json.tool)",
+      "Bash(curl -s \"http://127.0.0.1:5700/api/activity\")",
+      "Bash(curl -s \"http://127.0.0.1:5700/api/apps\")",
+      "Bash(curl -s \"http://127.0.0.1:5700/api/jobs/active\")",
+      "Bash(curl -s -X POST http://127.0.0.1:5700/api/jobs/start -H \"Content-Type: application/json\" -d '{\"name\":\"WorkPulse: Morning Plan feature \\(design + build\\)\",\"stream\":\"misc\",\"note\":\"Intent-capture surface. Voice OR written. Anchors §12.2 Jobs. Day 1 of build.\"}')",
+      "Bash(.venv/bin/python -c ' *)"
     ]
   }
 }

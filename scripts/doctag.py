@@ -84,7 +84,8 @@ def _classify_with_llm(text: str, cfg: dict, source_path: str = "") -> str | Non
     """Classify a document's content into one stream. Backend (cloud/local/none)
     chosen by scripts.llm. `source_path` is informational, used in the
     AI-session log task summary."""
-    streams = cfg["streams"]
+    from scripts.tree import labels as _stream_labels
+    streams = _stream_labels(cfg)
     stream_lines = "\n".join(f"  - {key}: {label}" for key, label in streams.items())
 
     prompt = (
