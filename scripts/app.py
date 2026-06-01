@@ -1259,7 +1259,9 @@ async def api_plans_save_today(payload: dict):
     out = plan_for(today) or {}
     from scripts.plans import reconcile
     rec = reconcile(today, out.get("items") or [])
-    return {"ok": True, **out,
+    # `exists: True` mirrors the shape of GET /api/plans/today so the dashboard
+    # renderer doesn't fall into its empty-state branch right after a save.
+    return {"ok": True, "exists": True, **out,
             "planned_minutes":      rec["planned_minutes"],
             "actual_minutes_today": rec["actual_minutes_today"]}
 
@@ -3163,7 +3165,12 @@ function renderPlanItem(it, idx) {
 
 async function togglePlanItem(idx) {
   if (!planState || !planState.items || !planState.items[idx]) return;
+  // Optimistic UI: flip done locally and re-render immediately so the
+  // checkbox + line-through register instantly. We then POST in the
+  // background and replace state with the server's authoritative copy
+  // (which now includes reconciled actual_minutes_today).
   planState.items[idx].done = !planState.items[idx].done;
+  renderPlan(planState);
   try {
     const r = await fetch('/api/plans/today', {
       method: 'POST',
@@ -3171,10 +3178,22 @@ async function togglePlanItem(idx) {
       body: JSON.stringify({ items: planState.items })
     });
     if (r.ok) {
-      planState = await r.json();
+      const fresh = await r.json();
+      // Only swap if the server returned a valid plan; otherwise keep the
+      // optimistic state and let the next periodic refresh reconcile.
+      if (fresh && fresh.items) {
+        planState = fresh;
+        renderPlan(planState);
+      }
+    } else {
+      // Roll back the optimistic flip on failure.
+      planState.items[idx].done = !planState.items[idx].done;
       renderPlan(planState);
+      showToast('Could not update plan.');
     }
   } catch (e) {
+    planState.items[idx].done = !planState.items[idx].done;
+    renderPlan(planState);
     showToast('Could not update plan: ' + e.message);
   }
 }
