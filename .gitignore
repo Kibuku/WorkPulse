@@ -50,6 +50,14 @@ installer/cache/
 .env
 *.env
 
+# ── v2 substrate (PLAN.md §7 step 1) — personal data, never commit ──────────
+workpulse.db
+workpulse.db-wal
+workpulse.db-shm
+*.db
+*.db-wal
+*.db-shm
+
 # ── OS / IDE ────────────────────────────────────────────────────────────────
 .DS_Store
 Thumbs.db

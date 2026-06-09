@@ -45,11 +45,16 @@ unit of analysis; it is not the unit of storage. Storage is the session.
 Analysis is a materialized view. Collapsing those two ideas is what makes
 schema migrations painful.
 
-### 2. PGLite is the substrate
+### 2. Embedded SQL + vector is the substrate
 
-Postgres + pgvector compiled to WASM. One file on disk. Two-second setup. No
-server. Every atom in SQL, with real indexes, real foreign keys, real vector
-search when you need it.
+The principle: one file on disk, no server, no Docker, real indexes, real
+foreign keys, real vector search when needed. Two-second setup.
+
+PGLite (Postgres+pgvector compiled to WASM) is the JS-native expression of
+this shape. WorkPulse is Python; the Python-native expression of the same
+shape is **SQLite + sqlite-vec** — pure-C extension, `pip install`-able,
+single-file DB. We use sqlite-vec. The atom schema, the graph, the three
+verbs, and every higher-level principle are unchanged.
 
 JSONL was the right v0 choice for shipping. It is the wrong choice for the
 brain. Every brain-shaped feature you want next — hybrid retrieval, contradiction

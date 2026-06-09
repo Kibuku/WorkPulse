@@ -25,8 +25,10 @@ becoming a brain that has a tracker as one source.
 
 1. **Decide the atom.** Four atom types: `session`, `file_event`, `ai_call`,
    `capture`. Everything else is a view.
-2. **PGLite is the substrate.** Migrate from JSONL when the next data-shaped
-   feature lands. Don't propose new features that fight JSONL.
+2. **SQLite + sqlite-vec is the substrate** (Python-native expression of the
+   "PGLite shape": one file, no server, vector-capable). Migration 0001 lives
+   at `migrations/0001_initial_atoms.sql`; helpers at `scripts/db.py` and
+   `scripts/atoms.py`. Don't propose new features that fight this.
 3. **Latent vs deterministic, drawn explicitly.** SUMs, totals, rule matching
    never go to the LLM. Synthesis, classification of novel input, judgment
    never go to SQL. Pay the LLM once on borderline cases, cache deterministic
