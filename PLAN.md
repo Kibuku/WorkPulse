@@ -161,7 +161,9 @@ Ten ordered steps. Each is a separable PR.
 3. **Sensors.** Port `activity.py`, `watcher.py`, `ai_logger.py` to write into
    PGLite. Dual-write to JSONL during the transition release.
 4. **`wp capture` CLI.** New verb, takes stdin / args / `--file`. Tray hotkey
-   to follow.
+   deferred to **step 4b** — designed after we see how the verb actually gets
+   used (terminal, iOS Shortcut, dashboard textarea, hotkey are all
+   candidates and the right primary UI emerges from use).
 5. **`wp search`.** Hybrid retrieval. Expose at `/api/search` and CLI.
 6. **`skills/think.md` + `wp think`.** Wire the answer + gap section. Zero-key
    fallback path mandatory.

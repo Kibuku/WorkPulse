@@ -58,6 +58,9 @@ workpulse.db-shm
 *.db-wal
 *.db-shm
 
+# ── v2 captures (PLAN.md §7 step 4) — personal data, never commit ───────────
+captures/
+
 # ── OS / IDE ────────────────────────────────────────────────────────────────
 .DS_Store
 Thumbs.db
