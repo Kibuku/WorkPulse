@@ -88,6 +88,12 @@ def _append(record: dict, cfg: dict) -> Path:
     ensure_dir(log_path.parent)
     with log_path.open("a", encoding="utf-8") as f:
         f.write(json.dumps(record, ensure_ascii=False) + "\n")
+    # v2 dual-write: best-effort SQLite atom alongside the JSONL.
+    try:
+        from scripts.dual_write import dual_write_ai_call
+        dual_write_ai_call(record, cfg)
+    except Exception:
+        pass
     return log_path
 
 

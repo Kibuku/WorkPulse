@@ -170,6 +170,13 @@ def _log_path(cfg: dict) -> Path:
 def _append(record: dict, cfg: dict) -> None:
     with _log_path(cfg).open("a", encoding="utf-8") as f:
         f.write(json.dumps(record, ensure_ascii=False) + "\n")
+    # v2 dual-write: best-effort SQLite atom alongside the JSONL. Never raises
+    # back into the sensor hot path; see scripts/dual_write.py.
+    try:
+        from scripts.dual_write import dual_write_session
+        dual_write_session(record, cfg)
+    except Exception:
+        pass
 
 
 def _now_iso() -> str:
