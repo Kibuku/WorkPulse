@@ -113,6 +113,12 @@ def _append_event(logs_dir: Path, record: dict) -> None:
     log_path = _log_file(logs_dir)
     with log_path.open("a", encoding="utf-8") as f:
         f.write(json.dumps(record, ensure_ascii=False) + "\n")
+    # v2 dual-write: best-effort SQLite atom alongside the JSONL.
+    try:
+        from scripts.dual_write import dual_write_file_event
+        dual_write_file_event(record)
+    except Exception:
+        pass
 
 
 # ── debounce ──────────────────────────────────────────────────────────────────

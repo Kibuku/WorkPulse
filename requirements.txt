@@ -24,3 +24,12 @@ anthropic==0.96.0
 
 # ── Config / utilities ──────────────────────────────────────────────────────
 PyYAML==6.0.3
+
+# ── v2 substrate (PLAN.md §7 step 1) ────────────────────────────────────────
+# SQLite is in the stdlib. sqlite-vec is a loadable extension used by wp search
+# in step 5; pulled now so test envs match prod. Tiny C extension, no compile
+# step required.
+sqlite-vec==0.1.9
+
+# ── tests ───────────────────────────────────────────────────────────────────
+pytest==9.0.3
