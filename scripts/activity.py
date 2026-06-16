@@ -52,9 +52,17 @@ from scripts.common import ensure_dir, load_config, resolve
 if sys.platform == "win32":
     from scripts.activity_win import foreground_window as _foreground_window
     from scripts.activity_win import idle_seconds      as _idle_seconds
+    # No lock-screen probe on Windows yet (step 7c is mac-only for now —
+    # LogonUI.exe on Windows is the equivalent app to filter when we get
+    # evidence of the same data hygiene issue).
+    def _is_lockscreen(app: str) -> bool:
+        return False
 elif sys.platform == "darwin":
     from scripts.activity_mac import foreground_window as _foreground_window
     from scripts.activity_mac import idle_seconds      as _idle_seconds
+    from scripts.activity_mac import is_lockscreen_app, is_screen_locked
+    def _is_lockscreen(app: str) -> bool:
+        return is_lockscreen_app(app) or is_screen_locked()
 else:
     # Linux + others: surface a clear error rather than crash later. Per Vision
     # roadmap, Linux is not planned.
@@ -235,6 +243,18 @@ def run() -> None:
             else:
                 title, pid = fg
                 app, exe_path = _process_info(pid)
+
+            # PLAN.md §7 step 7c — lock-screen filter. The macOS sensor was
+            # logging the loginwindow / screensaver process as active work;
+            # step 8's dream cycle surfaced 73h of "loginwindow" sessions.
+            # Drop the sample entirely so the lock screen contaminates
+            # nothing — search, clusters, consolidation, future reports.
+            if _is_lockscreen(app):
+                if current is not None:
+                    _append(current.to_record(), cfg)
+                    current = None
+                time.sleep(SAMPLE_INTERVAL_S)
+                continue
 
             stream = _tag_stream(title, exe_path, cfg, pid)
             now = time.monotonic()

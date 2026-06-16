@@ -48,11 +48,55 @@ try:
         kCGNullWindowID,
         CGEventSourceSecondsSinceLastEventType,
         kCGEventSourceStateHIDSystemState,
+        CGSessionCopyCurrentDictionary,
     )
     _IMPORTS_OK = True
 except ImportError as e:
     log.warning("PyObjC imports failed (%s); activity_mac will return None.", e)
     _IMPORTS_OK = False
+
+
+# ── lock-screen / loginwindow detection (PLAN.md §7 step 7c) ─────────────────
+# When the Mac is locked, the frontmost app is `loginwindow` (Apple's lock-
+# screen process). Step 8's dream cycle surfaced 73 hours of "loginwindow"
+# sessions on the real DB — the sensor was logging the lock screen as active
+# work. The fix is two-fold: detect the state at sample time (`is_screen_locked`
+# via CGSessionCopyCurrentDictionary), and recognize the well-known lockscreen
+# app names as a fallback (`is_lockscreen_app`). `activity.py` skips writes
+# entirely when either check fires.
+
+# App names that mean "user is not actually working." Lowercased for compare.
+_LOCKSCREEN_APP_NAMES = frozenset({
+    "loginwindow",       # primary lock screen on macOS
+    "lock screen",
+    "screensaverengine", # the screensaver process
+    "screensaver",
+})
+
+
+def is_lockscreen_app(app_name: str | None) -> bool:
+    """True if the given app name is a known lock-screen / screensaver process.
+    Pure function — testable without macOS APIs."""
+    if not app_name:
+        return False
+    return app_name.strip().lower() in _LOCKSCREEN_APP_NAMES
+
+
+def is_screen_locked() -> bool:
+    """True if the macOS screen is locked. Uses CGSessionCopyCurrentDictionary
+    which returns a dict containing 'CGSSessionScreenIsLocked' when locked.
+    Returns False on any failure — better to log a session than to silently
+    drop legitimate work."""
+    if not _IMPORTS_OK:
+        return False
+    try:
+        d = CGSessionCopyCurrentDictionary()
+        if not d:
+            return False
+        return bool(d.get("CGSSessionScreenIsLocked", False))
+    except Exception as e:
+        log.debug("CGSessionCopyCurrentDictionary failed: %s", e)
+        return False
 
 
 # kCGAnyInputEventType is documented as ~0 (UINT32_MAX) — "all event types".
