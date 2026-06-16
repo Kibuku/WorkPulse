@@ -343,6 +343,60 @@ def api_activity():
     }
 
 
+# ── v2 brain view (PLAN.md §7 — surfaces the from-first-principles brain) ───
+
+@app.get("/api/v2/today")
+def api_v2_today(date: Optional[str] = None):  # noqa: A002
+    """The brain's view of today, read straight from the v2 SQLite atom store.
+
+    Same evidence shape that scripts.report.daily() and consolidate.findings()
+    use — structured so the dashboard can render sections (time breakdown,
+    top named clusters, captures, plan-vs-actual) without an LLM call.
+    Unlike /api/realwork (which reads contaminated JSONL), this reads the
+    cleaned, FK-tied SQLite — lock-screen sessions are gone, clusters are
+    materialized, names from skills/name-cluster.md are joined in.
+    """
+    from datetime import date as _date_cls
+    from scripts import db as wp_db, report as wp_report
+    cfg = load_config()
+    try:
+        on = (_date_cls.fromisoformat(date) if date
+              else datetime.now().date())
+    except (ValueError, TypeError):
+        return JSONResponse({"error": "bad date"}, status_code=400)
+    con = wp_db.connect(cfg)
+    ev = wp_report._evidence(con, "daily", start=on, end=on, cfg=cfg)
+    return {
+        "date":           on.isoformat(),
+        "total_hours":    ev["time_breakdown"]["total_hours"],
+        "by_stream":      ev["time_breakdown"]["by_stream"],
+        "top_clusters":   [
+            {
+                "cluster_id": c["cluster_id"],
+                "name":       c.get("name") or None,
+                "name_source": c.get("name_source") or None,
+                "one_liner":  c.get("one_liner") or None,
+                "stream":     c["stream"],
+                "hours":      c["hours"],
+            }
+            for c in ev["top_clusters"]
+        ],
+        "captures":       [
+            {
+                "ts":          c["ts"],
+                "time":        c["ts"][11:16] if len(c["ts"]) >= 16 else "",
+                "author":      c["author"],
+                "body":        c["body"],
+                "pinned_kind": c.get("pinned_kind"),
+                "pinned_id":   c.get("pinned_id"),
+            }
+            for c in ev["captures"]
+        ],
+        "plan_vs_actual": ev["findings"]["plan_vs_actual"],
+        "untagged_buckets": ev["findings"]["untagged_buckets"][:3],
+    }
+
+
 @app.get("/api/realwork")
 def api_realwork(date: Optional[str] = None):  # noqa: A002 — param name is the public API
     """Real work stats from activity.py log — actual window-focus time.
@@ -1867,6 +1921,15 @@ footer { margin-top: 64px; padding-top: 24px; border-top: 1px solid var(--border
 
 <div class="cards-grid">
 
+  <!-- v2 brain view: what you actually worked on today -->
+  <div class="card span-12" id="today-card" style="border-left: 3px solid var(--accent, #3b82f6);">
+    <div class="eyebrow" style="display:flex; align-items:baseline; justify-content:space-between; gap:12px;">
+      <span>What you worked on today</span>
+      <span id="today-meta" style="color:var(--text-soft); font-weight:400; font-size:12px;"></span>
+    </div>
+    <div id="today-panel"><div class="empty">Loading…</div></div>
+  </div>
+
   <!-- Today's plan (v1.7 intent capture — the Morning Plan surface) -->
   <div class="card plan-card span-12">
     <div class="eyebrow plan-eyebrow">
@@ -3009,6 +3072,118 @@ async function txDelete(key, label) {
 
 // ── Today's plan (Morning Plan — v1.7 intent capture) ─────────────────────
 
+// ── v2 brain view: "What you worked on today" card ──────────────────────────
+
+let todayState = null;  // last response from GET /api/v2/today
+
+async function fetchToday() {
+  try {
+    const r = await fetch('/api/v2/today');
+    if (!r.ok) throw new Error('http ' + r.status);
+    todayState = await r.json();
+    renderToday(todayState);
+  } catch (e) {
+    document.getElementById('today-panel').innerHTML =
+      '<div class="empty">Could not load the brain view. The v2 SQLite store may not be initialized yet — run <code>python -m scripts.db init</code> from the repo.</div>';
+  }
+}
+
+function renderToday(d) {
+  const panel = document.getElementById('today-panel');
+  const meta  = document.getElementById('today-meta');
+  if (!d) { panel.innerHTML = '<div class="empty">No data.</div>'; return; }
+  meta.textContent = `${d.date} · ${d.total_hours.toFixed(1)} h tracked`;
+
+  if (d.total_hours < 0.05) {
+    panel.innerHTML =
+      '<div class="empty">Nothing tracked yet today. Open something — or run <code>python -m scripts.capture "thought" --auto-pin</code> to capture a note.</div>';
+    return;
+  }
+
+  let html = '';
+
+  // Stream bar: a single segmented bar showing per-stream hours
+  if (d.by_stream && d.by_stream.length) {
+    const total = d.total_hours || 0.001;
+    html += '<div style="margin: 10px 0 16px 0;">';
+    html += '<div style="display:flex; height:14px; border-radius:6px; overflow:hidden; background:var(--bg-soft, #f5efe2);">';
+    d.by_stream.forEach((s, i) => {
+      const pct = Math.max(2, Math.round((s.hours / total) * 100));
+      const color = todayStreamColor(s.stream, i);
+      html += `<div title="${escapeHtml(s.stream)}: ${s.hours.toFixed(1)} h" style="width:${pct}%; background:${color};"></div>`;
+    });
+    html += '</div>';
+    html += '<div style="display:flex; flex-wrap:wrap; gap:14px; margin-top:8px; font-size:12px;">';
+    d.by_stream.forEach((s, i) => {
+      const color = todayStreamColor(s.stream, i);
+      html += `<span style="display:inline-flex; align-items:center; gap:6px;"><span style="display:inline-block; width:10px; height:10px; background:${color}; border-radius:2px;"></span><strong>${escapeHtml(s.stream)}</strong> ${s.hours.toFixed(1)} h</span>`;
+    });
+    html += '</div></div>';
+  }
+
+  // Top named clusters
+  if (d.top_clusters && d.top_clusters.length) {
+    html += '<div style="font-size:13px; color:var(--text-soft); margin-bottom:6px;">Top clusters today</div>';
+    html += '<div style="display:flex; flex-direction:column; gap:8px; margin-bottom:14px;">';
+    d.top_clusters.slice(0, 5).forEach(c => {
+      const name = c.name || '<em style="color:var(--text-faint);">(unnamed cluster)</em>';
+      const oneliner = c.one_liner ? ` — ${escapeHtml(c.one_liner)}` : '';
+      const stream = c.stream ? `<span style="color:var(--text-soft); font-size:12px;">${escapeHtml(c.stream)}</span>` : '';
+      html += `<div style="display:flex; align-items:baseline; justify-content:space-between; gap:12px; padding:8px 10px; background:var(--surface, #fff); border:1px solid var(--border, #eee5d2); border-radius:6px;">
+        <div><strong>${name}</strong>${oneliner}</div>
+        <div style="text-align:right; white-space:nowrap;"><span style="font-variant-numeric:tabular-nums;">${c.hours.toFixed(1)} h</span> &nbsp;${stream}</div>
+      </div>`;
+    });
+    html += '</div>';
+  }
+
+  // Plan vs actual (if any flagged items today)
+  if (d.plan_vs_actual && d.plan_vs_actual.length) {
+    html += '<div style="font-size:13px; color:var(--text-soft); margin-bottom:6px;">Plan vs actual</div><ul style="margin:0 0 14px 18px; padding:0;">';
+    d.plan_vs_actual.forEach(it => {
+      const flagColor = (it.flag === 'overrun') ? '#d97706'
+                       : (it.flag === 'underrun') ? '#dc2626'
+                       : 'var(--text-soft)';
+      html += `<li style="margin-bottom:4px;"><span style="color:${flagColor}; font-weight:600;">[${escapeHtml(it.flag)}]</span> ${escapeHtml(it.name)} — planned ${it.planned_min}m, actual ${it.actual_min}m</li>`;
+    });
+    html += '</ul>';
+  }
+
+  // Captures
+  if (d.captures && d.captures.length) {
+    html += '<div style="font-size:13px; color:var(--text-soft); margin-bottom:6px;">Captures today</div>';
+    html += '<ul style="margin:0 0 14px 18px; padding:0;">';
+    d.captures.forEach(c => {
+      const t = c.time ? `<span style="color:var(--text-faint); font-variant-numeric:tabular-nums; margin-right:8px;">${escapeHtml(c.time)}</span>` : '';
+      const author = c.author === 'system' ? '<span style="color:var(--text-faint); font-size:11px; margin-left:6px;">(system)</span>' : '';
+      html += `<li style="margin-bottom:4px;">${t}${escapeHtml(c.body)}${author}</li>`;
+    });
+    html += '</ul>';
+  } else {
+    html += '<div style="font-size:13px; color:var(--text-soft); margin-bottom:14px;">No captures today. Run <code>python -m scripts.capture "thought" --auto-pin</code> to add one.</div>';
+  }
+
+  // Untagged buckets — surface only the largest one as a one-liner
+  if (d.untagged_buckets && d.untagged_buckets.length) {
+    const top = d.untagged_buckets[0];
+    if (top.minutes >= 5) {
+      html += `<div style="font-size:12px; color:var(--text-soft); padding:6px 10px; background:var(--bg-warm, #fff6e0); border-radius:6px;">⚠️ ${top.minutes.toFixed(0)} min of untagged "${escapeHtml(top.sample_titles && top.sample_titles[0] || top.token)}" — want to tag it?</div>`;
+    }
+  }
+
+  panel.innerHTML = html;
+}
+
+// Stable color per stream (matches v1 tinting where possible)
+function todayStreamColor(stream, i) {
+  const palette = ['#3866d0', '#bc38d0', '#d08838', '#38d09a', '#d03866', '#7a7a7a'];
+  if (stream === '<untagged>' || !stream) return '#bbb';
+  // Deterministic hash → palette
+  let h = 0;
+  for (let k = 0; k < stream.length; k++) h = (h * 31 + stream.charCodeAt(k)) >>> 0;
+  return palette[h % palette.length];
+}
+
 let planState = null;  // last response from GET /api/plans/today
 
 async function fetchPlan() {
@@ -3657,7 +3832,7 @@ async function saveSettings() {
 
 // ── Refresh orchestration ──────────────────────────────────────────────────
 async function refreshDayPanels() {
-  await Promise.all([fetchRealWork(), fetchLastActive(), fetchAI(), fetchJobs(), fetchPlan()]);
+  await Promise.all([fetchToday(), fetchRealWork(), fetchLastActive(), fetchAI(), fetchJobs(), fetchPlan()]);
   await fetchHeatmap();   // re-render so selected day highlights
 }
 
