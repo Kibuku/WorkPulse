@@ -28,6 +28,7 @@ from __future__ import annotations
 import re
 import sqlite3
 import sys
+import threading
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -36,6 +37,15 @@ from workpulse.common import ROOT, ensure_dir, load_config, resolve, PKG
 
 _MIGRATIONS_DIR = PKG / "migrations"
 _MIGRATION_RE = re.compile(r"^(\d{4})_([a-z0-9_]+)\.sql$")
+
+# Serialises migrate() across the FastAPI threadpool: the dashboard fires
+# several /api/* requests at once on load, each opening its own connection and
+# calling connect()->migrate(). Without this, two threads both read the same
+# current_version, both apply the same migration, and the second INSERT trips
+# `UNIQUE constraint failed: schema_migration.version`. The lock plus a
+# re-read of the version inside it means only the first thread applies; the
+# rest see the applied versions and skip.
+_MIGRATE_LOCK = threading.Lock()
 
 
 # ── paths ────────────────────────────────────────────────────────────────────
@@ -123,25 +133,38 @@ def _discover_migrations() -> list[tuple[int, str, Path]]:
 
 def migrate(con: sqlite3.Connection) -> int:
     """Apply any migrations newer than ``current_version``. Returns the count
-    of migrations applied this call."""
+    of migrations applied this call.
+
+    Serialised via ``_MIGRATE_LOCK`` and re-reads the version *inside* the lock
+    so concurrent connections (the dashboard's parallel /api/* calls) don't race
+    on the check-then-insert. Migrations are idempotent (``IF NOT EXISTS``), so
+    a separate *process* winning the race is handled by treating a duplicate
+    bookkeeping row as "already applied" rather than crashing."""
     _ensure_migrations_table(con)
-    have = current_version(con)
     applied = 0
-    for version, name, path in _discover_migrations():
-        if version <= have:
-            continue
-        sql = path.read_text(encoding="utf-8")
-        # ``executescript`` manages its own transaction and implicitly
-        # COMMITs any pending one. We let it run, then record the version
-        # immediately after. On failure mid-script SQLite rolls back the
-        # script's own writes; the schema_migration row never lands, so the
-        # next run retries from the same version.
-        con.executescript(sql)
-        con.execute(
-            "INSERT INTO schema_migration(version, applied_at, name) VALUES (?, ?, ?)",
-            (version, datetime.now(timezone.utc).isoformat(), name),
-        )
-        applied += 1
+    with _MIGRATE_LOCK:
+        have = current_version(con)
+        for version, name, path in _discover_migrations():
+            if version <= have:
+                continue
+            sql = path.read_text(encoding="utf-8")
+            # ``executescript`` manages its own transaction and implicitly
+            # COMMITs any pending one. We let it run, then record the version
+            # immediately after. On failure mid-script SQLite rolls back the
+            # script's own writes; the schema_migration row never lands, so the
+            # next run retries from the same version.
+            con.executescript(sql)
+            try:
+                con.execute(
+                    "INSERT INTO schema_migration(version, applied_at, name) VALUES (?, ?, ?)",
+                    (version, datetime.now(timezone.utc).isoformat(), name),
+                )
+            except sqlite3.IntegrityError:
+                # Another process recorded this version between our check and
+                # here. The DDL above is idempotent, so nothing is left broken —
+                # just skip the duplicate bookkeeping row and carry on.
+                continue
+            applied += 1
     return applied
 
 
