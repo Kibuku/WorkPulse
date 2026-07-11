@@ -98,8 +98,12 @@ async function fetchSystem() {
   document.getElementById('smtp-status').className =
     'status-dot' + (d.secrets.smtp_password.configured ? '' : ' off');
 
-  // Taxonomy wizard auto-open (once per browser session while tree is trivial)
-  maybeAutoOpenTaxonomy();
+  // Soft onboarding gate: keep the streams banner up until real streams exist.
+  const _sb = document.getElementById('streams-banner');
+  if (_sb) _sb.style.display = (systemSnapshot && systemSnapshot.taxonomy_trivial) ? 'flex' : 'none';
+
+  // First-run guided tour (falls back to the taxonomy nudge once seen).
+  maybeStartTour();
 }
 
 async function toggleWatcher() {
@@ -421,226 +425,6 @@ function fmtRelative(iso) {
   } catch (e) { return ''; }
 }
 
-function isJobPaused(job) {
-  if (!job.last_active) return job.session_count === 0 ? false : true;
-  const diffMs = Date.now() - new Date(job.last_active).getTime();
-  return diffMs > 30 * 60 * 1000;   // >30 min since last session = paused
-}
-
-async function fetchJobs() {
-  let active = [], ended = [], suggestions = [];
-  try {
-    const [aResp, rResp, sResp] = await Promise.all([
-      fetch('/api/jobs/active'),
-      fetch('/api/jobs/recent?days=14&only_ended=true'),
-      fetch('/api/jobs/suggestions'),
-    ]);
-    active = (await aResp.json()).jobs || [];
-    ended  = (await rResp.json()).jobs || [];
-    suggestions = (await sResp.json()).suggestions || [];
-  } catch (e) {
-    document.getElementById('jobs-panel').innerHTML =
-      '<div class="empty">Could not load jobs.</div>';
-    return;
-  }
-  renderSuggestions(suggestions);
-  const panel = document.getElementById('jobs-panel');
-  if (active.length === 0) {
-    panel.innerHTML =
-      '<div class="empty">No jobs in flight. Hit "+ Start a job" to track a specific piece of work.</div>';
-  } else {
-    panel.innerHTML = active.map(renderJobCard).join('');
-  }
-  // Recently-ended mini-list (newest first, cap at 5)
-  const reBlock = document.getElementById('recently-ended-block');
-  const recent = ended.slice(0, 5);
-  if (recent.length === 0) {
-    reBlock.innerHTML = '';
-  } else {
-    reBlock.innerHTML = `
-      <div class="re-block">
-        <div class="re-head">Recently ended</div>
-        ${recent.map(j => `
-          <div class="re-row">
-            <span class="lg-dot" style="background:${j.stream_color}"></span>
-            <div class="re-name">
-              ${escapeHtml(j.name)}
-              ${j.ended_by === 'auto' ? '<span class="re-auto-tag">auto-ended</span>' : ''}
-            </div>
-            <div class="re-meta">ended ${fmtRelative(j.ended_at)}</div>
-            <div class="re-actions">
-              <button onclick="openExport('${escapeHtml(j.id)}', '${escapeHtml(j.name)}')">Export</button>
-              <button onclick="resumeJob('${escapeHtml(j.id)}', '${escapeHtml(j.name)}')">Resume</button>
-            </div>
-          </div>`).join('')}
-      </div>`;
-  }
-}
-
-function renderJobCard(job) {
-  const total = fmtMins(job.total_minutes);
-  const started = fmtRelative(job.created_at);
-  const sessions = job.session_count || 0;
-  const paused = isJobPaused(job);
-
-  // Apps line: top 4
-  const appsLine = (job.apps || []).slice(0, 4).map(a =>
-    `<span class="app-tag"><strong>${escapeHtml(a.app)}</strong> ${fmtMins(a.minutes)}</span>`
-  ).join('');
-
-  // Cross-Job remembrance block — surfaces prior Jobs with semantic overlap.
-  // Local-only, deterministic match. Click a row → opens that Job's export
-  // (which contains the full session breakdown + apps + LLM narrative if
-  // a key was configured at export time).
-  let remBlock = '';
-  const rem = job.remembrance || [];
-  if (rem.length > 0) {
-    remBlock = `<div class="job-rem">
-      <div class="job-rem-head">Worth knowing from before</div>
-      ${rem.map(m => `
-        <div class="rem-item" onclick="openExport('${escapeHtml(m.job_id)}', '${escapeHtml(m.name)}')">
-          <div class="rem-name">${escapeHtml(m.name)}</div>
-          <div class="rem-meta">
-            ${m.total_minutes > 0 ? fmtMins(m.total_minutes) + ' · ' : ''}${escapeHtml(m.reason)}
-          </div>
-        </div>`).join('')}
-    </div>`;
-  }
-
-  // Lift block
-  let liftBlock = '';
-  if (sessions === 0) {
-    liftBlock = `<div class="job-lift">
-      <div class="job-lift-head">Where AI could lift this job</div>
-      <div class="job-lift-empty">No activity logged inside this job yet. Once you start working, AI-lift opportunities appear here.</div>
-    </div>`;
-  } else if ((job.lift || []).length === 0) {
-    liftBlock = `<div class="job-lift">
-      <div class="job-lift-head">Where AI could lift this job</div>
-      <div class="job-lift-empty">Nothing stands out yet. Lift opportunities surface as the session data builds up.</div>
-    </div>`;
-  } else {
-    liftBlock = `<div class="job-lift">
-      <div class="job-lift-head">Where AI could lift this job</div>
-      ${job.lift.map(l => `
-        <div class="lift-item">
-          <div class="lift-title">${escapeHtml(l.title)}</div>
-          <div class="lift-suggest">${escapeHtml(l.suggestion)}</div>
-        </div>`).join('')}
-    </div>`;
-  }
-
-  const jic = workIcon(job.name);
-  return `
-    <div class="job-card" data-job="${escapeHtml(job.id)}" style="--stream-color:${job.stream_color}">
-      <div class="job-head">
-        <span class="job-icon">${jic}</span>
-        <div class="job-name">${escapeHtml(job.name)}</div>
-        <span class="chip" style="background:${job.stream_color}">${escapeHtml((job.stream||'').replace(/-/g,' '))}</span>
-        <div class="job-actions">
-          <button class="job-end-btn" onclick="openExport('${escapeHtml(job.id)}', '${escapeHtml(job.name)}')">Export</button>
-          <button class="job-end-btn" onclick="endJob('${escapeHtml(job.id)}', '${escapeHtml(job.name)}')">End job</button>
-        </div>
-      </div>
-      <div class="job-meta">
-        ${total} total · started ${started} · ${sessions} session${sessions===1?'':'s'}
-        ${paused ? `<span class="job-paused">paused, last touch ${fmtRelative(job.last_active)}</span>` : ''}
-      </div>
-      ${sessions > 0 ? `<div class="job-apps">${appsLine || '<span style="color:var(--text-faint)">(no app data yet)</span>'}</div>` : ''}
-      ${remBlock}
-      ${liftBlock}
-    </div>
-  `;
-}
-
-function openStartJob() {
-  // Populate stream dropdown from systemSnapshot (already fetched).
-  // Append a sentinel "+ Create new stream…" option so users aren't locked
-  // into the streams currently in config.yaml.
-  const sel = document.getElementById('sj-stream');
-  const streams = (systemSnapshot && systemSnapshot.streams) || availableStreams || [];
-  const opts = streams.map(s =>
-    `<option value="${escapeHtml(s.key)}">${escapeHtml(s.label)}</option>`
-  );
-  opts.push('<option value="__new__">+ Create new stream…</option>');
-  sel.innerHTML = opts.join('');
-  document.getElementById('sj-newstream').style.display = 'none';
-  document.getElementById('sj-newstream-key').value = '';
-  document.getElementById('sj-newstream-label').value = '';
-  document.getElementById('sj-name').value = '';
-  document.getElementById('sj-note').value = '';
-  document.getElementById('sj-modal').classList.add('open');
-  setTimeout(() => document.getElementById('sj-name').focus(), 60);
-}
-
-function onStreamSelectChange() {
-  const sel = document.getElementById('sj-stream');
-  const block = document.getElementById('sj-newstream');
-  if (sel.value === '__new__') {
-    block.style.display = '';
-    setTimeout(() => document.getElementById('sj-newstream-key').focus(), 40);
-  } else {
-    block.style.display = 'none';
-  }
-}
-
-function closeStartJob() {
-  document.getElementById('sj-modal').classList.remove('open');
-}
-
-async function submitStartJob() {
-  const name = document.getElementById('sj-name').value.trim();
-  let stream = document.getElementById('sj-stream').value;
-  const note = document.getElementById('sj-note').value.trim();
-  if (!name) { showToast('Job needs a name.'); return; }
-
-  // If the user picked "Create new stream", create it first.
-  if (stream === '__new__') {
-    const key   = document.getElementById('sj-newstream-key').value.trim().toLowerCase();
-    const label = document.getElementById('sj-newstream-label').value.trim();
-    if (!key || !label) {
-      showToast('New stream needs both a key and a label.');
-      return;
-    }
-    try {
-      const r = await fetch('/api/streams', {
-        method: 'POST',
-        headers: {'Content-Type': 'application/json'},
-        body: JSON.stringify({ key, label })
-      });
-      const d = await r.json();
-      if (!r.ok) {
-        showToast('New stream error: ' + (d.error || 'could not create'));
-        return;
-      }
-      stream = key;
-      // Refresh systemSnapshot so the new stream is available everywhere
-      await fetchSystem();
-    } catch (e) {
-      showToast('New stream error: ' + e.message);
-      return;
-    }
-  }
-
-  try {
-    const r = await fetch('/api/jobs/start', {
-      method: 'POST',
-      headers: {'Content-Type': 'application/json'},
-      body: JSON.stringify({ name, stream, note })
-    });
-    const d = await r.json();
-    if (r.ok) {
-      showToast(`Started: ${name}`);
-      closeStartJob();
-      await fetchJobs();
-    } else {
-      showToast('Error: ' + (d.error || 'could not start job'));
-    }
-  } catch (e) {
-    showToast('Error: ' + e.message);
-  }
-}
-
 // ── Taxonomy wizard (v1.7 Slice 2) ──────────────────────────────────────
 // Build / edit the stream hierarchy on the dashboard. Auto-opens once per
 // browser session while the tree is "trivial" (per /api/system). After
@@ -665,8 +449,6 @@ function openTaxonomy(reason) {
   document.getElementById('tx-quickstart').style.display =
     (systemSnapshot && systemSnapshot.taxonomy_trivial) ? '' : 'none';
   renderTaxonomyTree();
-  document.getElementById('tx-migration').style.display = 'none';
-  document.getElementById('tx-migration').innerHTML = '';
 }
 
 function closeTaxonomy() {
@@ -676,77 +458,13 @@ function closeTaxonomy() {
 }
 
 async function finishTaxonomy() {
-  // Check whether any active Jobs sit in trivial / legacy streams and offer
-  // to re-home them under the new tree.
-  try {
-    const ar = await fetch('/api/jobs/active');
-    const ad = await ar.json();
-    const streams = (systemSnapshot && systemSnapshot.streams) || [];
-    const validKeys = new Set(streams.map(s => s.key));
-    // Candidates for migration: Jobs whose stream is 'misc' OR whose stream
-    // is a top-level domain when descendants exist (i.e. user could go
-    // more specific). Conservative: just flag 'misc' for the first pass.
-    const candidates = (ad.jobs || []).filter(j => j.stream === 'misc' && streams.length > 1);
-    if (candidates.length === 0) {
-      closeTaxonomy();
-      await fetchSystem();
-      await refreshDayPanels();
-      showToast('Taxonomy saved.');
-      return;
-    }
-    renderMigration(candidates, streams);
-  } catch (e) {
-    closeTaxonomy();
-    showToast('Taxonomy saved.');
-  }
-}
-
-function renderMigration(jobs, streams) {
-  const block = document.getElementById('tx-migration');
-  const opts = streams.filter(s => s.key !== 'misc').map(s =>
-    `<option value="${escapeHtml(s.key)}">${escapeHtml(s.breadcrumb || s.label)}</option>`
-  ).join('');
-  block.innerHTML = `
-    <div class="plan-sg-label" style="margin-top:8px">Re-home these Jobs from <code>misc</code></div>
-    <div style="margin-top:6px">
-      ${jobs.map(j => `
-        <div class="tx-mig-row">
-          <span class="tx-mig-name" title="${escapeHtml(j.name)}">${escapeHtml(j.name)}</span>
-          <select data-jobid="${escapeHtml(j.id)}">
-            <option value="">— keep in misc —</option>
-            ${opts}
-          </select>
-        </div>`).join('')}
-    </div>
-    <div style="display:flex; gap:8px; justify-content:flex-end; margin-top:12px">
-      <button class="btn-ghost" onclick="skipMigration()">Skip</button>
-      <button class="btn-primary" onclick="applyMigration()">Apply</button>
-    </div>`;
-  block.style.display = '';
-}
-
-async function applyMigration() {
-  const rows = document.querySelectorAll('#tx-migration select[data-jobid]');
-  let moved = 0, errored = 0;
-  for (const sel of rows) {
-    const target = sel.value;
-    if (!target) continue;
-    try {
-      const r = await fetch(`/api/jobs/${sel.dataset.jobid}/restream`, {
-        method: 'POST',
-        headers: {'Content-Type':'application/json'},
-        body: JSON.stringify({ stream: target })
-      });
-      if (r.ok) moved++; else errored++;
-    } catch (e) { errored++; }
-  }
+  // Streams are persisted as the user edits the tree; just close and
+  // re-sync the dashboard so the new taxonomy takes effect everywhere.
   closeTaxonomy();
   await fetchSystem();
   await refreshDayPanels();
-  showToast(`Migrated ${moved} job${moved===1?'':'s'}${errored?` (${errored} failed)`:''}.`);
+  showToast('Taxonomy saved.');
 }
-
-function skipMigration() { closeTaxonomy(); fetchSystem(); refreshDayPanels(); }
 
 async function txQuickAdd(key, label) {
   try {
@@ -1685,503 +1403,6 @@ function todayStreamColor(stream, i) {
   return palette[h % palette.length];
 }
 
-let planState = null;  // last response from GET /api/plans/today
-
-async function fetchPlan() {
-  try {
-    const r = await fetch('/api/plans/today');
-    const d = await r.json();
-    planState = d;
-    renderPlan(d);
-  } catch (e) {
-    document.getElementById('plan-panel').innerHTML =
-      '<div class="empty">Could not load plan.</div>';
-  }
-}
-
-// Work-type emoji — picked from item name keywords with a sensible default.
-// Keyword groups intentionally ordered: the FIRST hit wins, so put the more
-// specific ones first (e.g. "model" before "data").
-const WORK_ICONS = [
-  [/\b(report|memo|narrative|brief|letter|draft)/i, '📝'],
-  [/\b(call|meeting|sync|standup|huddle|interview)/i, '🗣'],
-  [/\b(review|read|skim|notes?)\b/i, '📖'],
-  [/\b(research|study|baseline|survey|literature)/i, '🔬'],
-  [/\b(code|build|implement|ship|deploy|refactor|debug)/i, '💻'],
-  [/\b(model|forecast|reforecast|projection)/i, '📈'],
-  [/\b(data|analysis|analyse|analyze|crunch|excel|sheet|kpi)/i, '📊'],
-  [/\b(plan|roadmap|strategy|scoping|design)/i, '🗺'],
-  [/\b(email|inbox|reply|respond|follow.?up)/i, '📧'],
-  [/\b(slide|deck|presentation|pitch)/i, '🎤'],
-  [/\b(carbon|climate|sustainab)/i, '🌱'],
-  [/\b(workpulse|feature|coach|jobs?|plan)/i, '🛠'],
-  [/\b(client|customer|stakeholder)/i, '🤝'],
-];
-function workIcon(name) {
-  for (const [re, ic] of WORK_ICONS) { if (re.test(name)) return ic; }
-  return '✦';
-}
-
-// Time-of-day-aware greeting + matching icon.
-function greetingForNow() {
-  const h = new Date().getHours();
-  if (h < 5)  return { icon: '🌙', text: 'Working late' };
-  if (h < 12) return { icon: '☀️', text: 'Good morning' };
-  if (h < 17) return { icon: '🌤️', text: 'Good afternoon' };
-  if (h < 21) return { icon: '🌇', text: 'Good evening' };
-  return { icon: '🌙', text: 'Late shift' };
-}
-
-// Primary CTA: if no plan today → "Plan your day". If plan exists → "Edit plan".
-function refreshHero() {
-  const g = greetingForNow();
-  document.getElementById('hero-icon').textContent = g.icon;
-  document.getElementById('hero-greeting-text').textContent = g.text;
-  const hasPlan = planState && planState.exists && (planState.items || []).length > 0;
-  document.getElementById('hero-primary-icon').textContent = hasPlan ? '✎' : '🌅';
-  document.getElementById('hero-primary-label').textContent = hasPlan ? 'Edit plan' : 'Plan your day';
-}
-function heroPrimaryAction() { openPlanModal(); }
-
-function renderPlan(p) {
-  const panel = document.getElementById('plan-panel');
-  const btn = document.getElementById('plan-action-btn');
-  refreshHero();
-  if (!p || !p.exists || !p.items || p.items.length === 0) {
-    btn.textContent = '+ Plan your day';
-    panel.innerHTML = '<div class="empty">No plan yet for today. ' +
-      'Take 30 seconds to declare what you\'re working on — ' +
-      'each item becomes a Job that sessions roll up to.</div>';
-    return;
-  }
-  btn.textContent = 'Edit plan';
-  const carried = p.items.filter(it => it.section === 'carried');
-  const fresh   = p.items.filter(it => it.section !== 'carried');
-  const done    = p.items.filter(it => it.done).length;
-  const html = [];
-
-  // Top-line summary: actual vs planned for the whole day
-  const actual = p.actual_minutes_today || 0;
-  const planned = p.planned_minutes || 0;
-  let summary = `${done} of ${p.items.length} done`;
-  if (actual > 0 || planned > 0) {
-    summary += ` · ${fmtMins(actual)} logged` +
-      (planned > 0 ? ` of ${fmtMins(planned)} planned` : '');
-  }
-  html.push(`<div class="sub" style="margin-bottom:14px">${summary}</div>`);
-
-  function gridFor(items, label) {
-    if (!items.length) return '';
-    return `
-      <div class="plan-section-label">${label}</div>
-      <div class="plan-grid">
-        ${items.map(it => renderPlanItem(it, p.items.indexOf(it))).join('')}
-      </div>`;
-  }
-  html.push(gridFor(carried, 'Carried over'));
-  html.push(gridFor(fresh, 'New today'));
-  panel.innerHTML = html.join('');
-}
-
-function renderPlanItem(it, idx) {
-  const checked = it.done ? 'checked' : '';
-  const cls = it.done ? 'plan-item done' : 'plan-item';
-
-  const planned = it.planned_minutes || 0;
-  const actual  = it.actual_minutes_today || 0;
-
-  // Stream color: pulled from systemSnapshot.streams (already fetched).
-  let streamColor = '#6b7280';
-  if (it.stream && systemSnapshot && systemSnapshot.streams) {
-    const found = systemSnapshot.streams.find(s => s.key === it.stream);
-    if (found) streamColor = found.color;
-  }
-
-  const ic = workIcon(it.name);
-
-  // Time line: "45m / 2h planned" or "45m planned" or "45m logged".
-  let timeLine = '';
-  if (planned > 0 && actual > 0) {
-    timeLine = `<span class="actual">${fmtMins(actual)}</span> / ${fmtMins(planned)}`;
-  } else if (planned > 0) {
-    timeLine = `${fmtMins(planned)} planned`;
-  } else if (actual > 0) {
-    timeLine = `<span class="actual">${fmtMins(actual)}</span> logged`;
-  }
-
-  // Progress bar — only when there's a planned target.
-  let barHTML = '';
-  if (planned > 0) {
-    const pct = Math.min(100, Math.round((actual / planned) * 100));
-    const over = actual > planned;
-    const cls2 = over ? 'plan-bar plan-bar-over' : 'plan-bar';
-    barHTML = `<div class="plan-bar-wrap" title="${fmtMins(actual)} of ${fmtMins(planned)} planned">
-      <div class="${cls2}" style="width:${pct}%"></div>
-    </div>`;
-  }
-
-  const streamLabel = it.stream ? `<div class="plan-item-stream">${escapeHtml(it.stream)}</div>` : '';
-
-  return `
-    <div class="${cls}" style="--stream-color:${streamColor}">
-      <div class="plan-item-top">
-        <div class="plan-item-icon">${ic}</div>
-        <div class="plan-item-body">
-          <div class="plan-item-name">${escapeHtml(it.name)}</div>
-          ${streamLabel}
-        </div>
-        <input class="plan-item-check" type="checkbox" ${checked} onchange="togglePlanItem(${idx})" />
-      </div>
-      ${barHTML}
-      <div class="plan-item-bottom">
-        <span class="plan-item-time">${timeLine || '<span style="color:var(--text-faint)">no target set</span>'}</span>
-      </div>
-    </div>`;
-}
-
-async function togglePlanItem(idx) {
-  if (!planState || !planState.items || !planState.items[idx]) return;
-  // Optimistic UI: flip done locally and re-render immediately so the
-  // checkbox + line-through register instantly. We then POST in the
-  // background and replace state with the server's authoritative copy
-  // (which now includes reconciled actual_minutes_today).
-  planState.items[idx].done = !planState.items[idx].done;
-  renderPlan(planState);
-  try {
-    const r = await fetch('/api/plans/today', {
-      method: 'POST',
-      headers: {'Content-Type': 'application/json'},
-      body: JSON.stringify({ items: planState.items })
-    });
-    if (r.ok) {
-      const fresh = await r.json();
-      // Only swap if the server returned a valid plan; otherwise keep the
-      // optimistic state and let the next periodic refresh reconcile.
-      if (fresh && fresh.items) {
-        planState = fresh;
-        renderPlan(planState);
-      }
-    } else {
-      // Roll back the optimistic flip on failure.
-      planState.items[idx].done = !planState.items[idx].done;
-      renderPlan(planState);
-      showToast('Could not update plan.');
-    }
-  } catch (e) {
-    planState.items[idx].done = !planState.items[idx].done;
-    renderPlan(planState);
-    showToast('Could not update plan: ' + e.message);
-  }
-}
-
-async function openPlanModal() {
-  // Load suggestions on each open so paused-jobs list is fresh.
-  let sg = { paused: [], yesterday: [], recent: [] };
-  try {
-    const r = await fetch('/api/plans/suggestions');
-    sg = await r.json();
-  } catch (e) {}
-  const block = document.getElementById('plan-suggestions');
-  const sections = [];
-  if (sg.paused && sg.paused.length) {
-    sections.push('<div class="plan-sg-label">Still in flight, carry over?</div>');
-    sg.paused.forEach(j => {
-      sections.push(`
-        <label class="plan-sg-row">
-          <input type="checkbox" data-jobid="${escapeHtml(j.job_id)}"
-                 data-name="${escapeHtml(j.name)}"
-                 data-stream="${escapeHtml(j.stream || '')}"
-                 data-section="carried" />
-          <span>${escapeHtml(j.name)}</span>
-          <span class="meta">${escapeHtml(j.stream || '')}</span>
-        </label>`);
-    });
-  }
-  if (sg.yesterday && sg.yesterday.length) {
-    sections.push('<div class="plan-sg-label">Touched yesterday</div>');
-    sg.yesterday.forEach(j => {
-      sections.push(`
-        <label class="plan-sg-row">
-          <input type="checkbox" data-jobid="${escapeHtml(j.job_id)}"
-                 data-name="${escapeHtml(j.name)}"
-                 data-stream="${escapeHtml(j.stream || '')}"
-                 data-section="carried" />
-          <span>${escapeHtml(j.name)}</span>
-          <span class="meta">${escapeHtml(j.stream || '')}</span>
-        </label>`);
-    });
-  }
-  if (sg.recent && sg.recent.length) {
-    sections.push('<div class="plan-sg-label">Recent (last 7 days)</div>');
-    sg.recent.slice(0, 8).forEach(j => {
-      sections.push(`
-        <label class="plan-sg-row">
-          <input type="checkbox" data-jobid="${escapeHtml(j.job_id)}"
-                 data-name="${escapeHtml(j.name)}"
-                 data-stream="${escapeHtml(j.stream || '')}"
-                 data-section="carried" />
-          <span>${escapeHtml(j.name)}</span>
-          <span class="meta">${escapeHtml(j.last_day || '')}</span>
-        </label>`);
-    });
-  }
-  if (sections.length === 0) {
-    block.innerHTML = '<div class="sub">No previous jobs to carry over yet. Just add new items below.</div>';
-  } else {
-    block.innerHTML = sections.join('');
-  }
-  // Pre-populate the textarea with existing "new" items if a plan already exists today
-  const existingNew = (planState && planState.items)
-    ? planState.items.filter(it => it.section !== 'carried' && !it.job_id)
-                     .map(it => it.planned_minutes
-                       ? `${it.name} (~${it.planned_minutes} min)`
-                       : it.name)
-                     .join('\n')
-    : '';
-  document.getElementById('plan-new-items').value = existingNew;
-  document.getElementById('plan-modal').classList.add('open');
-  setTimeout(() => document.getElementById('plan-new-items').focus(), 60);
-}
-
-function closePlanModal() {
-  document.getElementById('plan-modal').classList.remove('open');
-}
-
-function parsePlanLine(line) {
-  // "Foo bar (~30 min)" -> { name: "Foo bar", planned_minutes: 30 }
-  const trimmed = line.trim();
-  if (!trimmed) return null;
-  const m = trimmed.match(/^(.*?)\s*\(\s*~?\s*(\d+)\s*min\s*\)\s*$/i);
-  if (m) return { name: m[1].trim(), planned_minutes: parseInt(m[2], 10) };
-  return { name: trimmed, planned_minutes: null };
-}
-
-async function submitPlan() {
-  const items = [];
-  // Carried-over (checkbox-selected) suggestions
-  document.querySelectorAll('#plan-suggestions input[type="checkbox"]:checked').forEach(cb => {
-    items.push({
-      name:    cb.dataset.name,
-      job_id:  cb.dataset.jobid,
-      stream:  cb.dataset.stream || null,
-      section: 'carried',
-    });
-  });
-  // New items typed in the textarea
-  const raw = document.getElementById('plan-new-items').value || '';
-  raw.split('\n').forEach(line => {
-    const it = parsePlanLine(line);
-    if (it) items.push({ ...it, section: 'new' });
-  });
-  if (items.length === 0) {
-    showToast('Nothing to save — pick at least one item or type a new one.');
-    return;
-  }
-  try {
-    const r = await fetch('/api/plans/today', {
-      method: 'POST',
-      headers: {'Content-Type': 'application/json'},
-      body: JSON.stringify({ items })
-    });
-    const d = await r.json();
-    if (r.ok) {
-      planState = d;
-      renderPlan(d);
-      closePlanModal();
-      showToast('Plan saved — ' + items.length + ' item' + (items.length===1?'':'s'));
-      fetchJobs();  // refresh Jobs in flight since new Jobs may have been created
-    } else {
-      showToast('Error saving plan: ' + (d.error || 'unknown'));
-    }
-  } catch (e) {
-    showToast('Error: ' + e.message);
-  }
-}
-
-async function endJob(id, name) {
-  if (!confirm(`End job "${name}"?\n\nSessions stop rolling up to it. The job's history is preserved.`)) return;
-  try {
-    const r = await fetch(`/api/jobs/${id}/end`, { method: 'POST' });
-    const d = await r.json();
-    if (r.ok) {
-      showToast(`Ended: ${name}`);
-      await fetchJobs();
-    } else {
-      showToast('Error: ' + (d.error || 'could not end job'));
-    }
-  } catch (e) {
-    showToast('Error: ' + e.message);
-  }
-}
-
-// ── Job-name suggestions (v1.2b) ───────────────────────────────────────────
-
-function renderSuggestions(suggestions) {
-  const block = document.getElementById('suggestions-block');
-  if (!suggestions || suggestions.length === 0) { block.innerHTML = ''; return; }
-  block.innerHTML = suggestions.map(s => {
-    const cls = s.confidence === 'high' ? '' : 'medium';
-    const streamLabel = escapeHtml(s.label || s.stream);
-    const name = escapeHtml(s.name);
-    const totalMin = fmtMins(s.total_minutes);
-    const confLabel = s.confidence === 'high' ? 'strong match' : 'possible';
-    return `
-      <div class="sg-card ${cls}">
-        <div class="sg-bulb">💡</div>
-        <div class="sg-body">
-          <div class="sg-line1">
-            Looks like you've been on a single piece of
-            <strong>${streamLabel}</strong> work — call it
-            <strong>"${name}"</strong>?
-          </div>
-          <div class="sg-line2">
-            ${totalMin} of activity in the last 4 hours · ${s.session_count} window${s.session_count===1?'':'s'} · ${confLabel}
-          </div>
-        </div>
-        <div class="sg-actions">
-          <button class="primary" onclick="acceptSuggestion('${escapeHtml(s.stream)}', '${escapeAttr(name)}')">Accept</button>
-          <button onclick="renameSuggestion('${escapeHtml(s.stream)}', '${escapeAttr(name)}')">Rename</button>
-          <button onclick="dismissSuggestion('${escapeHtml(s.stream)}', '${escapeAttr(name)}')">Dismiss</button>
-        </div>
-      </div>`;
-  }).join('');
-}
-
-function escapeAttr(s) {
-  return (s || '').replace(/'/g, "\'").replace(/"/g, '&quot;');
-}
-
-async function acceptSuggestion(stream, name) {
-  try {
-    const r = await fetch('/api/jobs/suggestions/accept', {
-      method: 'POST',
-      headers: {'Content-Type': 'application/json'},
-      body: JSON.stringify({ stream, name }),
-    });
-    const d = await r.json();
-    if (r.ok) {
-      showToast(`Started: ${name}`);
-      await fetchJobs();
-    } else {
-      showToast('Error: ' + (d.error || 'could not start job'));
-    }
-  } catch (e) { showToast('Error: ' + e.message); }
-}
-
-function renameSuggestion(stream, name) {
-  // Open the existing Start-Job modal, pre-filled with the suggested name + stream
-  openStartJob();
-  setTimeout(() => {
-    document.getElementById('sj-name').value = name;
-    const sel = document.getElementById('sj-stream');
-    if (sel) sel.value = stream;
-    document.getElementById('sj-name').focus();
-    document.getElementById('sj-name').select();
-  }, 80);
-}
-
-async function dismissSuggestion(stream, name) {
-  try {
-    const r = await fetch('/api/jobs/suggestions/dismiss', {
-      method: 'POST',
-      headers: {'Content-Type': 'application/json'},
-      body: JSON.stringify({ stream }),
-    });
-    if (r.ok) {
-      showToast('Suggestion dismissed.');
-      await fetchJobs();
-    } else {
-      showToast('Could not dismiss.');
-    }
-  } catch (e) { showToast('Error: ' + e.message); }
-}
-
-async function resumeJob(id, name) {
-  if (!confirm(`Resume "${name}"?\n\nStarts a new active job with the same name + stream. The previous job's record is preserved.`)) return;
-  try {
-    const r = await fetch(`/api/jobs/${id}/resume`, { method: 'POST' });
-    const d = await r.json();
-    if (r.ok) {
-      showToast(`Resumed: ${name}`);
-      await fetchJobs();
-    } else {
-      showToast('Error: ' + (d.error || 'could not resume'));
-    }
-  } catch (e) {
-    showToast('Error: ' + e.message);
-  }
-}
-
-// ── Job export modal ──────────────────────────────────────────────────────
-let _currentExportJobId = null;
-let _currentExportName = null;
-let _currentExportMarkdown = null;
-
-function openExport(jobId, name) {
-  _currentExportJobId = jobId;
-  _currentExportName = name;
-  _currentExportMarkdown = null;
-  document.getElementById('export-title').textContent = 'Export: ' + name;
-  document.getElementById('export-sub').textContent =
-    'A self-contained markdown digest you can paste into an email, timesheet, or shared note.';
-  document.getElementById('export-preview').innerHTML =
-    '<div class="export-loading">Generating digest…</div>';
-  document.getElementById('export-modal').classList.add('open');
-  loadExport();
-}
-
-function closeExport() {
-  document.getElementById('export-modal').classList.remove('open');
-  _currentExportJobId = null;
-  _currentExportMarkdown = null;
-}
-
-async function loadExport() {
-  if (!_currentExportJobId) return;
-  const includeTitles = document.getElementById('export-include-titles').checked;
-  try {
-    const r = await fetch(`/api/jobs/${_currentExportJobId}/export?include_titles=${includeTitles}`);
-    if (!r.ok) {
-      const err = await r.json().catch(() => ({error:'unknown'}));
-      document.getElementById('export-preview').innerHTML =
-        '<div class="export-loading">Error: ' + escapeHtml(err.error || 'failed') + '</div>';
-      return;
-    }
-    _currentExportMarkdown = await r.text();
-    document.getElementById('export-preview').textContent = _currentExportMarkdown;
-  } catch (e) {
-    document.getElementById('export-preview').innerHTML =
-      '<div class="export-loading">Error: ' + escapeHtml(e.message) + '</div>';
-  }
-}
-
-document.addEventListener('change', e => {
-  if (e.target && e.target.id === 'export-include-titles') loadExport();
-});
-
-async function copyExport() {
-  if (!_currentExportMarkdown) return;
-  try {
-    await navigator.clipboard.writeText(_currentExportMarkdown);
-    showToast('Copied to clipboard.');
-  } catch (e) {
-    showToast('Copy failed: ' + e.message);
-  }
-}
-
-function downloadExport() {
-  if (!_currentExportMarkdown) return;
-  const safe = (_currentExportName || 'job').replace(/[^A-Za-z0-9._-]+/g, '_').replace(/^_+|_+$/g, '');
-  const filename = `${safe}-${_currentExportJobId}.md`;
-  const blob = new Blob([_currentExportMarkdown], { type: 'text/markdown;charset=utf-8' });
-  const url = URL.createObjectURL(blob);
-  const a = document.createElement('a');
-  a.href = url; a.download = filename;
-  document.body.appendChild(a); a.click(); document.body.removeChild(a);
-  URL.revokeObjectURL(url);
-  showToast('Downloaded ' + filename);
-}
-
 // ── Weekly heatmap (last 14 days) ──────────────────────────────────────────
 async function fetchHeatmap() {
   let d;
@@ -2333,7 +1554,7 @@ async function saveSettings() {
 
 // ── Refresh orchestration ──────────────────────────────────────────────────
 async function refreshDayPanels() {
-  await Promise.all([fetchHealth(), fetchPersonal(), fetchProfile(), fetchToday(), fetchRealWork(), fetchLastActive(), fetchAI(), fetchJobs(), fetchPlan()]);
+  await Promise.all([fetchHealth(), fetchPersonal(), fetchProfile(), fetchToday(), fetchRealWork(), fetchLastActive(), fetchAI()]);
   await fetchHeatmap();   // re-render so selected day highlights
 }
 
@@ -2348,3 +1569,144 @@ async function refresh() {
 
 refresh();
 setInterval(refresh, 30000);
+
+
+// ── First-run guided tour ───────────────────────────────────────────────────
+// Coach-marks that spotlight each part of the dashboard and end by opening
+// stream setup. Shown once (localStorage 'wp.tourDone'); replay via the Tour
+// button. Steps target real element ids so the highlight tracks the layout.
+const WP_TOUR_STEPS = [
+  { title: "Welcome to WorkPulse",
+    body: "WorkPulse quietly notices what you work on and files it under your projects. Here are the three things that matter — then we'll set up your projects together. Takes about a minute." },
+  { target: "#capture-bar", title: "Say what you're working on",
+    body: "Type one line, anytime. It sharpens how your time gets attributed — especially work that isn't tied to a file, like a call or planning." },
+  { target: "#today-card", title: "Your day, by project",
+    body: "Everything you did today, grouped by project. This is only as sharp as your project list — which is why the last step matters most." },
+  { target: "#profile-card", title: "What WorkPulse learns",
+    body: "Overnight it builds a short profile of how you actually work — your rhythms, your focus, and what's been neglected." },
+  { target: "#health-indicator", title: "System health",
+    body: "A green dot means the sensors are running and your data is fresh. If something silently breaks, it turns amber or red so you know." },
+  { target: "#wp-settings-btn", title: "Set up your streams",
+    body: "Your projects — we call them <b>streams</b> — live in Settings. Set them up now: without them, your time lands in a vague 'untagged' pile. Aim for the <b>8–12</b> areas you actually spend time on.",
+    ctaLabel: "Set up my streams →", cta: true },
+];
+let wpTourIdx = 0;
+
+function maybeStartTour() {
+  if (window.__wpTourActive) return;              // don't restart mid-tour on refresh
+  if (!systemSnapshot) return;
+  if (!localStorage.getItem('wp.tourDone')) { startTour(); return; }
+  maybeAutoOpenTaxonomy();                         // seen the tour already — old nudge
+}
+
+function startTour() {
+  wpTourIdx = 0;
+  window.__wpTourActive = true;
+  let el = document.getElementById('wp-tour');
+  if (!el) {
+    el = document.createElement('div');
+    el.id = 'wp-tour';
+    el.innerHTML = '<div id="wp-tour-backdrop"></div>'
+                 + '<div id="wp-tour-spot"></div><div id="wp-tour-tip"></div>';
+    document.body.appendChild(el);
+  }
+  el.classList.add('open');
+  window.addEventListener('resize', renderTourStep);
+  renderTourStep();
+}
+
+function renderTourStep() {
+  const step = WP_TOUR_STEPS[wpTourIdx];
+  const spot = document.getElementById('wp-tour-spot');
+  const tip  = document.getElementById('wp-tour-tip');
+  if (!step || !tip) return;
+  const isLast   = wpTourIdx === WP_TOUR_STEPS.length - 1;
+  const dots     = WP_TOUR_STEPS.map((_, i) => `<i class="${i === wpTourIdx ? 'on' : ''}"></i>`).join('');
+  const backBtn  = wpTourIdx > 0 ? `<button class="wp-tour-btn ghost" onclick="tourBack()">Back</button>` : '';
+  const nextLbl  = step.cta ? step.ctaLabel : (isLast ? 'Finish' : 'Next');
+  const nextCall = step.cta ? 'tourFinishToStreams()' : (isLast ? 'endTour(true)' : 'tourNext()');
+  tip.innerHTML =
+    `<div class="wp-tour-eyebrow">${wpTourIdx + 1} of ${WP_TOUR_STEPS.length}</div>`
+  + `<div class="wp-tour-title">${step.title}</div>`
+  + `<div class="wp-tour-body">${step.body}</div>`
+  + `<div class="wp-tour-foot">`
+  +   `<div class="wp-tour-dots">${dots}</div>`
+  +   `<div class="wp-tour-btns">`
+  +     `<button class="wp-tour-btn ghost" onclick="endTour(false)">Skip</button>`
+  +     backBtn
+  +     `<button class="wp-tour-btn primary" onclick="${nextCall}">${nextLbl}</button>`
+  +   `</div>`
+  + `</div>`;
+
+  const target = step.target ? document.querySelector(step.target) : null;
+  if (!target) {                                   // centered welcome / fallback
+    spot.style.display = 'none';
+    tip.classList.add('center');
+    return;
+  }
+  target.scrollIntoView({ block: 'center', inline: 'nearest' });
+  requestAnimationFrame(() => {
+    const r = target.getBoundingClientRect();
+    spot.style.display = 'block';
+    spot.style.left   = (r.left - 6) + 'px';
+    spot.style.top    = (r.top - 6) + 'px';
+    spot.style.width  = (r.width + 12) + 'px';
+    spot.style.height = (r.height + 12) + 'px';
+    tip.classList.remove('center');
+    const th = tip.offsetHeight, tw = tip.offsetWidth;
+    const vh = window.innerHeight, vw = window.innerWidth, gap = 14;
+    // Prefer below the target; flip above if it would overflow.
+    let top = r.bottom + gap;
+    if (top + th > vh - 10) top = Math.max(10, r.top - gap - th);
+    // Align left with the target, clamped to the viewport.
+    let left = Math.min(Math.max(10, r.left), vw - tw - 10);
+    tip.style.left = left + 'px';
+    tip.style.top  = top + 'px';
+  });
+}
+
+function tourNext() { if (wpTourIdx < WP_TOUR_STEPS.length - 1) { wpTourIdx++; renderTourStep(); } }
+function tourBack() { if (wpTourIdx > 0) { wpTourIdx--; renderTourStep(); } }
+
+function closeTourNow() {
+  localStorage.setItem('wp.tourDone', '1');
+  window.__wpTourActive = false;
+  window.removeEventListener('resize', renderTourStep);
+  const el = document.getElementById('wp-tour');
+  if (el) el.classList.remove('open');
+}
+
+function endTour(completed) {
+  // Soft gate: if they try to skip while no streams exist yet, confirm once —
+  // set-up is optional, but they should know their time stays untagged.
+  if (!completed && systemSnapshot && systemSnapshot.taxonomy_trivial) {
+    renderTourSkipConfirm();
+    return;
+  }
+  closeTourNow();
+}
+
+function renderTourSkipConfirm() {
+  const spot = document.getElementById('wp-tour-spot');
+  const tip  = document.getElementById('wp-tour-tip');
+  if (spot) spot.style.display = 'none';
+  if (!tip) return;
+  tip.classList.add('center');
+  tip.innerHTML =
+    `<div class="wp-tour-eyebrow">Before you go</div>`
+  + `<div class="wp-tour-title">Set up streams later?</div>`
+  + `<div class="wp-tour-body">You can skip this, but until you add your projects, everything you do is`
+  + ` filed as <b>untagged</b> — the dashboard won't be able to tell you what you spent time on.</div>`
+  + `<div class="wp-tour-foot">`
+  +   `<span></span>`
+  +   `<div class="wp-tour-btns">`
+  +     `<button class="wp-tour-btn ghost" onclick="closeTourNow()">Skip anyway</button>`
+  +     `<button class="wp-tour-btn primary" onclick="tourFinishToStreams()">Set up my streams →</button>`
+  +   `</div>`
+  + `</div>`;
+}
+
+function tourFinishToStreams() {
+  closeTourNow();
+  openTaxonomy('first-load');
+}

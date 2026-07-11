@@ -573,3 +573,60 @@ footer { margin-top: 64px; padding-top: 24px; border-top: 1px solid var(--border
 .sj-row input:focus, .sj-row select:focus, .sj-row textarea:focus {
   outline: none; border-color: var(--text-soft); background: var(--surface); }
 .sj-row textarea { resize: vertical; min-height: 60px; }
+
+/* ── First-run guided tour ─────────────────────────────────────────────────── */
+#wp-tour { position: fixed; inset: 0; z-index: 9000; display: none; }
+#wp-tour.open { display: block; }
+#wp-tour-backdrop { position: fixed; inset: 0; background: transparent; }
+#wp-tour-spot {
+  position: fixed; border-radius: 12px; pointer-events: none;
+  box-shadow: 0 0 0 9999px rgba(20, 15, 8, .55);
+  outline: 2px solid #f59e0b; outline-offset: 3px;
+  transition: left .25s ease, top .25s ease, width .25s ease, height .25s ease;
+}
+#wp-tour-tip {
+  position: fixed; max-width: 340px; width: calc(100vw - 32px);
+  background: var(--surface, #fff); color: var(--text, #2b2622);
+  border: 1px solid var(--border, #eee5d2); border-radius: 14px;
+  box-shadow: 0 14px 44px -10px rgba(60, 40, 10, .45);
+  padding: 18px 18px 14px; z-index: 9002; pointer-events: auto;
+}
+#wp-tour-tip.center { left: 50% !important; top: 50% !important; transform: translate(-50%, -50%); }
+.wp-tour-eyebrow { font-size: 11px; letter-spacing: .12em; text-transform: uppercase;
+  color: #c8790a; font-weight: 700; }
+.wp-tour-title { font-size: 17px; font-weight: 700; margin: 5px 0 6px; line-height: 1.2; }
+.wp-tour-body { font-size: 13.5px; color: var(--text-soft, #6b6156); line-height: 1.5; }
+.wp-tour-body b { color: var(--text, #2b2622); font-weight: 600; }
+.wp-tour-foot { display: flex; align-items: center; justify-content: space-between;
+  margin-top: 16px; gap: 10px; }
+.wp-tour-dots { display: flex; gap: 5px; }
+.wp-tour-dots i { width: 6px; height: 6px; border-radius: 50%; background: var(--border, #ddd2bd); }
+.wp-tour-dots i.on { background: #f59e0b; }
+.wp-tour-btns { display: flex; gap: 8px; align-items: center; }
+.wp-tour-btn { font: inherit; font-size: 13px; font-weight: 600; border-radius: 8px;
+  padding: 7px 13px; cursor: pointer; border: 1px solid var(--border, #ddd2bd);
+  background: var(--surface, #fff); color: var(--text, #2b2622); }
+.wp-tour-btn.primary { background: #f59e0b; border-color: #c8790a; color: #fff; }
+.wp-tour-btn.ghost { border-color: transparent; background: transparent; color: var(--text-soft, #888); padding: 7px 4px; }
+@media (prefers-reduced-motion: reduce) { #wp-tour-spot { transition: none; } }
+
+/* ── Soft onboarding gate: streams-not-set-up banner ───────────────────────── */
+.streams-banner {
+  display: flex; align-items: center; gap: 12px; margin: 0 0 16px;
+  padding: 12px 16px; border-radius: 12px;
+  background: color-mix(in srgb, #f59e0b 12%, var(--surface, #fff));
+  border: 1px solid color-mix(in srgb, #f59e0b 42%, var(--border, #eee5d2));
+}
+.streams-banner .sb-ic { font-size: 18px; line-height: 1; flex: none; }
+.streams-banner .sb-text { font-size: 13.5px; color: var(--text, #2b2622); line-height: 1.45; }
+.streams-banner .sb-text b { font-weight: 700; }
+.streams-banner .sb-btn {
+  margin-left: auto; flex: none; font: inherit; font-size: 13px; font-weight: 700;
+  border: 0; border-radius: 9px; padding: 8px 14px; cursor: pointer;
+  background: #f59e0b; color: #fff; white-space: nowrap;
+}
+.streams-banner .sb-btn:hover { background: #e0890a; }
+@media (max-width: 560px) {
+  .streams-banner { flex-wrap: wrap; }
+  .streams-banner .sb-btn { margin-left: 0; }
+}

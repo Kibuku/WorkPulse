@@ -20,7 +20,8 @@
       <span id="health-dot">●</span>
     </button>
     <button class="icon-btn" onclick="openViewMenu(event)" title="Show / hide cards" style="margin-right:6px;">View</button>
-    <button class="icon-btn" onclick="openSettings()" title="Settings">Settings</button>
+    <button class="icon-btn" onclick="startTour()" title="Guided tour">Tour</button>
+    <button class="icon-btn" id="wp-settings-btn" onclick="openSettings()" title="Settings">Settings</button>
   </div>
 </div>
 
@@ -58,20 +59,19 @@
 <!-- Date navigation -->
 <div class="datebar" id="datebar"></div>
 
+<!-- Soft onboarding gate: shows until the user has real streams -->
+<div id="streams-banner" class="streams-banner" style="display:none">
+  <span class="sb-ic">⚠️</span>
+  <span class="sb-text">You haven't set up your <b>streams</b> yet — WorkPulse is filing everything as
+    <b>untagged</b>. Add your projects so it can attribute your time.</span>
+  <button class="sb-btn" onclick="openTaxonomy('first-load')">Set up streams →</button>
+</div>
+
 <div class="hero">
   <div class="hero-text">
     <div class="hero-greeting"><span class="sun" id="hero-icon">☀️</span><span id="hero-greeting-text">Good morning</span></div>
     <h1 id="hero-headline">Loading…</h1>
     <div class="sub" id="hero-sub"></div>
-  </div>
-  <div class="hero-cta">
-    <button class="btn-hero" id="hero-primary-btn" onclick="heroPrimaryAction()">
-      <span class="ic" id="hero-primary-icon">🌅</span>
-      <span id="hero-primary-label">Plan your day</span>
-    </button>
-    <button class="btn-hero subtle" onclick="openStartJob()">
-      <span class="ic">＋</span><span>Start a job</span>
-    </button>
   </div>
 </div>
 
@@ -135,34 +135,6 @@
     </div>
   </div>
 
-  <!-- Today's plan (v1.7 intent capture — the Morning Plan surface) -->
-  <div class="card plan-card span-12 collapsible" id="plan-card" data-card="plan" data-card-label="Today's plan">
-    <div class="eyebrow card-header plan-eyebrow" onclick="toggleCard('plan', event)">
-      <span class="card-toggle">▾</span>
-      <div class="card-header-text">
-        <span>Today's plan</span>
-        <button class="btn-start-job" id="plan-action-btn" onclick="event.stopPropagation(); openPlanModal()">+ Plan your day</button>
-      </div>
-    </div>
-    <div class="card-body">
-      <div id="plan-panel"><div class="empty">Loading…</div></div>
-    </div>
-  </div>
-
-  <!-- Jobs in flight (the Coach surface — v1.1a + v1.2a + v1.2b) -->
-  <div class="card jobs-card span-12 collapsible" id="jobs-card" data-card="jobs" data-card-label="Jobs in flight">
-    <div class="eyebrow card-header jobs-eyebrow" onclick="toggleCard('jobs')">
-      <span class="card-toggle">▾</span>
-      <div class="card-header-text">
-        <span>Jobs in flight</span>
-      </div>
-    </div>
-    <div class="card-body">
-      <div id="suggestions-block" class="sg-block"></div>
-      <div id="jobs-panel"><div class="empty">Loading…</div></div>
-      <div id="recently-ended-block"></div>
-    </div>
-  </div>
 
   <!-- Weekly heatmap -->
   <div class="card span-12 collapsible" data-card="heatmap" data-card-label="Last 14 days">
@@ -323,108 +295,29 @@
   </div>
 </div>
 
-<!-- Job-Export modal -->
-<div class="modal-bg export-modal" id="export-modal" onclick="if(event.target===this)closeExport()">
-  <div class="modal" role="dialog" aria-labelledby="export-title">
-    <h2 id="export-title">Export job</h2>
-    <div class="sub" id="export-sub">Building digest…</div>
-    <div class="export-meta">
-      <label style="display:inline-flex;gap:6px;align-items:center;font-size:12px">
-        <input type="checkbox" id="export-include-titles" checked />
-        Include window titles in the day-by-day breakdown
-      </label>
-    </div>
-    <div class="export-preview" id="export-preview"><div class="export-loading">Generating…</div></div>
-    <div class="modal-actions">
-      <button class="btn-ghost" onclick="closeExport()">Close</button>
-      <div style="display:flex;gap:8px">
-        <button class="btn-link" onclick="copyExport()">Copy</button>
-        <button class="btn-primary" onclick="downloadExport()">Download .md</button>
-      </div>
-    </div>
-  </div>
-</div>
-
-<!-- Taxonomy / stream-tree wizard (v1.7 Slice 2) -->
+<!-- Taxonomy / stream-tree wizard -->
 <div class="modal-bg" id="tx-modal" onclick="if(event.target===this)closeTaxonomy()">
   <div class="modal" role="dialog" aria-labelledby="tx-title" style="max-width: 720px">
     <h2 id="tx-title">Set up your taxonomy</h2>
     <div class="sub" id="tx-intro">
-      WorkPulse organises your work as a tree of contexts. Build the tree once;
-      every Job and every window's time rolls up through it. You can edit this any time
-      from Settings.
+      WorkPulse organises your work as a tree of streams. Build the tree once;
+      every window's time rolls up through it. You can edit this any time from Settings.
     </div>
 
     <div id="tx-quickstart" style="margin: 18px 0; display: none;">
       <div class="plan-sg-label">Quick start: tap to add a top-level domain</div>
       <div style="display:flex; flex-wrap:wrap; gap:8px; margin-top:8px;">
-        <button class="tx-qs-btn" onclick="txQuickAdd('personal','Personal')">+ Personal</button>
-        <button class="tx-qs-btn" onclick="txQuickAdd('masters','Master\'s')">+ Master's</button>
         <button class="tx-qs-btn" onclick="txQuickAdd('work','Work')">+ Work</button>
+        <button class="tx-qs-btn" onclick="txQuickAdd('learning','Learning')">+ Learning</button>
+        <button class="tx-qs-btn" onclick="txQuickAdd('personal','Personal')">+ Personal</button>
       </div>
     </div>
 
     <div id="tx-tree" style="margin-top: 18px;"></div>
 
-    <div id="tx-migration" style="margin-top: 18px; display: none;"></div>
-
     <div class="modal-actions">
       <button class="btn-ghost" onclick="closeTaxonomy()">Close</button>
       <button class="btn-primary" onclick="finishTaxonomy()">Done</button>
-    </div>
-  </div>
-</div>
-
-<!-- Plan-the-day modal -->
-<div class="modal-bg" id="plan-modal" onclick="if(event.target===this)closePlanModal()">
-  <div class="modal" role="dialog" aria-labelledby="plan-title">
-    <h2 id="plan-title">Plan today</h2>
-    <div class="sub">Declare what you intend to work on. Each item becomes a Job. Sessions roll up to it automatically. End-of-day you can see planned vs actual.</div>
-
-    <div id="plan-suggestions" class="plan-sg-block"></div>
-
-    <div class="sj-row">
-      <label for="plan-new-items">New items (one per line)</label>
-      <textarea id="plan-new-items" rows="6" placeholder="One item per line, e.g.&#10;NKCC Q3 narrative (~120 min)&#10;Call Mwangi (~30 min)&#10;Review v1.7 brief"></textarea>
-      <div class="sub plan-hint">Tip: add <code>(~N min)</code> for an optional time target.</div>
-    </div>
-
-    <div class="modal-actions">
-      <button class="btn-ghost" onclick="closePlanModal()">Cancel</button>
-      <button class="btn-primary" onclick="submitPlan()">Save plan</button>
-    </div>
-  </div>
-</div>
-
-<!-- Start-Job modal -->
-<div class="modal-bg" id="sj-modal" onclick="if(event.target===this)closeStartJob()">
-  <div class="modal" role="dialog" aria-labelledby="sj-title">
-    <h2 id="sj-title">Start a job</h2>
-    <div class="sub">A job is a coherent unit of work: "NKCC Q3 report", "Chapter 3 lit review". Sessions inside this stream from now until you end the job will roll up to it.</div>
-    <div class="sj-row">
-      <label for="sj-name">What are you working on?</label>
-      <input type="text" id="sj-name" placeholder="e.g. NKCC Q3 report" autocomplete="off" />
-    </div>
-    <div class="sj-row">
-      <label for="sj-stream">Stream</label>
-      <select id="sj-stream" onchange="onStreamSelectChange()"></select>
-      <div id="sj-newstream" style="display:none; margin-top:10px; padding:12px; background:var(--bg-soft); border-radius:8px; border:1px dashed var(--border-d)">
-        <div style="display:grid; grid-template-columns: 1fr 1.4fr; gap:8px; margin-bottom:8px">
-          <input type="text" id="sj-newstream-key" placeholder="key (e.g. client-x)" />
-          <input type="text" id="sj-newstream-label" placeholder="label (e.g. Client X / Consulting)" />
-        </div>
-        <div style="font-size:11px; color:var(--text-faint)">
-          Key: lowercase letters / digits / hyphens. The label is what shows on the dashboard.
-        </div>
-      </div>
-    </div>
-    <div class="sj-row">
-      <label for="sj-note">Note (optional)</label>
-      <textarea id="sj-note" placeholder="A line or two about the goal of this job. Used later when reviewing how it went."></textarea>
-    </div>
-    <div class="modal-actions">
-      <button class="btn-ghost" onclick="closeStartJob()">Cancel</button>
-      <button class="btn-primary" onclick="submitStartJob()">Start job</button>
     </div>
   </div>
 </div>
