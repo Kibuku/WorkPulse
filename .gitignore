@@ -1,0 +1,30 @@
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+*.egg-info/
+build/
+dist/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# WorkPulse user data (never commit)
+*.db
+*.db-wal
+*.db-shm
+config/config.yaml
+config/projects.yaml
+config/calendar.url
+config/secrets.json
+logs/
+captures/
+consolidation/
+reports/
+brain/
+
+# OS / IDE
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/

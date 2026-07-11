@@ -1,0 +1,141 @@
+# WorkPulse configuration TEMPLATE.
+#
+# On first run, setup.ps1 copies this file to config/config.yaml if no
+# personal copy exists. Edit YOUR config.yaml — not this template.
+#
+# This file is checked into version control. Your personal config.yaml,
+# identity.yaml, and secrets.json are git-ignored and stay on your machine.
+
+paths:
+  vault: "vault"
+  logs: "logs"
+  reports_daily: "reports/daily"
+  reports_weekly: "reports/weekly"
+  prompt_daily: "config/report_prompt_daily.md"
+  prompt_weekly: "config/report_prompt_weekly.md"
+
+# Streams = the projects you want WorkPulse to track time and activity for.
+# Add one entry per project. The key is the short slug used internally;
+# the value is the human-readable label shown in the dashboard.
+streams:
+  # work-project: "My Work Project"
+  # side-project: "Personal Side Project"
+
+# Stream path patterns — first-match-wins ordering matters here.
+# Each entry maps a folder name, file path fragment, or window-title
+# substring to a stream. The substring is matched against the full
+# normalized window title (lowercase) and any open file paths of the
+# foreground process.
+#
+# Tip: put MORE SPECIFIC patterns FIRST. e.g. if "client-x/sub-project-y"
+# should tag to sub-project-y, list sub-project-y before client-x.
+#
+# The dashboard's Loop A correction dropdown adds patterns to
+# config/learned_tags.json automatically as you tag untagged windows —
+# you don't need to maintain this list by hand once that loop is going.
+watcher:
+  # Watch real work locations, NOT all of ~. Watching the whole home dir
+  # floods the file signal with app cache/state churn (99% noise, measured).
+  # OneDrive / SharePoint / iCloud sync locally under ~/Library/CloudStorage,
+  # so real project files (with project names in the path) are captured there.
+  watch_roots:
+    - "~/Documents"
+    - "~/Desktop"
+    - "~/Downloads"
+    - "~/Library/CloudStorage"   # macOS: OneDrive / SharePoint / Google Drive
+    # - "D:/"                    # Windows: add drives / OneDrive path as needed
+
+  # Directory names/paths to skip entirely (never recurse into).
+  ignore_dirs:
+    - "Windows"
+    - "Program Files"
+    - "Program Files (x86)"
+    - "ProgramData"
+    - "$Recycle.Bin"
+    - "System Volume Information"
+    - ".git"
+    - "__pycache__"
+    - ".venv"
+    - "node_modules"
+    - "dist"
+    - "build"
+    - ".mypy_cache"
+    - ".ruff_cache"
+    - ".claude"
+    # AppData noise — caches, telemetry, sync state
+    - "AppData/Local/Temp"
+    - "AppData/Local/Microsoft/Windows"
+    - "AppData/Local/Google/Chrome/User Data"
+    - "AppData/Local/BraveSoftware"
+    - "AppData/Local/Microsoft/Edge"
+    - "AppData/Local/Mozilla"
+    - "AppData/Local/Packages"
+    - "AppData/Roaming/npm-cache"
+    - "AppData/Roaming/Code/Cache"
+
+  # File-name glob patterns to ignore.
+  ignore_patterns:
+    - "*.tmp"
+    - "*.tmp.*"
+    - "*.temp"
+    - "~$*"
+    - "*.lnk"
+    - "Thumbs.db"
+    - "desktop.ini"
+    - ".DS_Store"
+    - "*.pyc"
+    - "*.log"
+    - "*.lock"
+    - "*.exe"
+    - "*.dll"
+    - "ntuser.dat*"
+    - "NTUSER.DAT*"
+
+  debounce_ms: 500
+
+  # Add your own — one entry per project pattern. Example:
+  #
+  # stream_path_patterns:
+  #   - path: "ClientX\\ProjectY"
+  #     stream: "project-y"
+  #   - path: "ClientX"
+  #     stream: "client-x"
+  stream_path_patterns: []
+
+# Anthropic / LLM — used by Loop B auto-classification, .docx content tagging,
+# and the (future) report engine. WorkPulse runs without these features if no
+# API key is configured; set the key via the dashboard Settings page.
+llm:
+  model: "claude-sonnet-4-6"
+  pricing_per_million_tokens:
+    input_usd: 3.00
+    output_usd: 15.00
+
+reports:
+  timezone: "Africa/Nairobi"          # change to your local IANA zone
+  daily:
+    enabled: true
+    schedule: "23:00"
+  weekly:
+    enabled: true
+    schedule: "Sun 20:00"
+  # Window-title substrings to redact before sending to the LLM. Use this for
+  # anything you never want leaving your machine even via the LLM call —
+  # banking, personal correspondents, medical, etc.
+  redaction_patterns: []
+
+# Email reporting — OFF by default. Enable from the dashboard Settings page
+# after setting an SMTP app password (Gmail: https://myaccount.google.com/apppasswords).
+email:
+  enabled: false
+  smtp_host: "smtp.gmail.com"
+  smtp_port: 587
+  smtp_user: ""           # set in Settings, or leave blank to use secrets.json
+  from_addr: ""           # usually same as smtp_user
+  to_addr:   ""
+  send_daily: true
+  send_weekly: true
+
+# AI session logger — local-only metadata about your own Claude API usage.
+ai_logger:
+  store_full_prompts: false

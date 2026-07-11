@@ -1,0 +1,36 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "workpulse"
+version = "2.0.0"
+description = "A local-first personal attention brain. Passively tracks your work, then synthesizes it into project-attributed intelligence."
+readme = "README.md"
+requires-python = ">=3.11"
+license = { text = "MIT" }
+dependencies = [
+    "fastapi>=0.110",
+    "uvicorn>=0.29",
+    "watchdog>=4.0",
+    "psutil>=5.9",
+    "PyYAML>=6.0",
+    "anthropic>=0.40",
+    "sqlite-vec>=0.1.0",
+]
+
+[project.optional-dependencies]
+mac = ["pyobjc-framework-Cocoa>=10.0", "pyobjc-framework-Quartz>=10.0"]
+dev = ["pytest>=8.0"]
+
+[project.scripts]
+workpulse = "workpulse.cli:main"
+
+[tool.setuptools.packages.find]
+include = ["workpulse*"]
+
+[tool.setuptools.package-data]
+workpulse = ["migrations/*.sql", "skills/*.md"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

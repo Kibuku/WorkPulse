@@ -1,0 +1,140 @@
+# projects.yaml — George's project taxonomy
+#
+# Edit this file directly to refine project routing. The resolver in
+# scripts/projects.py reads it on every call (cheap; ~10 keys).
+#
+# For each project:
+#   stream:    the existing stream key in config/config.yaml streams: section
+#   label:     human-readable name (used in dashboard / reports)
+#   keywords:  case-insensitive substrings that, when found in a capture
+#              body / plan-item name / window title / file path, route to
+#              this project. Order matters: more-specific patterns higher.
+#   folder_patterns: file-path substrings that signal this project from
+#              watcher's raw_path. Same case-insensitive substring match.
+#   aliases:   alternative names / shorthand the user uses for the project
+#
+# Resolver returns the FIRST matching project. Put the most specific
+# (uganda-memd) above the parent (verst-carbon) so child wins.
+
+projects:
+
+  - stream:           uganda
+    label:            Uganda MEMD
+    keywords:         ["uganda memd", "uganda-memd", "uganda mem", "MEMD", "household ERs", "biomass cookstove", "improved biomass", "LPG", "Mwangi"]
+    folder_patterns:  ["uganda-memd", "uganda_memd", "uganda memd"]
+    aliases:          ["uganda", "memd"]
+
+  - stream:           uganda2
+    label:            Mercy Corps
+    keywords:         ["mercy corps", "mercycorps", "mercy-corps"]
+    folder_patterns:  ["mercy-corps", "mercycorps", "mercy_corps"]
+    aliases:          ["mercy"]
+
+  - stream:           verst-carbon
+    label:            Verst Carbon
+    keywords:         ["verst carbon", "verstcarbon", "verst-carbon", "carbon methodology", "carbon programme"]
+    folder_patterns:  ["verst-carbon", "VerstCarbon"]
+    aliases:          ["verst"]
+
+  - stream:           dev
+    label:            WorkPulse build
+    keywords:         ["workpulse", "WorkPulse", "wp v2", "skill file", "dream cycle"]
+    folder_patterns:  ["WorkPulse", "workpulse"]
+    aliases:          ["wp"]
+
+  - stream:           masters
+    label:            Master's dissertation
+    keywords:         ["dissertation", "masters", "master's", "thesis", "literature review", "women landowners"]
+    folder_patterns:  ["dissertation", "masters", "thesis"]
+    aliases:          ["dissertation"]
+
+# Catch-alls. Resolver returns these as a final fallback if no project
+# pattern matches but the text obviously belongs to one of these buckets.
+# Not strictly necessary; included so the resolver returns *something*
+# semantically meaningful instead of None.
+fallbacks:
+
+  - stream:           work
+    label:            Work (other)
+    keywords:         ["client", "consulting", "deliverable", "stakeholder"]
+
+  - stream:           personal
+    label:            Personal
+    keywords:         ["personal", "errand"]
+
+
+# ── Browser domains that should route to the private "personal" tier ────────
+#
+# Used by scripts/browser_tracker.py. Domain substring match, case-insensitive.
+# When a domain matches one of these, the browser visit is recorded but
+# tagged stream='personal' (which is is_private=1). It does NOT surface on
+# the main dashboard. To view, you unlock with your personal password.
+#
+# Edit this list to add your specific bank, healthcare portal, etc.
+
+private_domains:
+  # Banking + payments
+  - "chase.com"
+  - "wellsfargo.com"
+  - "bankofamerica.com"
+  - "americanexpress.com"
+  - "paypal.com"
+  - "venmo.com"
+  - "wise.com"
+  - "revolut.com"
+  - "mpesa"
+  - "m-pesa"
+  - "equitybank"
+  - "kcb"
+  - "absa"
+  - "stanbic"
+  - "stripe.com/dashboard"
+
+  # Healthcare
+  - "mychart"
+  - "healthcare.gov"
+  - "kaiser"
+  - "anthem"
+  - "bcbs"
+
+  # Personal email + identity
+  - "mail.google.com"
+  - "outlook.live.com"
+  - "mail.icloud.com"
+  - "icloud.com/mail"
+  - "1password.com"
+  - "bitwarden.com"
+  - "lastpass.com"
+
+  # Personal social + messaging
+  - "facebook.com"
+  - "instagram.com"
+  - "tiktok.com"
+  - "twitter.com"
+  - "x.com"
+  - "reddit.com"
+  - "web.whatsapp.com"
+  - "whatsapp.com"
+  - "web.telegram.org"
+  - "messenger.com"
+
+  # Government / tax
+  - "irs.gov"
+  - "ssa.gov"
+  - "kra.go.ke"
+
+  # Entertainment (optional — comment out if you want to see your YouTube time)
+  - "netflix.com"
+  - "spotify.com"
+  - "youtube.com"
+
+
+# ── Domains never tracked at all (not even in the private tier) ─────────────
+#
+# Use this for things you'd rather the brain never see, encrypted or not.
+# A browser visit to one of these is dropped entirely, no atom written.
+
+deny_domains:
+  - "myaccount.google.com"     # google account settings
+  - "appleid.apple.com"
+  - "login.microsoftonline.com" # the actual login page (not the post-auth content)
