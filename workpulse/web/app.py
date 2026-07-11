@@ -71,15 +71,10 @@ app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
 
 PORT = 5700
 
-STREAM_COLORS = {
-    "verst-carbon": "#22c55e",
-    "majicom":      "#3b82f6",
-    "masters":      "#8b5cf6",
-    "dissertation": "#06b6d4",
-    "consulting":   "#f59e0b",
-    "personal-dev": "#a855f7",
-    "personal-comms": "#ec4899",
-}
+# Optional curated colours, keyed by stream slug. Empty by default — every
+# stream gets a stable auto-colour from the hash below, so there are no personal
+# stream names baked into the code. Add entries here only to pin a specific hue.
+STREAM_COLORS: dict[str, str] = {}
 
 def stream_color(key: str) -> str:
     """Pick a colour for any stream key. Curated entries win; everything else
@@ -269,8 +264,7 @@ def _load_file_events(days: int = 1, for_date: Optional[date] = None) -> list[di
                 if any(x in r["path"] for x in ["test_wk", "test_energy", "test_vault",
                                                    "test_desktop", "smoke_test",
                                                    "test_activity", "test_study",
-                                                   "meeting_notes", "chapter3_notes",
-                                                   "test_majicom", "test_verst"]):
+                                                   "meeting_notes", "chapter3_notes"]):
                     continue
                 events.append(r)
             except Exception:
@@ -473,7 +467,7 @@ async def api_v2_correct_cluster(cluster_id: str, payload: dict):
 @app.get("/api/v2/streams")
 def api_v2_streams():
     """All streams — for the correction dropdown. Includes label so the
-    UI can show 'Uganda MEMD' instead of just 'uganda'."""
+    UI can show 'Acme Web' instead of just 'acme-web'."""
     from workpulse.core import db as wp_db
     cfg = load_config()
     con = wp_db.connect(cfg)

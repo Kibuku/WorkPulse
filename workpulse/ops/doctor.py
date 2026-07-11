@@ -3,10 +3,10 @@ doctor.py — autonomous health check. The "CTO end-of-day check-in".
 
 WorkPulse fails SILENTLY. Across development we hit: agents exiting 78 for
 two weeks, the file watcher catching nothing, the activity sensor frozen on
-one app (Finder, then Claude) for days. Every time, George only discovered
-it days later by happening to open a stale dashboard. This module is the
-antidote: it runs on a schedule, checks the things that silently break, and
-— crucially — ALERTS via a macOS notification (he won't read logs).
+one app for days. Every time, the user only discovered it days later by
+happening to open a stale dashboard. This module is the antidote: it runs on
+a schedule, checks the things that silently break, and — crucially — ALERTS
+via an OS notification (users won't read logs).
 
 Checks (each returns ok / warn / fail + a plain-language message):
   - sensors_running   : activity + watcher processes alive

@@ -9,8 +9,8 @@ Back-compat note: ``config.yaml`` can use either shape for ``streams``:
 
     streams:
       misc: Miscellaneous                                  # flat (legacy)
-      verst-carbon:                                        # tree
-        label: Verst Carbon
+      acme-web:                                            # tree
+        label: Acme Web
         parent: work
       work:
         label: Work
@@ -27,7 +27,7 @@ Public API:
     ancestors(key, cfg, *, include_self=False) -> list[str]   # root → ... → self
     descendants(key, cfg, *, include_self=False) -> list[str]
     path(key, cfg) -> list[str]                                # root → self, inclusive
-    breadcrumb(key, cfg, *, sep=" › ") -> str                  # "Work › Verst Carbon"
+    breadcrumb(key, cfg, *, sep=" › ") -> str                  # "Work › Acme Web"
     top_level(cfg) -> list[str]                                # parent=None roots
     is_descendant(child, ancestor, cfg) -> bool
     validate_tree(cfg) -> list[str]                            # human-readable errors
@@ -171,7 +171,7 @@ def path(key: str, cfg: dict | None = None) -> list[str]:
 
 
 def breadcrumb(key: str, cfg: dict | None = None, *, sep: str = " › ") -> str:
-    """Human-readable breadcrumb using labels, e.g. 'Work › Verst Carbon'."""
+    """Human-readable breadcrumb using labels, e.g. 'Work › Acme Web'."""
     tree = normalise(cfg)
     return sep.join(tree.get(k, {}).get("label") or k for k in path(key, cfg))
 

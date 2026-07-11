@@ -1,8 +1,9 @@
 """
-common.py — shared utilities for all WorkPulse scripts.
+common.py — shared utilities for the WorkPulse package.
 
 Provides:
-  - ROOT: project root (D:\\WorkPulse\\)
+  - ROOT: project/data root (the repo directory)
+  - PKG:  the installed workpulse/ package directory
   - load_config() -> dict
   - resolve(relative_path) -> Path
   - get_env(key) -> str  (raises if missing)
@@ -16,7 +17,7 @@ from pathlib import Path
 
 import yaml
 
-# Project root is the parent of this file's directory (scripts/ -> root)
+# Project root is the parent of the workpulse/ package directory
 ROOT = Path(__file__).resolve().parent.parent   # repo/data root
 PKG = Path(__file__).resolve().parent            # the workpulse/ package (bundled skills, migrations)
 

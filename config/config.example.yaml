@@ -1,7 +1,7 @@
 # WorkPulse configuration TEMPLATE.
 #
-# On first run, setup.ps1 copies this file to config/config.yaml if no
-# personal copy exists. Edit YOUR config.yaml — not this template.
+# WorkPulse falls back to this template until you create config/config.yaml.
+# Copy it to config/config.yaml and edit YOUR copy — not this template.
 #
 # This file is checked into version control. Your personal config.yaml,
 # identity.yaml, and secrets.json are git-ignored and stay on your machine.
@@ -30,9 +30,9 @@ streams:
 # Tip: put MORE SPECIFIC patterns FIRST. e.g. if "client-x/sub-project-y"
 # should tag to sub-project-y, list sub-project-y before client-x.
 #
-# The dashboard's Loop A correction dropdown adds patterns to
-# config/learned_tags.json automatically as you tag untagged windows —
-# you don't need to maintain this list by hand once that loop is going.
+# The dashboard's retag control adds learned patterns to
+# logs/learned_tags.json as you correct untagged windows — so you don't
+# need to maintain this list by hand once you've tagged a few.
 watcher:
   # Watch real work locations, NOT all of ~. Watching the whole home dir
   # floods the file signal with app cache/state churn (99% noise, measured).
@@ -102,9 +102,9 @@ watcher:
   #     stream: "client-x"
   stream_path_patterns: []
 
-# Anthropic / LLM — used by Loop B auto-classification, .docx content tagging,
-# and the (future) report engine. WorkPulse runs without these features if no
-# API key is configured; set the key via the dashboard Settings page.
+# Anthropic / LLM — used by the nightly consolidation, the living profile, and
+# the report engine. WorkPulse runs without these features if no API key is
+# configured; set the key via the dashboard Settings page.
 llm:
   model: "claude-sonnet-4-6"
   pricing_per_million_tokens:
@@ -112,7 +112,7 @@ llm:
     output_usd: 15.00
 
 reports:
-  timezone: "Africa/Nairobi"          # change to your local IANA zone
+  timezone: "UTC"                     # change to your local IANA zone (e.g. America/New_York)
   daily:
     enabled: true
     schedule: "23:00"

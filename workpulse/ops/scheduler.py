@@ -107,10 +107,10 @@ def jobs() -> list[dict]:
             "interval_seconds": 3600,            # hourly
             "description": "Pull calendar events from ICS URL so meetings become signal.",
         },
-        # The autonomous CTO check-in. Runs every 3h and fires a macOS
+        # The autonomous check-in. Runs every 3h and fires an OS
         # notification if anything's wrong (sensors down, frozen frontmost,
         # agents exiting 78, stale data). WorkPulse fails silently; this is
-        # how George finds out within hours instead of days.
+        # how the user finds out within hours instead of days.
         {
             "slug":    "doctor",
             "label":   f"{_LABEL_PREFIX}.doctor",

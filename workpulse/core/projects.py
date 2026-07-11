@@ -17,7 +17,7 @@ Public API:
         # richer return: {stream, label, matched_keyword, source}
 
 CLI:
-    python -m workpulse.core.projects test "today I want to work on Uganda MEMD"
+    python -m workpulse.core.projects test "today I want to work on the Acme account"
     python -m workpulse.core.projects backfill            # re-route existing captures
     python -m workpulse.core.projects list                # dump the taxonomy
 """
@@ -173,7 +173,7 @@ def resolve_all(text: str, projects: list[dict] | None = None,
     """Return EVERY matching project (deduped by stream key, in match order).
 
     Enables the "Model B" list-capture pattern: a user writes their
-    morning intentions in one sentence ("Today: Uganda MEMD, Mercy Corps,
+    morning intentions in one sentence ("Today: Acme, Contoso,
     WorkPulse v2") and the brain extracts every project mentioned. Each
     becomes a candidate stream for the day; cluster assignment picks
     among them based on signal.

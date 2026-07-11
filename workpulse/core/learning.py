@@ -133,7 +133,7 @@ def match_learned(title: str, cfg: dict) -> str | None:
     """Return the learned stream for a window title, or None if no rule matches.
 
     Matches by substring on the normalized title — so a rule with pattern
-    'nkcc' tags 'Fwd: NKCC Q3', 'NKCC kickoff notes', etc.
+    'acme' tags 'Fwd: Acme Q3', 'Acme kickoff notes', etc.
     A rule with stream=None (negative rule) returns None *and* prevents AI
     classification from re-firing for the same pattern.
     """
@@ -141,7 +141,7 @@ def match_learned(title: str, cfg: dict) -> str | None:
     if not norm:
         return None
     rules = load_learned_rules(cfg)
-    # Longest-pattern-first so 'nkcc q3' wins over 'nkcc'
+    # Longest-pattern-first so 'acme q3' wins over 'acme'
     for r in sorted(rules, key=lambda x: -len(x.get("pattern", ""))):
         pat = r.get("pattern", "")
         if pat and pat in norm:

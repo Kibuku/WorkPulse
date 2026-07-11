@@ -2,7 +2,7 @@
 calendar_sync.py — pull calendar events from an .ics URL into the atom store.
 
 Each event becomes a calendar_event atom. Its title is auto-resolved against
-projects.yaml so meetings about Uganda MEMD get stream=uganda before they
+projects.yaml so meetings about the Acme account get stream=acme before they
 ever reach the Categorizer. The Categorizer uses calendar_event overlap as
 a strong signal (+6) when scoring clusters — most user context lives in
 meetings, and meetings have explicit subjects.

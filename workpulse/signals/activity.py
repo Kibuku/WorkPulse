@@ -18,8 +18,8 @@ Record schema:
       "duration_s":  330,
       "app":         "WINWORD.EXE",
       "exe_path":    "C:\\Program Files\\...\\WINWORD.EXE",
-      "title":       "CHAPTER ONE - GEORGE.docx - Word",
-      "stream":      "dissertation",
+      "title":       "Q3 Roadmap.docx - Word",
+      "stream":      "acme-web",
       "idle":        false
     }
 """
@@ -98,15 +98,15 @@ def _open_file_paths(pid: int) -> list[str]:
 
 def _tag_by_open_files(pid: int, cfg: dict) -> str | None:
     """If the foreground process has any open file under a configured stream
-    root folder, return that stream. Subset folders (e.g. dissertation under
-    masters) must be listed in config order — first match wins."""
+    root folder, return that stream. Subset folders (e.g. a sub-project under
+    its parent) must be listed in config order — first match wins."""
     roots = cfg["watcher"].get("stream_folder_roots") or {}
     if not roots:
         return None
     files = _open_file_paths(pid)
     if not files:
         return None
-    # Iterate streams in dict order; subset (dissertation) must come before parent (masters)
+    # Iterate streams in dict order; a subset stream must come before its parent
     for stream, folder_list in roots.items():
         for folder in folder_list:
             needle = folder.replace("\\", "/").lower().rstrip("/") + "/"

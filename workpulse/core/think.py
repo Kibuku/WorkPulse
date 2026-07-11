@@ -29,7 +29,7 @@ Public API:
       }
 
 CLI:
-    python -m workpulse.core.think "what's the state of Uganda?"
+    python -m workpulse.core.think "what's the state of the Acme project?"
     python -m workpulse.core.think "..." --stream dev --limit 15 --vector
     python -m workpulse.core.think "..." --no-llm    # force fallback
     python -m workpulse.core.think "..." --json      # emit the result dict

@@ -135,7 +135,7 @@ def capture(*, body: str, author: str = "human",
     ts = datetime.now(timezone.utc).isoformat()
 
     # Fix (i)+: project routing on every human capture. Uses resolve_all
-    # so a "list-capture" ("Today: Uganda, Mercy Corps, WorkPulse")
+    # so a "list-capture" ("Today: Acme, Contoso, WorkPulse")
     # extracts EVERY project mentioned. Each becomes an about_stream
     # edge — the cluster assignment pass will pick which clusters in
     # the day belong to which candidate. Session-stream propagation

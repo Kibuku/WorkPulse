@@ -4,8 +4,8 @@ write a browser_visit atom, classify into project / private / deny tier.
 
 Closes the SharePoint / ChatGPT / browser-based work blind spot. The OS
 only tells us "Safari is foreground"; this tells us "you're on
-verst.sharepoint.com/sites/UgandaMEMD/...". That URL routes to project
-'uganda' via projects.yaml's path-mode resolver.
+example.sharepoint.com/sites/ProjectX/...". That URL routes to the matching
+project via projects.yaml's path-mode resolver.
 
 Privacy tier model (config/projects.yaml):
   - deny_domains    → visit DROPPED entirely. No atom, no edge.
@@ -13,7 +13,7 @@ Privacy tier model (config/projects.yaml):
                         bank login pages, password manager URLs, etc.)
   - private_domains → visit WRITTEN, stream='personal', is_private=1.
                        Hidden from default dashboard. Unlock with password.
-  - project match   → visit written, stream=resolved (uganda, dev, ...).
+  - project match   → visit written, stream=resolved (acme, dev, ...).
                        Visible on dashboard like any other signal.
   - unknown         → visit written, stream=NULL. Visible.
 
