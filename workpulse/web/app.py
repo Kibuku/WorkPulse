@@ -477,6 +477,165 @@ def api_v2_streams():
     return {"streams": [{"key": r["key"], "label": r["label"]} for r in rows]}
 
 
+# ── Streams: create / edit / delete from the UI (writes config.yaml) ──────────
+# The taxonomy wizard is the pilot's onboarding surface — users build their
+# stream tree here instead of hand-editing YAML. config.yaml is the source of
+# truth for the taxonomy (workpulse.core.tree reads it); these endpoints keep
+# it consistent and human-editable.
+
+def _load_streams_config() -> tuple[dict, "Path"]:
+    """Load the config we'll mutate and the path to write it to. On a fresh
+    install config.yaml may not exist yet — seed from the effective config
+    (which falls back to the bundled example) so the first stream a user adds
+    materialises a complete, working config.yaml rather than erroring."""
+    import yaml as _yaml
+    cfg_path = resolve("config/config.yaml")
+    if cfg_path.exists():
+        cfg = _yaml.safe_load(cfg_path.read_text(encoding="utf-8")) or {}
+    else:
+        cfg = load_config()  # effective config (falls back to config.example.yaml)
+    return cfg, cfg_path
+
+
+def _write_config(cfg: dict, cfg_path: "Path") -> None:
+    import yaml as _yaml
+    cfg_path.parent.mkdir(parents=True, exist_ok=True)
+    cfg_path.write_text(_yaml.safe_dump(cfg, sort_keys=False, allow_unicode=True),
+                        encoding="utf-8")
+
+
+@app.post("/api/streams")
+async def api_streams_add(payload: dict):
+    """Body: {key, label, parent?}. Append a new stream to config.yaml.
+      • key must be lowercase letters/digits/hyphens, 2–30 chars, not used.
+      • parent (optional) must reference an existing stream — builds the
+        stream hierarchy. Omit / null → top-level node.
+    Written in the hierarchical {label, parent} shape so the tree primitive
+    stays the source of truth."""
+    import re as _re
+    key    = (payload.get("key") or "").strip().lower()
+    label  = (payload.get("label") or "").strip()
+    parent = payload.get("parent")
+    parent = parent.strip().lower() if isinstance(parent, str) and parent.strip() else None
+
+    if not _re.fullmatch(r"[a-z0-9][a-z0-9\-]{1,29}", key):
+        return JSONResponse(
+            {"error": "key must be lowercase letters/digits/hyphens, 2–30 chars"},
+            status_code=400)
+    if not label:
+        return JSONResponse({"error": "label is required"}, status_code=400)
+    if len(label) > 60:
+        return JSONResponse({"error": "label too long (60 char max)"}, status_code=400)
+    if parent and parent == key:
+        return JSONResponse({"error": "stream cannot be its own parent"}, status_code=400)
+
+    cfg, cfg_path = _load_streams_config()
+    streams = cfg.setdefault("streams", {}) or {}
+    if not isinstance(streams, dict):
+        return JSONResponse({"error": "streams block is malformed in config.yaml"},
+                            status_code=500)
+    if key in streams:
+        return JSONResponse({"error": f"stream '{key}' already exists"}, status_code=409)
+    if parent and parent not in streams:
+        return JSONResponse({"error": f"parent '{parent}' is not a known stream"},
+                            status_code=400)
+    streams[key] = {"label": label}
+    if parent:
+        streams[key]["parent"] = parent
+    cfg["streams"] = streams
+    _write_config(cfg, cfg_path)
+    from workpulse.core.tree import breadcrumb
+    return {
+        "ok":         True,
+        "key":        key,
+        "label":      label,
+        "parent":     parent,
+        "color":      stream_color(key),
+        "breadcrumb": breadcrumb(key, cfg),
+    }
+
+
+@app.patch("/api/streams/{key}")
+async def api_streams_patch(key: str, payload: dict):
+    """Body: {label?, parent?}. Update a stream's display label and/or parent.
+    Refuses moves that would create a cycle (key cannot become a descendant
+    of itself)."""
+    cfg, cfg_path = _load_streams_config()
+    streams = cfg.get("streams") or {}
+    if not isinstance(streams, dict) or key not in streams:
+        return JSONResponse({"error": f"stream '{key}' not found"}, status_code=404)
+
+    # Normalise the entry to dict shape so partial updates compose cleanly.
+    cur = streams[key]
+    if isinstance(cur, str):
+        cur = {"label": cur}
+    elif not isinstance(cur, dict):
+        cur = {"label": key}
+
+    if "label" in payload:
+        lbl = (payload["label"] or "").strip()
+        if not lbl:
+            return JSONResponse({"error": "label cannot be empty"}, status_code=400)
+        if len(lbl) > 60:
+            return JSONResponse({"error": "label too long (60 char max)"}, status_code=400)
+        cur["label"] = lbl
+
+    if "parent" in payload:
+        new_parent = payload.get("parent")
+        new_parent = (new_parent or "").strip().lower() or None
+        if new_parent == key:
+            return JSONResponse({"error": "stream cannot be its own parent"}, status_code=400)
+        if new_parent and new_parent not in streams:
+            return JSONResponse({"error": f"parent '{new_parent}' is not a known stream"},
+                                status_code=400)
+        # Cycle guard: walk up from new_parent — if we encounter `key`, abort.
+        cur_p = new_parent
+        seen = set()
+        while cur_p:
+            if cur_p == key:
+                return JSONResponse(
+                    {"error": f"cannot make '{key}' a descendant of itself"},
+                    status_code=400)
+            if cur_p in seen:
+                break
+            seen.add(cur_p)
+            up = streams.get(cur_p)
+            cur_p = up.get("parent") if isinstance(up, dict) else None
+        if new_parent:
+            cur["parent"] = new_parent
+        else:
+            cur.pop("parent", None)
+
+    streams[key] = cur
+    cfg["streams"] = streams
+    _write_config(cfg, cfg_path)
+    from workpulse.core.tree import breadcrumb
+    return {"ok": True, "key": key, "label": cur.get("label"),
+            "parent": cur.get("parent"), "breadcrumb": breadcrumb(key, cfg)}
+
+
+@app.delete("/api/streams/{key}")
+def api_streams_delete(key: str):
+    """Remove a stream. Refused if it still has child streams — re-parent or
+    delete those first."""
+    cfg, cfg_path = _load_streams_config()
+    streams = cfg.get("streams") or {}
+    if key not in streams:
+        return JSONResponse({"error": f"stream '{key}' not found"}, status_code=404)
+
+    kids = [k for k, v in streams.items()
+            if isinstance(v, dict) and v.get("parent") == key]
+    if kids:
+        return JSONResponse(
+            {"error": f"stream '{key}' has children: {kids}. Re-parent or delete them first."},
+            status_code=400)
+
+    del streams[key]
+    cfg["streams"] = streams
+    _write_config(cfg, cfg_path)
+    return {"ok": True, "deleted": key}
+
+
 @app.post("/api/v2/capture")
 async def api_v2_capture(payload: dict):
     """One-shot capture from the dashboard text box.
