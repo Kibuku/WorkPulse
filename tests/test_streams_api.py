@@ -10,10 +10,19 @@ Run: python -m pytest tests/test_streams_api.py
 
 from __future__ import annotations
 
+import copy
+
 import yaml
 from fastapi.testclient import TestClient
 
 import workpulse.web.app as app
+from workpulse.common import ROOT
+
+# Hermetic seed: the bundled template, NOT the developer's real config.yaml
+# (which may exist locally and would otherwise leak streams into these tests).
+_EXAMPLE_CFG = yaml.safe_load(
+    (ROOT / "config" / "config.example.yaml").read_text(encoding="utf-8")
+) or {}
 
 
 def _client(tmp_path, monkeypatch):
@@ -22,7 +31,6 @@ def _client(tmp_path, monkeypatch):
     /api/system (load_config) are redirected so read-back is consistent."""
     cfgfile = tmp_path / "config.yaml"
     real_resolve = app.resolve
-    real_load = app.load_config
 
     def fake_resolve(rel):
         if rel == "config/config.yaml":
@@ -32,7 +40,7 @@ def _client(tmp_path, monkeypatch):
     def fake_load_config():
         if cfgfile.exists():
             return yaml.safe_load(cfgfile.read_text(encoding="utf-8")) or {}
-        return real_load()
+        return copy.deepcopy(_EXAMPLE_CFG)
 
     monkeypatch.setattr(app, "resolve", fake_resolve)
     monkeypatch.setattr(app, "load_config", fake_load_config)
