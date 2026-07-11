@@ -51,11 +51,14 @@ from workpulse.common import ensure_dir, load_config, resolve
 if sys.platform == "win32":
     from workpulse.signals.activity_win import foreground_window as _foreground_window
     from workpulse.signals.activity_win import idle_seconds      as _idle_seconds
-    # No lock-screen probe on Windows yet (step 7c is mac-only for now —
-    # LogonUI.exe on Windows is the equivalent app to filter when we get
-    # evidence of the same data hygiene issue).
+    # Windows lock/logon surfaces run as their own foreground processes; filter
+    # them the same way macOS filters "loginwindow", so locked time doesn't get
+    # logged as real work. `app` here is the psutil process name (see
+    # _process_info), e.g. "LockApp.exe" on the Win10/11 lock screen.
+    _WIN_LOCKSCREEN_APPS = {"lockapp.exe", "logonui.exe"}
+
     def _is_lockscreen(app: str) -> bool:
-        return False
+        return bool(app) and app.lower() in _WIN_LOCKSCREEN_APPS
 elif sys.platform == "darwin":
     from workpulse.signals.activity_mac import foreground_window as _foreground_window
     from workpulse.signals.activity_mac import idle_seconds      as _idle_seconds

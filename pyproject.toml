@@ -21,6 +21,10 @@ dependencies = [
 
 [project.optional-dependencies]
 mac = ["pyobjc-framework-Cocoa>=10.0", "pyobjc-framework-Quartz>=10.0"]
+# Windows needs no extra packages — the sensor (activity_win.py) talks to
+# user32/kernel32 via stdlib ctypes, and autostart uses schtasks. Declared for
+# install parity so onboarding can uniformly run: pip install -e ".[<platform>]"
+win = []
 dev = ["pytest>=8.0"]
 
 [project.scripts]
