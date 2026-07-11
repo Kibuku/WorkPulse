@@ -29,6 +29,7 @@ import re
 import sqlite3
 import sys
 import threading
+import time
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -73,14 +74,36 @@ def connect(cfg: dict | None = None, *, vec: bool = False) -> sqlite3.Connection
     missing in a clearer way than a stack trace here.
     """
     p = db_path(cfg)
-    con = sqlite3.connect(p, isolation_level=None)  # autocommit; we manage txns explicitly
-    con.row_factory = sqlite3.Row
-    con.execute("PRAGMA foreign_keys = ON")
-    con.execute("PRAGMA journal_mode = WAL")
-    if vec:
-        _try_load_vec(con)
-    migrate(con)
-    return con
+    # Cold-start concurrency: the dashboard opens several connections at once
+    # (parallel /api/* calls), so on a fresh DB they race to switch journal
+    # mode to WAL and apply migrations. `busy_timeout` handles the common
+    # contention, but SQLite's deadlock-avoidance path can still return
+    # SQLITE_BUSY *without* invoking the busy handler. A bounded retry with a
+    # fresh connection converges cleanly — migrations are fast, so the DB is
+    # warm within a couple of attempts and steady-state opens never retry.
+    last_err: sqlite3.OperationalError | None = None
+    for attempt in range(6):
+        con = sqlite3.connect(p, isolation_level=None)  # autocommit; we manage txns explicitly
+        con.row_factory = sqlite3.Row
+        # busy_timeout MUST be set first — even `PRAGMA journal_mode = WAL` on a
+        # fresh file takes a brief write lock, and we want the timeout in force
+        # before that.
+        con.execute("PRAGMA busy_timeout = 5000")
+        con.execute("PRAGMA foreign_keys = ON")
+        try:
+            con.execute("PRAGMA journal_mode = WAL")
+            if vec:
+                _try_load_vec(con)
+            migrate(con)
+            return con
+        except sqlite3.OperationalError as e:
+            if "locked" not in str(e).lower():
+                raise
+            con.close()
+            last_err = e
+            time.sleep(0.05 * (attempt + 1))
+    # Exhausted retries — surface the last lock error rather than a silent hang.
+    raise last_err  # type: ignore[misc]
 
 
 def _try_load_vec(con: sqlite3.Connection) -> bool:
