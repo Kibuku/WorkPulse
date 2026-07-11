@@ -43,7 +43,7 @@ def refresh_all(*, force_categorize: bool = False, cfg: dict | None = None) -> d
     t_cluster = time.monotonic()
 
     # 2) Name any new clusters via fallback. LLM naming runs nightly via
-    # the about-george / consolidate paths; this pass is fast + offline.
+    # the profile / consolidate paths; this pass is fast + offline.
     name_results = nc.name_all(con, force_fallback=True, cfg=cfg)
     named = sum(1 for r in name_results if not r.get("skipped"))
     t_name = time.monotonic()

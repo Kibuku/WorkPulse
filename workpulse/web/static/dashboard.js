@@ -1352,7 +1352,7 @@ function renderProfile(d) {
   const summary = document.getElementById('profile-summary');
   if (!d || !d.exists) {
     panel.innerHTML =
-      `<div class="empty">No profile yet. Run <code>python -m workpulse.core.about_george update</code>, or wait for tonight&rsquo;s dream cycle.</div>`;
+      `<div class="empty">No profile yet. Run <code>python -m workpulse.core.profile update</code>, or wait for tonight&rsquo;s dream cycle.</div>`;
     meta.textContent = '';
     if (summary) summary.textContent = 'No profile yet.';
     return;

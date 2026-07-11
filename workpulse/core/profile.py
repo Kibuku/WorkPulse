@@ -1,15 +1,13 @@
 """
-about_george.py — produce brain/george-profile.md from last N days of atoms.
+profile.py — produce brain/profile.md from the last N days of atoms.
 
-This is the first step toward delivering on the original vision: a brain
-that learns *who George is and how George works*, not just a screen-time
-tracker. Step A in the post-mortem follow-up to "the dashboard is just
-tracking screen time, no knowledge grasp is taking place."
+A brain that learns *who the user is and how they work*, not just a
+screen-time tracker — the knowledge layer over the raw activity signal.
 
 Two paths:
-- LLM (when ANTHROPIC_API_KEY is set): reads skills/about-george.md,
-  hands the deterministic FINDINGS packet to the model, gets back a
-  full profile in the contract's shape.
+- LLM (when ANTHROPIC_API_KEY is set): reads skills/profile.md, hands the
+  deterministic FINDINGS packet to the model, gets back a full profile in
+  the contract's shape.
 - Fallback (zero-key): templated profile from the same FINDINGS, with
   honest sections that surface real signal even without synthesis.
   The fallback profile is genuinely readable, not a placeholder.
@@ -21,11 +19,11 @@ Public API:
         -> {path, raw, fallback, model, skill_run, findings}
 
 CLI:
-    python -m workpulse.core.about_george update              # nightly entrypoint
-    python -m workpulse.core.about_george update --days 30
-    python -m workpulse.core.about_george update --no-llm     # force fallback
-    python -m workpulse.core.about_george update --dry-run    # render to stdout, no write
-    python -m workpulse.core.about_george show                # cat the current profile
+    python -m workpulse.core.profile update              # nightly entrypoint
+    python -m workpulse.core.profile update --days 30
+    python -m workpulse.core.profile update --no-llm     # force fallback
+    python -m workpulse.core.profile update --dry-run    # render to stdout, no write
+    python -m workpulse.core.profile show                # cat the current profile
 """
 
 from __future__ import annotations
@@ -45,8 +43,8 @@ from workpulse.core import atoms, db, think
 from workpulse.common import ROOT, ensure_dir, load_config, PKG
 
 
-_SKILL_PATH    = PKG / "skills" / "about-george.md"
-_PROFILE_PATH  = ROOT / "brain"  / "george-profile.md"
+_SKILL_PATH    = PKG / "skills" / "profile.md"
+_PROFILE_PATH  = ROOT / "brain"  / "profile.md"
 _DEFAULT_MODEL = "claude-sonnet-4-5-20250929"
 
 _DEFAULTS = {
@@ -459,7 +457,7 @@ def _fallback_profile(f: dict) -> str:
         f"total_tracked_hours: {t['tracked_hours']}",
         "---",
         "",
-        "# About George",
+        "# Profile",
         "",
     ]
 
@@ -655,7 +653,7 @@ def update_profile(con: sqlite3.Connection, *,
         INSERT INTO skill_run(id, ts, skill_slug, parent_run_id, model,
                               in_tokens, out_tokens, cost_usd,
                               input, output, status)
-        VALUES (?, ?, 'about-george', NULL, ?, ?, ?, ?, ?, ?, ?)
+        VALUES (?, ?, 'profile', NULL, ?, ?, ?, ?, ?, ?, ?)
         """,
         (sr_id, ts, used_model, in_tok, out_tok,
          think._cost(in_tok, out_tok, cfg),
@@ -665,7 +663,7 @@ def update_profile(con: sqlite3.Connection, *,
         atoms.write_ai_call(con, provider="anthropic", model=used_model,
                             in_tokens=in_tok, out_tokens=out_tok,
                             cost_usd=think._cost(in_tok, out_tok, cfg),
-                            prompt_slug="skill:about-george", ts=ts)
+                            prompt_slug="skill:profile", ts=ts)
 
     if not dry_run:
         ensure_dir(_PROFILE_PATH.parent)
@@ -708,14 +706,14 @@ def _cli_update(args: argparse.Namespace) -> int:
 
 def _cli_show() -> int:
     if not _PROFILE_PATH.exists():
-        print("(no profile yet — run `python -m workpulse.core.about_george update`)")
+        print("(no profile yet — run `python -m workpulse.core.profile update`)")
         return 1
     print(_PROFILE_PATH.read_text(encoding="utf-8"))
     return 0
 
 
 def main(argv: list[str]) -> int:
-    parser = argparse.ArgumentParser(prog="wp about-george",
+    parser = argparse.ArgumentParser(prog="wp profile",
                                      description="Build the living profile.")
     sub = parser.add_subparsers(dest="cmd", required=True)
     u = sub.add_parser("update")

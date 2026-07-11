@@ -1,12 +1,12 @@
 ---
-# Parameters parsed at runtime by scripts/about_george.py.
+# Parameters parsed at runtime by workpulse/core/profile.py.
 window_days:             30   # how far back the profile looks
 include_unpinned:        true # surface unpinned captures even though noisy
 min_stream_hours_floor:  0.5  # streams below this in window don't get a section
 goal_phrase_min_length:  20   # captures shorter than this aren't goal candidates
 ---
 
-# skill: about-george
+# skill: profile
 
 You are writing a living profile of the user. Not a report of what
 happened — a description of *who they are right now*, based on the last
@@ -38,7 +38,7 @@ window: <YYYY-MM-DD to YYYY-MM-DD>
 total_tracked_hours: <number>
 ---
 
-# About George
+# Profile
 
 ## Identity
 
@@ -113,7 +113,7 @@ window: <range>
 total_tracked_hours: <n>
 ---
 
-# About George
+# Profile
 
 The brain doesn't have enough yet. <one line on what is here.>
 

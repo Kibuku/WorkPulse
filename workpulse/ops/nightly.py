@@ -2,14 +2,14 @@
 nightly.py — sleep-proof orchestrator for the once-a-day rollups.
 
 Replaces four StartCalendarInterval agents (consolidate, report-daily,
-about-george, report-weekly). Those only fired if the Mac happened to be
+profile, report-weekly). Those only fired if the Mac happened to be
 awake at the exact scheduled minute; asleep at 23:00 meant the whole day's
 rollup was silently skipped, with no catch-up. That's how the brain went
 two weeks without a consolidation.
 
 This runs HOURLY (StartInterval) and guards in code:
 
-  - Daily rollup (consolidate + report-daily + about-george): runs once
+  - Daily rollup (consolidate + report-daily + profile): runs once
     per calendar day, the first time we wake up at/after `nightly_hour`
     local. If the Mac was asleep all evening and you open it at 07:00, the
     rollup runs at 07:00 for the prior period — late, but not lost.
@@ -118,14 +118,14 @@ def run(*, force: bool = False, cfg: dict | None = None) -> dict:
     run_weekly = force or state["weekly_due"]
 
     if run_daily:
-        from workpulse.core import consolidate, report, about_george
+        from workpulse.core import consolidate, report, profile
         # Order matters: categorize is already handled by dream-refresh
         # every 30 min, so clusters are current. Consolidate first (it's
         # what _ran_today keys on), then the report, then the profile.
         consolidate.consolidate(con, cfg=cfg)
         report.daily(con, cfg=cfg, send_email=bool(
             (cfg.get("email") or {}).get("enabled")))
-        about_george.update_profile(con, cfg=cfg)
+        profile.update_profile(con, cfg=cfg)
         did["daily"] = True
 
     if run_weekly:

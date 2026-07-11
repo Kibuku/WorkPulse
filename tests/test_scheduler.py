@@ -28,7 +28,7 @@ def test_jobs_are_all_interval_based():
     asleep at the target minute. Everything must be interval-based now."""
     js = scheduler.jobs()
     slugs = [j["slug"] for j in js]
-    assert "nightly" in slugs          # replaced consolidate/report/about-george
+    assert "nightly" in slugs          # replaced consolidate/report/profile
     assert "dream-refresh" in slugs
     assert "calendar-sync" in slugs
     # Sensors are now their own daemon agents (window-server + FSEvents need
@@ -39,7 +39,7 @@ def test_jobs_are_all_interval_based():
     assert "consolidate" not in slugs
     assert "report-daily" not in slugs
     assert "report-weekly" not in slugs
-    assert "about-george" not in slugs
+    assert "profile" not in slugs
     # browser-tracker is no longer a standalone agent — it's bound into
     # activity.py's sample loop.
     assert "browser-tracker" not in slugs

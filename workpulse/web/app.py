@@ -534,10 +534,10 @@ def api_v2_health():
 
 @app.get("/api/v2/profile")
 def api_v2_profile():
-    """Read the current brain/george-profile.md (Step A — the living profile).
+    """Read the current brain/profile.md (the living profile).
     Returns the raw markdown + parsed frontmatter so the dashboard can
     render it. Empty payload if no profile has been generated yet."""
-    from workpulse.core.about_george import _PROFILE_PATH
+    from workpulse.core.profile import _PROFILE_PATH
     if not _PROFILE_PATH.exists():
         return {"exists": False, "raw": "",
                 "frontmatter": {}, "body": ""}
@@ -702,7 +702,7 @@ def api_realwork(date: Optional[str] = None):  # noqa: A002 — param name is th
     untagged_secs = 0.0
     # Per-app totals (all apps, tagged or not)
     by_app_secs: dict[str, float] = defaultdict(float)
-    # Untagged window titles — what George is doing outside known projects
+    # Untagged window titles — what the user is doing outside known projects
     by_untagged_title: dict[str, float] = defaultdict(float)
 
     for s in active:

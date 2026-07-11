@@ -76,7 +76,7 @@ def jobs() -> list[dict]:
         },
         # Sleep-proof once-a-day (and once-a-week) rollups. Runs hourly,
         # does real work only when due. Replaces the old consolidate /
-        # report-daily / report-weekly / about-george calendar jobs.
+        # report-daily / report-weekly / profile calendar jobs.
         {
             "slug":    "nightly",
             "label":   f"{_LABEL_PREFIX}.nightly",
