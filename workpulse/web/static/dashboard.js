@@ -498,8 +498,11 @@ function renderTaxonomyTree() {
           <span class="tx-node-color" style="background:${s.color}"></span>
           <span class="tx-node-label">${escapeHtml(s.label)}</span>
           <span class="tx-node-key">${escapeHtml(s.key)}</span>
+          ${s.recognize
+            ? `<span class="tx-node-recog" title="How WorkPulse auto-tags this stream">⌖ ${escapeHtml(s.recognize)}</span>`
+            : `<span class="tx-node-recog none" title="No auto-tag hint — add one to tag this stream in real time">no auto-tag</span>`}
           <div class="tx-node-actions">
-            <button class="tx-icon-btn" onclick="txBeginRename('${escapeHtml(s.key)}')">rename</button>
+            <button class="tx-icon-btn" onclick="txBeginRename('${escapeHtml(s.key)}')">edit</button>
             <button class="tx-icon-btn" onclick="txShowAddChild('${escapeHtml(s.key)}')">+ child</button>
             <button class="tx-icon-btn danger" onclick="txDelete('${escapeHtml(s.key)}','${escapeHtml(s.label)}')">×</button>
           </div>
@@ -532,10 +535,18 @@ function txShowAddChild(parentKey) {
   if (!slot) return;
   slot.innerHTML = `
     <div class="tx-add-form">
-      <input type="text" placeholder="key (e.g. uganda-memd)" id="tx-new-key-${parentKey}" />
-      <input type="text" placeholder="label (e.g. Uganda MEMD Project)" id="tx-new-label-${parentKey}" />
-      <button onclick="txAddChild('${parentKey}')" class="primary">Add</button>
-      <button onclick="txCancelAdd('${parentKey}')">Cancel</button>
+      <div class="tx-add-row">
+        <input type="text" placeholder="key (e.g. acme-web)" id="tx-new-key-${parentKey}" />
+        <input type="text" placeholder="label (e.g. Acme Web)" id="tx-new-label-${parentKey}" />
+      </div>
+      <input type="text" class="tx-recog-input"
+             placeholder="recognize by: a folder or keyword (optional)" id="tx-new-recog-${parentKey}" />
+      <div class="tx-recog-hint">A folder (<code>~/Clients/Acme</code>) or a keyword (<code>acme</code>)
+        so WorkPulse can auto-tag this stream from day one.</div>
+      <div class="tx-add-actions">
+        <button onclick="txAddChild('${parentKey}')" class="primary">Add</button>
+        <button onclick="txCancelAdd('${parentKey}')">Cancel</button>
+      </div>
     </div>`;
   setTimeout(() => document.getElementById(`tx-new-key-${parentKey}`).focus(), 30);
 }
@@ -548,10 +559,12 @@ function txCancelAdd(parentKey) {
 async function txAddChild(parentKey) {
   const key   = document.getElementById(`tx-new-key-${parentKey}`).value.trim().toLowerCase();
   const label = document.getElementById(`tx-new-label-${parentKey}`).value.trim();
+  const recog = document.getElementById(`tx-new-recog-${parentKey}`).value.trim();
   if (!key || !label) { showToast('Both key and label are required.'); return; }
   try {
     const body = { key, label };
     if (parentKey) body.parent = parentKey;
+    if (recog) body.recognize = recog;
     const r = await fetch('/api/streams', {
       method: 'POST',
       headers: {'Content-Type':'application/json'},
@@ -566,32 +579,37 @@ async function txAddChild(parentKey) {
 
 function txBeginRename(key) {
   const node = document.getElementById(`tx-node-${key}`);
-  const label = node.querySelector('.tx-node-label').textContent;
-  // Replace the label + actions with an inline edit form.
-  node.querySelector('.tx-node-label').outerHTML = `
-    <div class="tx-rename-form">
-      <input type="text" id="tx-rename-${key}" value="${escapeHtml(label)}" />
+  if (!node) return;
+  const s = ((systemSnapshot && systemSnapshot.streams) || []).find(x => x.key === key) || {};
+  // Edit label + recognize-by together. Cancel/save rebuild the whole tree.
+  node.innerHTML = `
+    <div class="tx-edit-form">
+      <input type="text" id="tx-rename-${key}" value="${escapeHtml(s.label || '')}" placeholder="label" />
+      <input type="text" class="tx-recog-input" id="tx-recog-${key}" value="${escapeHtml(s.recognize || '')}"
+             placeholder="recognize by: a folder or keyword (optional)" />
+      <div class="tx-add-actions">
+        <button class="tx-icon-btn primary" onclick="txCommitRename('${key}')">save</button>
+        <button class="tx-icon-btn" onclick="renderTaxonomyTree()">cancel</button>
+      </div>
     </div>`;
-  node.querySelector('.tx-node-actions').innerHTML = `
-    <button class="tx-icon-btn" onclick="txCommitRename('${key}')">save</button>
-    <button class="tx-icon-btn" onclick="renderTaxonomyTree()">cancel</button>`;
   setTimeout(() => {
     const inp = document.getElementById(`tx-rename-${key}`);
-    inp.focus(); inp.select();
+    if (inp) { inp.focus(); inp.select(); }
   }, 30);
 }
 
 async function txCommitRename(key) {
   const label = document.getElementById(`tx-rename-${key}`).value.trim();
+  const recog = document.getElementById(`tx-recog-${key}`).value.trim();
   if (!label) { showToast('Label cannot be empty.'); return; }
   try {
     const r = await fetch(`/api/streams/${encodeURIComponent(key)}`, {
       method: 'PATCH',
       headers: {'Content-Type':'application/json'},
-      body: JSON.stringify({ label })
+      body: JSON.stringify({ label, recognize: recog })
     });
     const d = await r.json();
-    if (!r.ok) { showToast(d.error || 'could not rename'); renderTaxonomyTree(); return; }
+    if (!r.ok) { showToast(d.error || 'could not save'); renderTaxonomyTree(); return; }
     await fetchSystem();
     renderTaxonomyTree();
   } catch (e) { showToast('Error: ' + e.message); renderTaxonomyTree(); }

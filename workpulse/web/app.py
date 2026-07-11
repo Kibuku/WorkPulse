@@ -504,6 +504,66 @@ def _write_config(cfg: dict, cfg_path: "Path") -> None:
                         encoding="utf-8")
 
 
+# ── "recognize by" hints — how a stream is auto-tagged ───────────────────────
+# A hint is either a folder (matched against a process's open files, the most
+# authoritative signal → watcher.stream_folder_roots) or a keyword (substring-
+# matched against window titles / paths → watcher.stream_path_patterns). We
+# route by shape so the wizard can offer a single "recognize by" field.
+
+def _is_folder_hint(v: str) -> bool:
+    return ("/" in v) or ("\\" in v) or v.startswith("~")
+
+
+def _recognize_for(key: str, cfg: dict) -> str:
+    """First recognize-by hint for a stream, or '' — folder roots first."""
+    w = cfg.get("watcher") or {}
+    roots = w.get("stream_folder_roots") or {}
+    if isinstance(roots, dict):
+        lst = roots.get(key) or []
+        if lst:
+            return str(lst[0])
+    for p in (w.get("stream_path_patterns") or []):
+        if isinstance(p, dict) and p.get("stream") == key:
+            return str(p.get("path") or "")
+    return ""
+
+
+def _clear_recognize(key: str, cfg: dict) -> None:
+    """Drop every recognize-by entry for a stream from both structures."""
+    w = cfg.get("watcher") or {}
+    roots = w.get("stream_folder_roots")
+    if isinstance(roots, dict):
+        roots.pop(key, None)
+    pats = w.get("stream_path_patterns")
+    if isinstance(pats, list):
+        w["stream_path_patterns"] = [
+            p for p in pats if not (isinstance(p, dict) and p.get("stream") == key)
+        ]
+
+
+def _set_recognize(key: str, value: str, cfg: dict) -> None:
+    """Replace a stream's recognize-by hint. Empty value just clears it."""
+    value = (value or "").strip()
+    _clear_recognize(key, cfg)
+    if not value:
+        return
+    w = cfg.setdefault("watcher", {}) or {}
+    if not isinstance(w, dict):
+        w = cfg["watcher"] = {}
+    if _is_folder_hint(value):
+        roots = w.get("stream_folder_roots")
+        if not isinstance(roots, dict):
+            roots = w["stream_folder_roots"] = {}
+        roots.setdefault(key, [])
+        if value not in roots[key]:
+            roots[key].append(value)
+    else:
+        pats = w.get("stream_path_patterns")
+        if not isinstance(pats, list):
+            pats = w["stream_path_patterns"] = []
+        pats.append({"path": value, "stream": key})
+
+
 @app.post("/api/streams")
 async def api_streams_add(payload: dict):
     """Body: {key, label, parent?}. Append a new stream to config.yaml.
@@ -543,6 +603,9 @@ async def api_streams_add(payload: dict):
     if parent:
         streams[key]["parent"] = parent
     cfg["streams"] = streams
+    recognize = (payload.get("recognize") or "").strip()
+    if recognize:
+        _set_recognize(key, recognize, cfg)
     _write_config(cfg, cfg_path)
     from workpulse.core.tree import breadcrumb
     return {
@@ -550,6 +613,7 @@ async def api_streams_add(payload: dict):
         "key":        key,
         "label":      label,
         "parent":     parent,
+        "recognize":  recognize,
         "color":      stream_color(key),
         "breadcrumb": breadcrumb(key, cfg),
     }
@@ -608,10 +672,13 @@ async def api_streams_patch(key: str, payload: dict):
 
     streams[key] = cur
     cfg["streams"] = streams
+    if "recognize" in payload:
+        _set_recognize(key, payload.get("recognize") or "", cfg)
     _write_config(cfg, cfg_path)
     from workpulse.core.tree import breadcrumb
     return {"ok": True, "key": key, "label": cur.get("label"),
-            "parent": cur.get("parent"), "breadcrumb": breadcrumb(key, cfg)}
+            "parent": cur.get("parent"), "recognize": _recognize_for(key, cfg),
+            "breadcrumb": breadcrumb(key, cfg)}
 
 
 @app.delete("/api/streams/{key}")
@@ -1234,6 +1301,7 @@ def _streams_payload(cfg: dict) -> list[dict]:
             "label":      rec["label"],
             "parent":     rec.get("parent"),
             "color":      stream_color(k),
+            "recognize":  _recognize_for(k, cfg),
             "ancestors":  ancestors(k, cfg),
             "breadcrumb": breadcrumb(k, cfg),
         }

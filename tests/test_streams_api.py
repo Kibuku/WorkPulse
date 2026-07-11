@@ -17,16 +17,25 @@ import workpulse.web.app as app
 
 
 def _client(tmp_path, monkeypatch):
-    """TestClient whose config/config.yaml resolves into tmp_path."""
+    """TestClient whose config resolves + loads from tmp_path (never the real
+    config.yaml). Both the /api/streams writers (resolve) and readers like
+    /api/system (load_config) are redirected so read-back is consistent."""
     cfgfile = tmp_path / "config.yaml"
     real_resolve = app.resolve
+    real_load = app.load_config
 
     def fake_resolve(rel):
         if rel == "config/config.yaml":
             return cfgfile
         return real_resolve(rel)
 
+    def fake_load_config():
+        if cfgfile.exists():
+            return yaml.safe_load(cfgfile.read_text(encoding="utf-8")) or {}
+        return real_load()
+
     monkeypatch.setattr(app, "resolve", fake_resolve)
+    monkeypatch.setattr(app, "load_config", fake_load_config)
     return TestClient(app.app), cfgfile
 
 
@@ -69,6 +78,46 @@ def test_add_child_edit_and_delete_flow(tmp_path, monkeypatch):
     assert client.delete("/api/streams/work").status_code == 200
     cfg = yaml.safe_load(cfgfile.read_text())
     assert not (cfg.get("streams") or {})
+
+
+def test_recognize_routes_folder_vs_keyword(tmp_path, monkeypatch):
+    """A folder-like hint lands in stream_folder_roots; a keyword lands in
+    stream_path_patterns — the two structures activity.py actually reads."""
+    client, cfgfile = _client(tmp_path, monkeypatch)
+
+    r = client.post("/api/streams", json={"key": "acme-web", "label": "Acme Web",
+                                          "recognize": "~/Clients/Acme"})
+    assert r.status_code == 200 and r.json()["recognize"] == "~/Clients/Acme"
+    r = client.post("/api/streams", json={"key": "contoso", "label": "Contoso",
+                                          "recognize": "contoso"})
+    assert r.status_code == 200
+
+    cfg = yaml.safe_load(cfgfile.read_text())
+    w = cfg["watcher"]
+    assert w["stream_folder_roots"]["acme-web"] == ["~/Clients/Acme"]   # folder → roots
+    assert {"path": "contoso", "stream": "contoso"} in w["stream_path_patterns"]  # keyword
+
+
+def test_recognize_readback_and_patch_replace(tmp_path, monkeypatch):
+    """/api/system exposes each stream's recognize hint, and PATCH replaces it
+    (no accumulation), including switching keyword→folder."""
+    client, cfgfile = _client(tmp_path, monkeypatch)
+    client.post("/api/streams", json={"key": "acme", "label": "Acme", "recognize": "acme"})
+
+    streams = {s["key"]: s for s in client.get("/api/system").json()["streams"]}
+    assert streams["acme"]["recognize"] == "acme"
+
+    # Replace keyword with a folder — old keyword pattern must be gone.
+    r = client.patch("/api/streams/acme", json={"recognize": "~/Work/Acme"})
+    assert r.status_code == 200 and r.json()["recognize"] == "~/Work/Acme"
+    cfg = yaml.safe_load(cfgfile.read_text())
+    assert cfg["watcher"]["stream_folder_roots"]["acme"] == ["~/Work/Acme"]
+    assert all(p.get("stream") != "acme" for p in cfg["watcher"].get("stream_path_patterns", []))
+
+    # Clearing it empties both.
+    client.patch("/api/streams/acme", json={"recognize": ""})
+    cfg = yaml.safe_load(cfgfile.read_text())
+    assert "acme" not in (cfg["watcher"].get("stream_folder_roots") or {})
 
 
 def test_validation_and_cycle_guard(tmp_path, monkeypatch):
