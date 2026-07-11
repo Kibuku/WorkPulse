@@ -121,8 +121,8 @@ def _proc_is(cmd: str, module: str) -> bool:
     daemon and the tray spawned a DUPLICATE. `module` is e.g. 'watcher'."""
     if "status" in cmd:
         return False
-    return (f"{module}.py" in cmd) or (f"scripts.{module}" in cmd) \
-        or (f"scripts/{module}.py" in cmd)
+    return (f"{module}.py" in cmd) or (f"workpulse.signals.{module}" in cmd) \
+        or (f"workpulse/signals/{module}.py" in cmd)
 
 
 def is_watcher_running() -> bool:
@@ -876,7 +876,7 @@ def api_focus(date: Optional[str] = None):  # noqa: A002
     target = _parse_date_q(date)
     del date
     events = _load_file_events(days=1, for_date=target)
-    from scripts.tree import labels as _stream_labels
+    from workpulse.core.tree import labels as _stream_labels
     streams = _stream_labels(cfg)
 
     # Last touched per stream
@@ -1014,7 +1014,7 @@ def api_system():
     """What the dashboard needs to render its chrome: secret status,
     watcher status, identity, available streams, today's date."""
     from workpulse.wp_secrets import status as secret_status, has as has_secret
-    from scripts.llm import backend_status, active_backend
+    from workpulse.core.llm import backend_status, active_backend
     cfg = load_config()
     identity = {}
     id_path = resolve("config/identity.yaml")
@@ -1052,7 +1052,7 @@ def api_system():
 
 
 def _taxonomy_is_trivial(cfg: dict) -> bool:
-    from scripts.tree import normalise
+    from workpulse.core.tree import normalise
     tree = normalise(cfg)
     if len(tree) < 2:
         return True
@@ -1065,7 +1065,7 @@ def _taxonomy_is_trivial(cfg: dict) -> bool:
 
 
 def _streams_payload(cfg: dict) -> list[dict]:
-    from scripts.tree import normalise, breadcrumb, ancestors
+    from workpulse.core.tree import normalise, breadcrumb, ancestors
     tree = normalise(cfg)
     return [
         {
@@ -1090,7 +1090,7 @@ async def api_learn(payload: dict):
     stream   — the stream key to assign, or null to mark this pattern as
                permanently untagged.
     """
-    from scripts.learning import normalize_title, _add_rule
+    from workpulse.core.learning import normalize_title, _add_rule
     cfg = load_config()
     raw_title = (payload.get("raw_title") or "").strip()
     pattern   = (payload.get("pattern")   or normalize_title(raw_title)).strip().lower()
@@ -1148,435 +1148,6 @@ async def api_set_email(payload: dict):
     cfg_path.write_text(yaml.safe_dump(cfg, sort_keys=False, allow_unicode=True),
                         encoding="utf-8")
     return {"ok": True, "email": email}
-
-
-# ── Jobs API (v1.1a Coach surface) ───────────────────────────────────────────
-
-@app.get("/api/jobs/active")
-def api_jobs_active():
-    """Active jobs with their session rollup + AI-lift opportunities +
-    cross-Job remembrance (top 3 prior Jobs with semantic overlap).
-    Runs auto-close first so the response is consistent with what the user
-    would see if they refreshed twice in a row. Drives the 'Jobs in flight'
-    card on the dashboard."""
-    from scripts.jobs import list_active, rollup, autoclose_stale_jobs
-    from scripts.remembrance import remembrance_for
-    auto_closed = autoclose_stale_jobs()   # idempotent; safe on every refresh
-    out = []
-    for rec in list_active():
-        r = rollup(rec["id"])
-        if r is None:
-            continue
-        r["stream_color"] = stream_color(r.get("stream") or "")
-        # Cross-Job remembrance — deterministic, local, no LLM in v1.
-        try:
-            r["remembrance"] = remembrance_for(rec["id"], limit=3)
-        except Exception:
-            r["remembrance"] = []
-        out.append(r)
-    return {"jobs": out, "auto_closed_count": len(auto_closed)}
-
-
-@app.get("/api/jobs/{job_id}/remembrance")
-def api_job_remembrance(job_id: str, limit: int = 3):
-    """Standalone endpoint for cross-Job remembrance. Useful for the
-    per-Job detail view and for diagnostic / debugging callers."""
-    from scripts.remembrance import remembrance_for
-    try:
-        out = remembrance_for(job_id, limit=max(1, min(int(limit), 10)))
-    except Exception as e:
-        return JSONResponse({"error": str(e)}, status_code=500)
-    return {"job_id": job_id, "matches": out}
-
-
-@app.get("/api/jobs/recent")
-def api_jobs_recent(days: int = 14, only_ended: bool = False):
-    """Jobs from the last N days, newest first. Light payload — no session
-    rollups, no lift detection. Used for the 'Recently ended' mini-list on
-    the dashboard, the Resume affordance, and the export picker."""
-    from scripts.jobs import list_all
-    days = max(1, min(int(days), 365))
-    out = []
-    for rec in list_all(days_back=days):
-        if only_ended and not rec.get("ended_at"):
-            continue
-        out.append({
-            **rec,
-            "stream_color": stream_color(rec.get("stream") or ""),
-        })
-    return {"jobs": out, "days": days}
-
-
-@app.get("/api/jobs/{job_id}/export")
-def api_job_export(job_id: str, include_titles: bool = True):
-    """Markdown digest of a Job — for sharing, archiving, or pasting into a
-    timesheet. Returns text/markdown with Content-Disposition: attachment so
-    browsers offer to save it; the dashboard also previews it inline."""
-    from scripts.jobs import export_job_markdown, get_job
-    rec = get_job(job_id)
-    if rec is None:
-        return JSONResponse({"error": "not found"}, status_code=404)
-    md = export_job_markdown(job_id, include_titles=bool(include_titles))
-    if md is None:
-        return JSONResponse({"error": "could not build export"}, status_code=500)
-    # Safe filename from the job name
-    safe = re.sub(r"[^A-Za-z0-9._-]+", "_", rec["name"]).strip("_") or "job"
-    filename = f"{safe}-{job_id}.md"
-    from fastapi.responses import PlainTextResponse
-    return PlainTextResponse(
-        md,
-        media_type="text/markdown; charset=utf-8",
-        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
-    )
-
-
-@app.post("/api/jobs/{job_id}/resume")
-async def api_job_resume(job_id: str):
-    """Re-open an ended job as a new active job (same name + stream).
-    Used by the 'Resume' button on recently-ended cards."""
-    from scripts.jobs import resume_job
-    try:
-        rec = resume_job(job_id)
-    except KeyError as e:
-        return JSONResponse({"error": str(e)}, status_code=404)
-    return {"ok": True, **rec}
-
-
-# ── v1.2b: LLM-inferred job-name suggestions (Loop B for Jobs) ───────────────
-
-@app.get("/api/jobs/suggestions")
-def api_job_suggestions():
-    """Pending job-name suggestions per stream. Cached by activity fingerprint;
-    only invokes the LLM when activity has materially changed."""
-    from scripts.job_suggester import compute_suggestions
-    try:
-        out = compute_suggestions()
-    except Exception as e:
-        return JSONResponse({"suggestions": [], "error": str(e)[:200]}, status_code=200)
-    # Stamp each with the stream color for the dashboard
-    for s in out:
-        s["stream_color"] = stream_color(s.get("stream") or "")
-    return {"suggestions": out}
-
-
-@app.post("/api/jobs/suggestions/accept")
-async def api_job_suggestion_accept(payload: dict):
-    """Body: {stream, name}. Starts the job and records the acceptance.
-    The suggestion is naturally suppressed afterwards because there's now
-    an active job in the stream."""
-    from scripts.job_suggester import accept_suggestion
-    name = (payload.get("name") or "").strip()
-    stream = (payload.get("stream") or "").strip()
-    if not name or not stream:
-        return JSONResponse({"error": "name and stream required"}, status_code=400)
-    try:
-        rec = accept_suggestion(stream, name)
-    except ValueError as e:
-        return JSONResponse({"error": str(e)}, status_code=400)
-    return {"ok": True, **rec}
-
-
-@app.post("/api/jobs/suggestions/dismiss")
-async def api_job_suggestion_dismiss(payload: dict):
-    """Body: {stream}. Suppresses the same suggestion for 4 hours,
-    or until the activity in that stream changes materially."""
-    from scripts.job_suggester import dismiss_suggestion
-    stream = (payload.get("stream") or "").strip()
-    if not stream:
-        return JSONResponse({"error": "stream required"}, status_code=400)
-    dismiss_suggestion(stream)
-    return {"ok": True}
-
-
-@app.get("/api/jobs/{job_id}")
-def api_job_detail(job_id: str):
-    """Full detail for one job — rollup + all sessions + lift opportunities."""
-    from scripts.jobs import rollup
-    r = rollup(job_id, include_sessions=True)
-    if r is None:
-        return JSONResponse({"error": "not found"}, status_code=404)
-    r["stream_color"] = stream_color(r.get("stream") or "")
-    return r
-
-
-@app.post("/api/jobs/start")
-async def api_job_start(payload: dict):
-    """Body: {name, stream, note?}. Auto-ends any existing job in the same stream."""
-    from scripts.jobs import start_job
-    try:
-        rec = start_job(
-            name=payload.get("name") or "",
-            stream=payload.get("stream"),
-            note=payload.get("note") or "",
-        )
-    except ValueError as e:
-        return JSONResponse({"error": str(e)}, status_code=400)
-    return {"ok": True, **rec}
-
-
-@app.post("/api/jobs/{job_id}/end")
-async def api_job_end(job_id: str):
-    from scripts.jobs import end_job
-    try:
-        rec = end_job(job_id)
-    except KeyError as e:
-        return JSONResponse({"error": str(e)}, status_code=404)
-    return {"ok": True, **rec}
-
-
-@app.post("/api/jobs/{job_id}/restream")
-async def api_job_restream(job_id: str, payload: dict):
-    """Body: {stream: str | null}. Move a Job under a different stream.
-    Used by the v1.7 taxonomy migration flow. Append-only — preserves the
-    Job's original start event and prior sessions; only the effective stream
-    going forward (and as folded from the event log) changes."""
-    from scripts.jobs import move_job
-    new_stream = payload.get("stream")
-    if isinstance(new_stream, str):
-        new_stream = new_stream.strip() or None
-    try:
-        rec = move_job(job_id, new_stream)
-    except KeyError as e:
-        return JSONResponse({"error": str(e)}, status_code=404)
-    except ValueError as e:
-        return JSONResponse({"error": str(e)}, status_code=400)
-    return {"ok": True, **rec}
-
-
-# ── Streams: add a new stream from the UI without editing YAML ───────────────
-
-@app.post("/api/streams")
-async def api_streams_add(payload: dict):
-    """Body: {key, label, parent?}. Append a new stream to config.yaml.
-      • key must be lowercase letters/digits/hyphens, 2–30 chars, not used.
-      • parent (optional) must reference an existing stream — used to build
-        the v1.7 stream hierarchy. Omit / null → top-level node.
-    On success the stream is written in the hierarchical {label, parent}
-    shape so the tree primitive remains the source of truth."""
-    import re as _re, yaml as _yaml
-    key    = (payload.get("key") or "").strip().lower()
-    label  = (payload.get("label") or "").strip()
-    parent = payload.get("parent")
-    parent = parent.strip().lower() if isinstance(parent, str) and parent.strip() else None
-
-    if not _re.fullmatch(r"[a-z0-9][a-z0-9\-]{1,29}", key):
-        return JSONResponse(
-            {"error": "key must be lowercase letters/digits/hyphens, 2–30 chars"},
-            status_code=400)
-    if not label:
-        return JSONResponse({"error": "label is required"}, status_code=400)
-    if len(label) > 60:
-        return JSONResponse({"error": "label too long (60 char max)"}, status_code=400)
-    if parent and parent == key:
-        return JSONResponse({"error": "stream cannot be its own parent"}, status_code=400)
-
-    cfg_path = resolve("config/config.yaml")
-    if not cfg_path.exists():
-        return JSONResponse({"error": "config.yaml not found"}, status_code=500)
-    cfg = _yaml.safe_load(cfg_path.read_text(encoding="utf-8")) or {}
-    streams = cfg.setdefault("streams", {}) or {}
-    if not isinstance(streams, dict):
-        return JSONResponse({"error": "streams block is malformed in config.yaml"},
-                            status_code=500)
-    if key in streams:
-        return JSONResponse({"error": f"stream '{key}' already exists"}, status_code=409)
-    if parent and parent not in streams:
-        return JSONResponse({"error": f"parent '{parent}' is not a known stream"},
-                            status_code=400)
-    # Always write the dict shape — keeps the file uniform once any stream
-    # acquires a parent. Existing string-shape entries can stay; the
-    # normaliser handles them.
-    streams[key] = {"label": label}
-    if parent:
-        streams[key]["parent"] = parent
-    cfg["streams"] = streams
-    cfg_path.write_text(_yaml.safe_dump(cfg, sort_keys=False, allow_unicode=True),
-                        encoding="utf-8")
-    from scripts.tree import breadcrumb
-    return {
-        "ok":         True,
-        "key":        key,
-        "label":      label,
-        "parent":     parent,
-        "color":      stream_color(key),
-        "breadcrumb": breadcrumb(key, cfg),
-    }
-
-
-@app.patch("/api/streams/{key}")
-async def api_streams_patch(key: str, payload: dict):
-    """Body: {label?, parent?}. Update a stream's display label and/or parent.
-    Refuses moves that would create a cycle (key cannot become a descendant
-    of itself)."""
-    import yaml as _yaml
-    cfg_path = resolve("config/config.yaml")
-    if not cfg_path.exists():
-        return JSONResponse({"error": "config.yaml not found"}, status_code=500)
-    cfg = _yaml.safe_load(cfg_path.read_text(encoding="utf-8")) or {}
-    streams = cfg.get("streams") or {}
-    if not isinstance(streams, dict) or key not in streams:
-        return JSONResponse({"error": f"stream '{key}' not found"}, status_code=404)
-
-    # Normalise the entry to dict shape so partial updates compose cleanly.
-    cur = streams[key]
-    if isinstance(cur, str):
-        cur = {"label": cur}
-    elif not isinstance(cur, dict):
-        cur = {"label": key}
-
-    if "label" in payload:
-        lbl = (payload["label"] or "").strip()
-        if not lbl:
-            return JSONResponse({"error": "label cannot be empty"}, status_code=400)
-        if len(lbl) > 60:
-            return JSONResponse({"error": "label too long (60 char max)"}, status_code=400)
-        cur["label"] = lbl
-
-    if "parent" in payload:
-        new_parent = payload.get("parent")
-        new_parent = (new_parent or "").strip().lower() or None
-        if new_parent == key:
-            return JSONResponse({"error": "stream cannot be its own parent"}, status_code=400)
-        if new_parent and new_parent not in streams:
-            return JSONResponse({"error": f"parent '{new_parent}' is not a known stream"},
-                                status_code=400)
-        # Cycle guard: walk up from new_parent — if we encounter `key`, abort.
-        # We use the in-memory `streams` to traverse, treating strings as
-        # parent-less.
-        cur_p = new_parent
-        seen = set()
-        while cur_p:
-            if cur_p == key:
-                return JSONResponse(
-                    {"error": f"cannot make '{key}' a descendant of itself"},
-                    status_code=400)
-            if cur_p in seen:
-                break
-            seen.add(cur_p)
-            up = streams.get(cur_p)
-            cur_p = up.get("parent") if isinstance(up, dict) else None
-        if new_parent:
-            cur["parent"] = new_parent
-        else:
-            cur.pop("parent", None)
-
-    streams[key] = cur
-    cfg["streams"] = streams
-    cfg_path.write_text(_yaml.safe_dump(cfg, sort_keys=False, allow_unicode=True),
-                        encoding="utf-8")
-    from scripts.tree import breadcrumb
-    return {"ok": True, "key": key, "label": cur.get("label"),
-            "parent": cur.get("parent"), "breadcrumb": breadcrumb(key, cfg)}
-
-
-@app.delete("/api/streams/{key}")
-def api_streams_delete(key: str):
-    """Remove a stream. Refused if it has children OR any Job attached.
-    Caller can move/end Jobs first via the migration UI, then retry."""
-    import yaml as _yaml
-    cfg_path = resolve("config/config.yaml")
-    if not cfg_path.exists():
-        return JSONResponse({"error": "config.yaml not found"}, status_code=500)
-    cfg = _yaml.safe_load(cfg_path.read_text(encoding="utf-8")) or {}
-    streams = cfg.get("streams") or {}
-    if key not in streams:
-        return JSONResponse({"error": f"stream '{key}' not found"}, status_code=404)
-
-    # Children check (depends on parent links in the on-disk shape).
-    kids = [k for k, v in streams.items()
-            if isinstance(v, dict) and v.get("parent") == key]
-    if kids:
-        return JSONResponse(
-            {"error": f"stream '{key}' has children: {kids}. Re-parent or delete them first."},
-            status_code=400)
-
-    # Job attachment check.
-    from scripts.jobs import list_all
-    attached = [j["id"] for j in list_all(days_back=3650, cfg=cfg)
-                if j.get("stream") == key]
-    if attached:
-        return JSONResponse(
-            {"error": f"stream '{key}' has {len(attached)} job(s) attached. Re-home them first."},
-            status_code=400)
-
-    del streams[key]
-    cfg["streams"] = streams
-    cfg_path.write_text(_yaml.safe_dump(cfg, sort_keys=False, allow_unicode=True),
-                        encoding="utf-8")
-    return {"ok": True, "deleted": key}
-
-
-# ── Plans API (v1.7 Morning Plan — intent capture) ───────────────────────────
-
-@app.get("/api/plans/today")
-def api_plans_today():
-    """Today's plan, if one has been written. Items are enriched in-place
-    with reconciliation fields (actual_minutes_today / actual_minutes_total)
-    so the dashboard can show planned-vs-actual without a second request.
-    Returns the empty-state shape when no plan exists yet."""
-    from datetime import date as _date
-    from scripts.plans import plan_for, reconcile
-    today = _date.today()
-    p = plan_for(today)
-    if p is None:
-        return {"exists": False, "date": today.isoformat(),
-                "items": [], "created_at": None,
-                "planned_minutes": 0, "actual_minutes_today": 0.0}
-    rec = reconcile(today, p.get("items") or [])
-    return {"exists": True, **p,
-            "planned_minutes":      rec["planned_minutes"],
-            "actual_minutes_today": rec["actual_minutes_today"]}
-
-
-@app.get("/api/plans/suggestions")
-def api_plans_suggestions():
-    """Carry-over candidates for the morning plan: in-flight jobs, jobs touched
-    yesterday, and jobs touched in the past week. UI decides what to show."""
-    from scripts.plans import suggestions
-    return suggestions()
-
-
-@app.post("/api/plans/today")
-async def api_plans_save_today(payload: dict):
-    """Body: {items: [{name, planned_minutes?, job_id?, stream?, section?, done?}, ...]}.
-
-    Any item without a job_id gets a fresh Job created on the spot (so the
-    rest of the day's activity rolls up under it). Returns the written plan
-    with all items now job-linked where possible.
-    """
-    from datetime import date as _date
-    from scripts.plans import materialise_jobs, save_plan_for, plan_for
-    items = list(payload.get("items") or [])
-    # Normalise + drop empties.
-    cleaned: list[dict] = []
-    for raw in items:
-        if not isinstance(raw, dict):
-            continue
-        name = (raw.get("name") or "").strip()
-        if not name:
-            continue
-        cleaned.append({
-            "name":            name,
-            "done":            bool(raw.get("done")),
-            "planned_minutes": (int(raw["planned_minutes"])
-                                if raw.get("planned_minutes") not in (None, "", 0)
-                                else None),
-            "job_id":          (raw.get("job_id") or None),
-            "stream":          (raw.get("stream") or None),
-            "section":         ("carried" if raw.get("section") == "carried"
-                                else "new"),
-        })
-    today = _date.today()
-    cleaned = materialise_jobs(today, cleaned)
-    save_plan_for(today, cleaned)
-    out = plan_for(today) or {}
-    from scripts.plans import reconcile
-    rec = reconcile(today, out.get("items") or [])
-    # `exists: True` mirrors the shape of GET /api/plans/today so the dashboard
-    # renderer doesn't fall into its empty-state branch right after a save.
-    return {"ok": True, "exists": True, **out,
-            "planned_minutes":      rec["planned_minutes"],
-            "actual_minutes_today": rec["actual_minutes_today"]}
 
 
 # ── dashboard HTML ────────────────────────────────────────────────────────────

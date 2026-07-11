@@ -114,50 +114,23 @@ def _tag_by_open_files(pid: int, cfg: dict) -> str | None:
 
 
 def _tag_stream(title: str, exe_path: str, cfg: dict, pid: int = 0) -> str | None:
-    """Match stream from (1) open file paths under a known stream root,
-    then (2) window title / exe path patterns, then (3) stream-name keywords,
-    then (4) learned rules (Loop B), then (5) Word-doc content classification."""
+    """Deterministic, config-driven pre-tagging only: (1) a file open under a
+    known project folder, then (2) a title/exe substring match against
+    configured patterns. Anything left untagged (stream=None) is attributed
+    downstream by the Categorizer, which scores whole clusters against calendar,
+    captures, and file events — a far stronger signal than a per-sample guess."""
     # 1. Most authoritative: process has a file open under a known project folder
     by_files = _tag_by_open_files(pid, cfg)
     if by_files:
         return by_files
 
-    # 2. Fall back to title / exe substring match
+    # 2. Fall back to title / exe substring match against configured patterns
     patterns = cfg["watcher"].get("stream_path_patterns", [])
     haystack = f"{title} {exe_path}".lower()
     for p in patterns:
         needle = p["path"].replace("\\", "/").lower()
         if needle in haystack or needle.replace("/", " ") in haystack:
             return p["stream"]
-    # 3. Bare stream keywords (e.g. window title "Water Kiosk.xlsx")
-    from scripts.tree import labels as _stream_labels
-    for key, label in _stream_labels(cfg).items():
-        if key.replace("-", " ") in haystack or label.lower() in haystack:
-            return key
-
-    # 4. Learned rules (Loop B) — patterns the system acquired from prior AI
-    #    classifications. Substring match on normalized title.
-    try:
-        from scripts.learning import match_learned
-        learned = match_learned(title, cfg)
-        if learned:
-            return learned
-    except Exception:
-        pass
-
-    # 5. Content classification for Word — read the open .docx and ask Claude.
-    #    Only fires when nothing else matched, and result is cached per file revision.
-    if pid and exe_path and "winword" in exe_path.lower():
-        for f in _open_file_paths(pid):
-            if f.endswith(".docx") and "~$" not in f:
-                try:
-                    from scripts.doctag import classify_doc
-                    tag = classify_doc(f, cfg)
-                    if tag:
-                        return tag
-                except Exception:
-                    pass
-                break  # only classify the first non-temp .docx
     return None
 
 
@@ -315,25 +288,10 @@ def run() -> None:
                 last_checkpoint = now
                 _maybe_capture_browser(app, is_idle)
             elif not current.matches(app, title, is_idle):
-                # Window changed — close previous, start new
-                rec = current.to_record()
-                _append(rec, cfg)
-                # Loop B: if the closed session was untagged, not idle, and the
-                # user spent meaningful time on it, ask Claude to classify it.
-                # Result lands in learned_tags.json so the next encounter is
-                # tagged locally without an API call.
-                if (
-                    rec.get("stream") is None
-                    and not rec.get("idle")
-                    and rec.get("duration_s", 0) >= 30
-                    and rec.get("title")
-                ):
-                    try:
-                        from scripts.learning import classify_async
-                        classify_async(rec["title"], rec.get("app", ""),
-                                       rec["duration_s"], cfg)
-                    except Exception:
-                        pass
+                # Window changed — close previous, start new. Untagged sessions
+                # are left for the Categorizer; the sensor does not call out to
+                # an LLM on the hot path.
+                _append(current.to_record(), cfg)
                 current = Session(app, exe_path, title, stream, is_idle)
                 last_checkpoint = now
                 # Browser capture bound to the session start (not idle) —
