@@ -1,0 +1,6 @@
+__pycache__/
+*.pyc
+inbox.db
+inbox.db-*
+.venv/
+*.md
