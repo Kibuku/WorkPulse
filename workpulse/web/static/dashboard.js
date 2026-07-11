@@ -1,0 +1,2350 @@
+// ── State ──────────────────────────────────────────────────────────────────
+let watcherRunning = false;
+let aiEnabled = false;
+let currentDate = null;       // YYYY-MM-DD; null = today
+let availableStreams = [];    // [{key, label, color}]
+let todayISO = null;
+
+const TITLE_CASE = s => (s || '').replace(/-/g,' ').replace(/\b\w/g, c => c.toUpperCase());
+
+function fmtMins(m) {
+  if (m == null) return '—';
+  m = Math.round(m);
+  if (m < 1) return '<1 min';
+  if (m < 60) return m + ' min';
+  const h = Math.floor(m / 60), mm = m % 60;
+  return mm ? `${h}h ${mm}m` : `${h}h`;
+}
+
+function escapeHtml(s) {
+  // Also normalise em/en dashes to a plain hyphen — the dashboard should
+  // never show "—". This covers static strings AND LLM-generated content
+  // (profile, cluster summaries, reports) since nearly everything rendered
+  // passes through here. A surrounding " — " collapses to " - ".
+  return (s || '')
+    .replace(/\s*[—–]\s*/g, ' - ')
+    .replace(/[&<>"']/g, c =>
+      ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+}
+
+function activeDate() { return currentDate || todayISO; }
+function isViewingToday() { return !currentDate || currentDate === todayISO; }
+
+function relativeDateLabel(iso) {
+  if (!iso || !todayISO) return iso || '';
+  const t = new Date(todayISO + 'T12:00:00');
+  const d = new Date(iso + 'T12:00:00');
+  const diff = Math.round((t - d) / 86400000);
+  if (diff === 0) return 'Today';
+  if (diff === 1) return 'Yesterday';
+  if (diff > 1 && diff < 7) return d.toLocaleDateString(undefined, {weekday:'long'});
+  return d.toLocaleDateString(undefined, {weekday:'short', month:'short', day:'numeric'});
+}
+
+function showToast(msg) {
+  const t = document.getElementById('toast');
+  t.textContent = msg;
+  t.classList.add('show');
+  clearTimeout(t._timer);
+  t._timer = setTimeout(() => t.classList.remove('show'), 2400);
+}
+
+function setHeaderDate() {
+  const iso = activeDate();
+  const d = iso ? new Date(iso + 'T12:00:00') : new Date();
+  document.getElementById('date').textContent =
+    d.toLocaleDateString(undefined, {weekday:'long', month:'long', day:'numeric'});
+}
+
+// ── System + identity ──────────────────────────────────────────────────────
+let systemSnapshot = null;  // stash for openSettings()
+
+async function fetchSystem() {
+  const r = await fetch('/api/system');
+  const d = await r.json();
+  systemSnapshot = d;
+  watcherRunning = d.watcher_running;
+  aiEnabled = d.ai_enabled;
+  availableStreams = d.streams || [];
+  todayISO = d.today;
+
+  document.getElementById('pulse').className = 'pulse' + (watcherRunning ? '' : ' off');
+  document.getElementById('foot-status').textContent =
+    watcherRunning ? 'Watcher running' : 'Watcher stopped';
+  document.getElementById('toggle-btn').textContent =
+    watcherRunning ? 'Pause' : 'Start';
+
+  const suffix = d.identity && d.identity.actor_label
+    ? '— ' + d.identity.actor_label : '';
+  document.getElementById('actor-suffix').textContent = suffix;
+
+  // AI banner — tailored to what's actually missing
+  const banner = document.getElementById('ai-banner');
+  const detail = document.getElementById('ai-banner-detail');
+  if (aiEnabled) {
+    banner.style.display = 'none';
+  } else {
+    banner.style.display = 'flex';
+    const llm = d.llm || {};
+    if (llm.ollama && llm.ollama.installed && !llm.ollama.model_ready) {
+      detail.innerHTML = `Ollama is running but model <code>${llm.ollama.want_model}</code> isn't pulled yet. Run: <code>ollama pull ${llm.ollama.want_model}</code>, or add an Anthropic key in Settings.`;
+    } else {
+      detail.textContent = 'Add an Anthropic API key in Settings, or install Ollama for free local AI.';
+    }
+  }
+
+  document.getElementById('anthropic-status').className =
+    'status-dot' + (d.secrets.anthropic_key.configured ? '' : ' off');
+  document.getElementById('smtp-status').className =
+    'status-dot' + (d.secrets.smtp_password.configured ? '' : ' off');
+
+  // Taxonomy wizard auto-open (once per browser session while tree is trivial)
+  maybeAutoOpenTaxonomy();
+}
+
+async function toggleWatcher() {
+  const ep = watcherRunning ? '/api/watcher/stop' : '/api/watcher/start';
+  await fetch(ep, { method: 'POST' });
+  await fetchSystem();
+}
+
+// ── Date navigation ────────────────────────────────────────────────────────
+function renderDateBar() {
+  const bar = document.getElementById('datebar');
+  if (!todayISO) { bar.innerHTML = ''; return; }
+  const yesterday = new Date(todayISO + 'T12:00:00');
+  yesterday.setDate(yesterday.getDate() - 1);
+  const yesterdayISO = yesterday.toISOString().slice(0,10);
+
+  const chip = (iso, label) => {
+    const active = (iso === activeDate());
+    return `<button class="date-chip ${active?'active':''}" onclick="selectDate('${iso}')">${label}</button>`;
+  };
+  bar.innerHTML =
+    chip(todayISO, 'Today') +
+    chip(yesterdayISO, 'Yesterday') +
+    `<span class="date-chip ${currentDate && currentDate !== todayISO && currentDate !== yesterdayISO ? 'active' : ''}">
+       <input type="date" max="${todayISO}" value="${currentDate || todayISO}"
+              onchange="selectDate(this.value)" />
+     </span>`;
+}
+
+function selectDate(iso) {
+  if (!iso) return;
+  currentDate = (iso === todayISO) ? null : iso;
+  renderDateBar();
+  setHeaderDate();
+  refreshDayPanels();
+}
+
+async function fetchRealWork() {
+  const url = '/api/realwork' + (currentDate ? '?date=' + currentDate : '');
+  let d;
+  try {
+    const r = await fetch(url);
+    d = await r.json();
+  } catch (e) {
+    document.getElementById('hero-headline').textContent = 'Could not load activity data.';
+    return;
+  }
+
+  const whenLabel = isViewingToday() ? 'today' : 'on ' + relativeDateLabel(d.date).toLowerCase();
+  const whenStart = isViewingToday() ? 'You did' : 'On ' + relativeDateLabel(d.date) + ', you did';
+
+  // Empty-state hero
+  if (d.no_data || !d.total_active_minutes) {
+    document.getElementById('hero-headline').textContent =
+      isViewingToday() ? 'Quiet day so far.' : `No tracked activity on ${relativeDateLabel(d.date)}.`;
+    document.getElementById('hero-sub').textContent =
+      isViewingToday() ? 'Once you start working in a tracked app, this view will fill up.'
+                       : 'Either WorkPulse wasn\'t running, or no work happened.';
+    document.getElementById('donut-panel').innerHTML = '<div class="empty">No focused activity.</div>';
+    document.getElementById('attn-panel').innerHTML = '<div class="empty">Nothing to review.</div>';
+    document.getElementById('apps-panel').innerHTML = '<div class="empty">No apps tracked.</div>';
+    document.getElementById('sessions-panel').innerHTML = '<div class="empty">No sessions.</div>';
+    renderTimeline([]);
+    return;
+  }
+
+  // ── Hero ──────────────────────────────────────────────────────────────
+  const total = fmtMins(d.total_active_minutes);
+  const top = d.by_stream && d.by_stream[0];
+  let head = isViewingToday()
+    ? `You did <span class="strong">${total}</span> of focused work today`
+    : `On <span class="strong">${relativeDateLabel(d.date)}</span> you did <span class="strong">${total}</span> of focused work`;
+  if (top) head += `, mostly on <span class="strong">${TITLE_CASE(top.stream)}</span> (${fmtMins(top.minutes)}).`;
+  else head += '.';
+  document.getElementById('hero-headline').innerHTML = head;
+
+  const projCount = (d.by_stream || []).length;
+  const subBits = [];
+  if (projCount) subBits.push(`${projCount} project${projCount===1?'':'s'} active`);
+  if (d.untagged_minutes) subBits.push(`${fmtMins(d.untagged_minutes)} uncategorized`);
+  else subBits.push('fully tagged');
+  document.getElementById('hero-sub').textContent = subBits.join(' · ');
+
+  // ── Donut + legend ────────────────────────────────────────────────────
+  const streams = d.by_stream || [];
+  let cum = 0;
+  const slices = streams.length
+    ? streams.map(s => {
+        const a = cum, b = cum + s.pct; cum = b;
+        return `${s.color} ${a}% ${b}%`;
+      }).join(', ')
+    : 'var(--border) 0% 100%';
+  const legend = streams.length
+    ? streams.map(s => `
+        <div class="lg-row">
+          <span class="lg-dot" style="background:${s.color}"></span>
+          <span class="lg-name">${escapeHtml(s.stream.replace(/-/g,' '))}</span>
+          <span class="lg-min">${fmtMins(s.minutes)}</span>
+          <span class="lg-pct">${s.pct}%</span>
+        </div>`).join('')
+    : '<div class="empty">No tagged streams yet.</div>';
+  document.getElementById('donut-panel').innerHTML = `
+    <div class="donut-wrap">
+      <div class="donut" style="background: conic-gradient(${slices})">
+        <div class="donut-c">
+          <div class="num">${total}</div>
+          <div class="lbl">focused</div>
+        </div>
+      </div>
+      <div class="legend">${legend}</div>
+    </div>`;
+
+  // ── Untagged-time alert (v1.7) ────────────────────────────────────────
+  // Fires when today's untagged time crosses the threshold. Reuses the
+  // same Tag-as dropdown UX as the lower "Needs your attention" panel but
+  // makes the worst offenders impossible to miss.
+  const UNTAGGED_ALERT_MIN = 20;
+  const alertEl = document.getElementById('untagged-alert');
+  const untaggedMin = d.untagged_minutes || 0;
+  const topUntagged = (d.untagged_windows || []).filter(w => w.minutes >= 3).slice(0, 3);
+  if (untaggedMin >= UNTAGGED_ALERT_MIN && topUntagged.length > 0) {
+    document.getElementById('untagged-alert-text').textContent =
+      `${fmtMins(untaggedMin)} untagged today — tag the patterns below so future activity rolls up.`;
+    document.getElementById('untagged-alert-items').innerHTML = topUntagged.map((w, i) => `
+      <div class="alert-row">
+        <span class="alert-title" title="${escapeHtml(w.title)}">${escapeHtml(w.title)}</span>
+        <span class="alert-min">${fmtMins(w.minutes)}</span>
+        <div class="attn-tag">
+          <button class="tag-btn" onclick="toggleTagMenu('alert-${i}')">Tag as ▾</button>
+          <div class="tag-menu" id="tag-menu-alert-${i}">
+            ${availableStreams.map(s => `
+              <div class="tag-opt" onclick="learn('${escapeHtml(w.title)}', '${s.key}')">
+                <span class="lg-dot" style="background:${s.color}"></span>
+                <span>${escapeHtml(s.label)}</span>
+              </div>`).join('')}
+            <div class="tag-opt ignore" onclick="learn('${escapeHtml(w.title)}', null)">
+              Never tag this (ignore)
+            </div>
+          </div>
+        </div>
+      </div>`).join('');
+    alertEl.style.display = '';
+  } else {
+    alertEl.style.display = 'none';
+  }
+
+  // ── Needs your attention (with Loop A tag-as dropdown) ───────────────
+  const attn = (d.untagged_windows || []).filter(w => w.minutes >= 1).slice(0, 10);
+  if (attn.length === 0) {
+    const msg = aiEnabled
+      ? 'Nothing untagged worth reviewing. Auto-tagging is doing its job.'
+      : 'Nothing untagged yet. As windows show up here, tag them once and WorkPulse remembers.';
+    document.getElementById('attn-panel').innerHTML = `<div class="empty">${msg}</div>`;
+  } else {
+    document.getElementById('attn-panel').innerHTML = attn.map((w, i) => `
+        <div class="attn-row">
+          <div class="attn-title" title="${escapeHtml(w.title)}">${escapeHtml(w.title)}</div>
+          <div class="attn-min">${fmtMins(w.minutes)}</div>
+          <div class="attn-tag">
+            <button class="tag-btn" onclick="toggleTagMenu(${i})">Tag as ▾</button>
+            <div class="tag-menu" id="tag-menu-${i}">
+              ${availableStreams.map(s => `
+                <div class="tag-opt" onclick="learn('${escapeHtml(w.title)}', '${s.key}')">
+                  <span class="lg-dot" style="background:${s.color}"></span>
+                  <span>${escapeHtml(s.label)}</span>
+                </div>`).join('')}
+              <div class="tag-opt ignore" onclick="learn('${escapeHtml(w.title)}', null)">
+                Never tag this (ignore)
+              </div>
+            </div>
+          </div>
+        </div>`).join('');
+  }
+
+  // ── Apps used (compact) ───────────────────────────────────────────────
+  const apps = (d.by_app || []).slice(0, 8);
+  if (apps.length === 0) {
+    document.getElementById('apps-panel').innerHTML = '<div class="empty">No apps tracked yet.</div>';
+  } else {
+    const maxMin = apps[0].minutes || 1;
+    document.getElementById('apps-panel').innerHTML = apps.map(a => `
+      <div class="app-row">
+        <div class="app-name">${escapeHtml(a.app)}</div>
+        <div class="app-track"><div class="app-fill" style="width:${Math.round(a.minutes/maxMin*100)}%"></div></div>
+        <div class="app-min">${fmtMins(a.minutes)}</div>
+      </div>`).join('');
+  }
+
+  // ── Hidden detail: every window visit ─────────────────────────────────
+  const sessions = d.recent_sessions || [];
+  if (sessions.length === 0) {
+    document.getElementById('sessions-panel').innerHTML = '<div class="empty">No sessions yet.</div>';
+  } else {
+    const rows = sessions.map(s => {
+      const dur = s.duration_s < 60 ? `${Math.round(s.duration_s)}s` : `${s.duration_min}m`;
+      const chip = s.stream
+        ? `<span class="chip" style="background:${s.color}">${escapeHtml(s.stream.replace(/-/g,' '))}</span>`
+        : '<span class="chip muted">untagged</span>';
+      return `<tr>
+        <td class="mono">${s.start}</td>
+        <td class="mono">${dur}</td>
+        <td>${chip}</td>
+        <td class="mono">${escapeHtml(s.app)}</td>
+        <td class="title-cell" title="${escapeHtml(s.title)}">${escapeHtml(s.title)}</td>
+      </tr>`;
+    }).join('');
+    document.getElementById('sessions-panel').innerHTML = `
+      <table class="session-table">
+        <thead><tr><th>Start</th><th>Duration</th><th>Project</th><th>App</th><th>Window</th></tr></thead>
+        <tbody>${rows}</tbody>
+      </table>`;
+  }
+
+  // ── Timeline (24-hour strip) ──────────────────────────────────────────
+  renderTimeline(sessions);
+}
+
+function renderTimeline(sessions) {
+  // Bucket by hour-of-day. Color each hour by its dominant stream.
+  const buckets = Array.from({length:24}, () => ({total:0, byStream:{}, color:null}));
+  sessions.forEach(s => {
+    if (!s.start || !s.duration_s) return;
+    const hh = parseInt(s.start.slice(0,2), 10);
+    if (isNaN(hh) || hh < 0 || hh > 23) return;
+    const m = s.duration_s / 60;
+    buckets[hh].total += m;
+    if (s.stream) {
+      const cur = buckets[hh].byStream[s.stream] || {min:0, color:s.color};
+      cur.min += m;
+      buckets[hh].byStream[s.stream] = cur;
+    }
+  });
+  buckets.forEach(b => {
+    const top = Object.values(b.byStream).sort((a,b)=>b.min-a.min)[0];
+    b.color = top ? top.color : '#c8c5bb';
+  });
+  const maxMin = Math.max(1, ...buckets.map(b => b.total));
+  const tl = document.getElementById('timeline');
+  const ax = document.getElementById('tl-axis');
+  tl.innerHTML = ''; ax.innerHTML = '';
+  buckets.forEach((b, h) => {
+    const hStr = h.toString().padStart(2,'0');
+    if (b.total > 0) {
+      const heightPct = Math.max(8, Math.round(b.total / maxMin * 100));
+      const tip = `${hStr}:00 · ${fmtMins(b.total)}`;
+      tl.insertAdjacentHTML('beforeend',
+        `<div class="tl-h" title="${tip}"><div class="tl-bar" style="background:${b.color};height:${heightPct}%"></div></div>`);
+    } else {
+      tl.insertAdjacentHTML('beforeend',
+        `<div class="tl-h" title="${hStr}:00"><div class="tl-empty"></div></div>`);
+    }
+    ax.insertAdjacentHTML('beforeend',
+      `<div class="tl-tick">${h % 3 === 0 ? hStr : ''}</div>`);
+  });
+}
+
+async function fetchLastActive() {
+  const url = '/api/focus' + (currentDate ? '?date=' + currentDate : '');
+  let d;
+  try {
+    const r = await fetch(url);
+    d = await r.json();
+  } catch (e) {
+    document.getElementById('last-active').innerHTML = '<div class="empty">Unavailable.</div>';
+    return;
+  }
+  const list = (d.last_touched || []).filter(s => s.last_ago);
+  const emptyMsg = isViewingToday()
+    ? 'No project files touched yet today.'
+    : 'No file activity on this day.';
+  document.getElementById('last-active').innerHTML = list.length === 0
+    ? `<div class="empty">${emptyMsg}</div>`
+    : list.map(s => `
+        <div class="la-row">
+          <span class="lg-dot" style="background:${s.color}"></span>
+          <span class="la-name">${escapeHtml(s.label)}</span>
+          <span class="la-ago">${escapeHtml(s.last_ago)}</span>
+        </div>`).join('');
+}
+
+async function fetchAI() {
+  const url = '/api/ai' + (currentDate ? '?date=' + currentDate : '');
+  let d;
+  try {
+    const r = await fetch(url);
+    d = await r.json();
+  } catch (e) {
+    document.getElementById('ai-panel').innerHTML = '<div class="empty">Unavailable.</div>';
+    return;
+  }
+  if (!d.count) {
+    document.getElementById('ai-panel').innerHTML =
+      '<div class="empty">No AI sessions logged for this day.</div>';
+    return;
+  }
+  document.getElementById('ai-panel').innerHTML = `
+    <div class="ai-strip">
+      <div class="ai-stat"><div class="num">${d.count}</div><div class="lbl">sessions</div></div>
+      <div class="ai-stat"><div class="num">$${d.total_cost.toFixed(2)}</div><div class="lbl">spent</div></div>
+      <div class="ai-stat"><div class="num">${(d.total_tokens/1000).toFixed(1)}k</div><div class="lbl">tokens</div></div>
+    </div>`;
+}
+
+// ── Jobs in flight (v1.1a Coach surface) ───────────────────────────────────
+
+function fmtRelative(iso) {
+  if (!iso) return '';
+  try {
+    const t = new Date(iso);
+    const diffMin = Math.floor((Date.now() - t.getTime()) / 60000);
+    if (diffMin < 2) return 'just now';
+    if (diffMin < 60) return `${diffMin} min ago`;
+    const diffH = Math.floor(diffMin / 60);
+    if (diffH < 24) return `${diffH}h ago`;
+    const diffD = Math.floor(diffH / 24);
+    if (diffD === 1) return 'yesterday';
+    if (diffD < 7) return `${diffD} days ago`;
+    return t.toLocaleDateString(undefined, {month:'short', day:'numeric'});
+  } catch (e) { return ''; }
+}
+
+function isJobPaused(job) {
+  if (!job.last_active) return job.session_count === 0 ? false : true;
+  const diffMs = Date.now() - new Date(job.last_active).getTime();
+  return diffMs > 30 * 60 * 1000;   // >30 min since last session = paused
+}
+
+async function fetchJobs() {
+  let active = [], ended = [], suggestions = [];
+  try {
+    const [aResp, rResp, sResp] = await Promise.all([
+      fetch('/api/jobs/active'),
+      fetch('/api/jobs/recent?days=14&only_ended=true'),
+      fetch('/api/jobs/suggestions'),
+    ]);
+    active = (await aResp.json()).jobs || [];
+    ended  = (await rResp.json()).jobs || [];
+    suggestions = (await sResp.json()).suggestions || [];
+  } catch (e) {
+    document.getElementById('jobs-panel').innerHTML =
+      '<div class="empty">Could not load jobs.</div>';
+    return;
+  }
+  renderSuggestions(suggestions);
+  const panel = document.getElementById('jobs-panel');
+  if (active.length === 0) {
+    panel.innerHTML =
+      '<div class="empty">No jobs in flight. Hit "+ Start a job" to track a specific piece of work.</div>';
+  } else {
+    panel.innerHTML = active.map(renderJobCard).join('');
+  }
+  // Recently-ended mini-list (newest first, cap at 5)
+  const reBlock = document.getElementById('recently-ended-block');
+  const recent = ended.slice(0, 5);
+  if (recent.length === 0) {
+    reBlock.innerHTML = '';
+  } else {
+    reBlock.innerHTML = `
+      <div class="re-block">
+        <div class="re-head">Recently ended</div>
+        ${recent.map(j => `
+          <div class="re-row">
+            <span class="lg-dot" style="background:${j.stream_color}"></span>
+            <div class="re-name">
+              ${escapeHtml(j.name)}
+              ${j.ended_by === 'auto' ? '<span class="re-auto-tag">auto-ended</span>' : ''}
+            </div>
+            <div class="re-meta">ended ${fmtRelative(j.ended_at)}</div>
+            <div class="re-actions">
+              <button onclick="openExport('${escapeHtml(j.id)}', '${escapeHtml(j.name)}')">Export</button>
+              <button onclick="resumeJob('${escapeHtml(j.id)}', '${escapeHtml(j.name)}')">Resume</button>
+            </div>
+          </div>`).join('')}
+      </div>`;
+  }
+}
+
+function renderJobCard(job) {
+  const total = fmtMins(job.total_minutes);
+  const started = fmtRelative(job.created_at);
+  const sessions = job.session_count || 0;
+  const paused = isJobPaused(job);
+
+  // Apps line: top 4
+  const appsLine = (job.apps || []).slice(0, 4).map(a =>
+    `<span class="app-tag"><strong>${escapeHtml(a.app)}</strong> ${fmtMins(a.minutes)}</span>`
+  ).join('');
+
+  // Cross-Job remembrance block — surfaces prior Jobs with semantic overlap.
+  // Local-only, deterministic match. Click a row → opens that Job's export
+  // (which contains the full session breakdown + apps + LLM narrative if
+  // a key was configured at export time).
+  let remBlock = '';
+  const rem = job.remembrance || [];
+  if (rem.length > 0) {
+    remBlock = `<div class="job-rem">
+      <div class="job-rem-head">Worth knowing from before</div>
+      ${rem.map(m => `
+        <div class="rem-item" onclick="openExport('${escapeHtml(m.job_id)}', '${escapeHtml(m.name)}')">
+          <div class="rem-name">${escapeHtml(m.name)}</div>
+          <div class="rem-meta">
+            ${m.total_minutes > 0 ? fmtMins(m.total_minutes) + ' · ' : ''}${escapeHtml(m.reason)}
+          </div>
+        </div>`).join('')}
+    </div>`;
+  }
+
+  // Lift block
+  let liftBlock = '';
+  if (sessions === 0) {
+    liftBlock = `<div class="job-lift">
+      <div class="job-lift-head">Where AI could lift this job</div>
+      <div class="job-lift-empty">No activity logged inside this job yet. Once you start working, AI-lift opportunities appear here.</div>
+    </div>`;
+  } else if ((job.lift || []).length === 0) {
+    liftBlock = `<div class="job-lift">
+      <div class="job-lift-head">Where AI could lift this job</div>
+      <div class="job-lift-empty">Nothing stands out yet. Lift opportunities surface as the session data builds up.</div>
+    </div>`;
+  } else {
+    liftBlock = `<div class="job-lift">
+      <div class="job-lift-head">Where AI could lift this job</div>
+      ${job.lift.map(l => `
+        <div class="lift-item">
+          <div class="lift-title">${escapeHtml(l.title)}</div>
+          <div class="lift-suggest">${escapeHtml(l.suggestion)}</div>
+        </div>`).join('')}
+    </div>`;
+  }
+
+  const jic = workIcon(job.name);
+  return `
+    <div class="job-card" data-job="${escapeHtml(job.id)}" style="--stream-color:${job.stream_color}">
+      <div class="job-head">
+        <span class="job-icon">${jic}</span>
+        <div class="job-name">${escapeHtml(job.name)}</div>
+        <span class="chip" style="background:${job.stream_color}">${escapeHtml((job.stream||'').replace(/-/g,' '))}</span>
+        <div class="job-actions">
+          <button class="job-end-btn" onclick="openExport('${escapeHtml(job.id)}', '${escapeHtml(job.name)}')">Export</button>
+          <button class="job-end-btn" onclick="endJob('${escapeHtml(job.id)}', '${escapeHtml(job.name)}')">End job</button>
+        </div>
+      </div>
+      <div class="job-meta">
+        ${total} total · started ${started} · ${sessions} session${sessions===1?'':'s'}
+        ${paused ? `<span class="job-paused">paused, last touch ${fmtRelative(job.last_active)}</span>` : ''}
+      </div>
+      ${sessions > 0 ? `<div class="job-apps">${appsLine || '<span style="color:var(--text-faint)">(no app data yet)</span>'}</div>` : ''}
+      ${remBlock}
+      ${liftBlock}
+    </div>
+  `;
+}
+
+function openStartJob() {
+  // Populate stream dropdown from systemSnapshot (already fetched).
+  // Append a sentinel "+ Create new stream…" option so users aren't locked
+  // into the streams currently in config.yaml.
+  const sel = document.getElementById('sj-stream');
+  const streams = (systemSnapshot && systemSnapshot.streams) || availableStreams || [];
+  const opts = streams.map(s =>
+    `<option value="${escapeHtml(s.key)}">${escapeHtml(s.label)}</option>`
+  );
+  opts.push('<option value="__new__">+ Create new stream…</option>');
+  sel.innerHTML = opts.join('');
+  document.getElementById('sj-newstream').style.display = 'none';
+  document.getElementById('sj-newstream-key').value = '';
+  document.getElementById('sj-newstream-label').value = '';
+  document.getElementById('sj-name').value = '';
+  document.getElementById('sj-note').value = '';
+  document.getElementById('sj-modal').classList.add('open');
+  setTimeout(() => document.getElementById('sj-name').focus(), 60);
+}
+
+function onStreamSelectChange() {
+  const sel = document.getElementById('sj-stream');
+  const block = document.getElementById('sj-newstream');
+  if (sel.value === '__new__') {
+    block.style.display = '';
+    setTimeout(() => document.getElementById('sj-newstream-key').focus(), 40);
+  } else {
+    block.style.display = 'none';
+  }
+}
+
+function closeStartJob() {
+  document.getElementById('sj-modal').classList.remove('open');
+}
+
+async function submitStartJob() {
+  const name = document.getElementById('sj-name').value.trim();
+  let stream = document.getElementById('sj-stream').value;
+  const note = document.getElementById('sj-note').value.trim();
+  if (!name) { showToast('Job needs a name.'); return; }
+
+  // If the user picked "Create new stream", create it first.
+  if (stream === '__new__') {
+    const key   = document.getElementById('sj-newstream-key').value.trim().toLowerCase();
+    const label = document.getElementById('sj-newstream-label').value.trim();
+    if (!key || !label) {
+      showToast('New stream needs both a key and a label.');
+      return;
+    }
+    try {
+      const r = await fetch('/api/streams', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({ key, label })
+      });
+      const d = await r.json();
+      if (!r.ok) {
+        showToast('New stream error: ' + (d.error || 'could not create'));
+        return;
+      }
+      stream = key;
+      // Refresh systemSnapshot so the new stream is available everywhere
+      await fetchSystem();
+    } catch (e) {
+      showToast('New stream error: ' + e.message);
+      return;
+    }
+  }
+
+  try {
+    const r = await fetch('/api/jobs/start', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({ name, stream, note })
+    });
+    const d = await r.json();
+    if (r.ok) {
+      showToast(`Started: ${name}`);
+      closeStartJob();
+      await fetchJobs();
+    } else {
+      showToast('Error: ' + (d.error || 'could not start job'));
+    }
+  } catch (e) {
+    showToast('Error: ' + e.message);
+  }
+}
+
+// ── Taxonomy wizard (v1.7 Slice 2) ──────────────────────────────────────
+// Build / edit the stream hierarchy on the dashboard. Auto-opens once per
+// browser session while the tree is "trivial" (per /api/system). After
+// closing, the user can re-open from Settings.
+
+let taxonomyOpen = false;
+
+function maybeAutoOpenTaxonomy() {
+  // Only auto-open once per session, and only if the tree is still trivial.
+  if (taxonomyOpen) return;
+  if (sessionStorage.getItem('wp.taxWizardSeen')) return;
+  if (!systemSnapshot || !systemSnapshot.taxonomy_trivial) return;
+  openTaxonomy('first-load');
+}
+
+function openTaxonomy(reason) {
+  taxonomyOpen = true;
+  document.getElementById('tx-modal').classList.add('open');
+  document.getElementById('tx-title').textContent =
+    reason === 'first-load' ? 'Set up your taxonomy' : 'Edit your taxonomy';
+  // Show quick-start chips only on the first-time setup
+  document.getElementById('tx-quickstart').style.display =
+    (systemSnapshot && systemSnapshot.taxonomy_trivial) ? '' : 'none';
+  renderTaxonomyTree();
+  document.getElementById('tx-migration').style.display = 'none';
+  document.getElementById('tx-migration').innerHTML = '';
+}
+
+function closeTaxonomy() {
+  taxonomyOpen = false;
+  document.getElementById('tx-modal').classList.remove('open');
+  sessionStorage.setItem('wp.taxWizardSeen', '1');
+}
+
+async function finishTaxonomy() {
+  // Check whether any active Jobs sit in trivial / legacy streams and offer
+  // to re-home them under the new tree.
+  try {
+    const ar = await fetch('/api/jobs/active');
+    const ad = await ar.json();
+    const streams = (systemSnapshot && systemSnapshot.streams) || [];
+    const validKeys = new Set(streams.map(s => s.key));
+    // Candidates for migration: Jobs whose stream is 'misc' OR whose stream
+    // is a top-level domain when descendants exist (i.e. user could go
+    // more specific). Conservative: just flag 'misc' for the first pass.
+    const candidates = (ad.jobs || []).filter(j => j.stream === 'misc' && streams.length > 1);
+    if (candidates.length === 0) {
+      closeTaxonomy();
+      await fetchSystem();
+      await refreshDayPanels();
+      showToast('Taxonomy saved.');
+      return;
+    }
+    renderMigration(candidates, streams);
+  } catch (e) {
+    closeTaxonomy();
+    showToast('Taxonomy saved.');
+  }
+}
+
+function renderMigration(jobs, streams) {
+  const block = document.getElementById('tx-migration');
+  const opts = streams.filter(s => s.key !== 'misc').map(s =>
+    `<option value="${escapeHtml(s.key)}">${escapeHtml(s.breadcrumb || s.label)}</option>`
+  ).join('');
+  block.innerHTML = `
+    <div class="plan-sg-label" style="margin-top:8px">Re-home these Jobs from <code>misc</code></div>
+    <div style="margin-top:6px">
+      ${jobs.map(j => `
+        <div class="tx-mig-row">
+          <span class="tx-mig-name" title="${escapeHtml(j.name)}">${escapeHtml(j.name)}</span>
+          <select data-jobid="${escapeHtml(j.id)}">
+            <option value="">— keep in misc —</option>
+            ${opts}
+          </select>
+        </div>`).join('')}
+    </div>
+    <div style="display:flex; gap:8px; justify-content:flex-end; margin-top:12px">
+      <button class="btn-ghost" onclick="skipMigration()">Skip</button>
+      <button class="btn-primary" onclick="applyMigration()">Apply</button>
+    </div>`;
+  block.style.display = '';
+}
+
+async function applyMigration() {
+  const rows = document.querySelectorAll('#tx-migration select[data-jobid]');
+  let moved = 0, errored = 0;
+  for (const sel of rows) {
+    const target = sel.value;
+    if (!target) continue;
+    try {
+      const r = await fetch(`/api/jobs/${sel.dataset.jobid}/restream`, {
+        method: 'POST',
+        headers: {'Content-Type':'application/json'},
+        body: JSON.stringify({ stream: target })
+      });
+      if (r.ok) moved++; else errored++;
+    } catch (e) { errored++; }
+  }
+  closeTaxonomy();
+  await fetchSystem();
+  await refreshDayPanels();
+  showToast(`Migrated ${moved} job${moved===1?'':'s'}${errored?` (${errored} failed)`:''}.`);
+}
+
+function skipMigration() { closeTaxonomy(); fetchSystem(); refreshDayPanels(); }
+
+async function txQuickAdd(key, label) {
+  try {
+    const r = await fetch('/api/streams', {
+      method: 'POST',
+      headers: {'Content-Type':'application/json'},
+      body: JSON.stringify({ key, label })
+    });
+    const d = await r.json();
+    if (!r.ok) { showToast(d.error || 'could not add'); return; }
+    await fetchSystem();
+    renderTaxonomyTree();
+  } catch (e) { showToast('Error: ' + e.message); }
+}
+
+function renderTaxonomyTree() {
+  const streams = (systemSnapshot && systemSnapshot.streams) || [];
+  // Build adjacency: parent → [children]
+  const byParent = {};
+  streams.forEach(s => {
+    const p = s.parent || '__root__';
+    (byParent[p] = byParent[p] || []).push(s);
+  });
+  function renderLevel(parentKey) {
+    const kids = byParent[parentKey] || [];
+    if (kids.length === 0) return '';
+    kids.sort((a, b) => (a.label || '').localeCompare(b.label || ''));
+    return `<ul class="tx-tree-list">${kids.map(s => `
+      <li>
+        <div class="tx-node" id="tx-node-${escapeHtml(s.key)}">
+          <span class="tx-node-color" style="background:${s.color}"></span>
+          <span class="tx-node-label">${escapeHtml(s.label)}</span>
+          <span class="tx-node-key">${escapeHtml(s.key)}</span>
+          <div class="tx-node-actions">
+            <button class="tx-icon-btn" onclick="txBeginRename('${escapeHtml(s.key)}')">rename</button>
+            <button class="tx-icon-btn" onclick="txShowAddChild('${escapeHtml(s.key)}')">+ child</button>
+            <button class="tx-icon-btn danger" onclick="txDelete('${escapeHtml(s.key)}','${escapeHtml(s.label)}')">×</button>
+          </div>
+        </div>
+        <div id="tx-form-${escapeHtml(s.key)}"></div>
+        ${renderLevel(s.key)}
+      </li>`).join('')}
+    </ul>`;
+  }
+  const tree = document.getElementById('tx-tree');
+  const rootHTML = renderLevel('__root__');
+  if (!rootHTML) {
+    tree.innerHTML = `
+      <div class="empty" style="text-align:left">
+        No streams yet — use the quick-start chips above or
+        <button class="tx-icon-btn" onclick="txShowAddChild('')" style="text-decoration:underline">+ add a top-level domain</button>.
+      </div>
+      <div id="tx-form-"></div>`;
+    return;
+  }
+  tree.innerHTML = `
+    ${rootHTML}
+    <div style="margin-top:12px"><button class="tx-icon-btn" onclick="txShowAddChild('')">+ add another top-level domain</button></div>
+    <div id="tx-form-"></div>`;
+}
+
+function txShowAddChild(parentKey) {
+  // Replace the form slot under this node with an inline form.
+  const slot = document.getElementById(`tx-form-${parentKey}`);
+  if (!slot) return;
+  slot.innerHTML = `
+    <div class="tx-add-form">
+      <input type="text" placeholder="key (e.g. uganda-memd)" id="tx-new-key-${parentKey}" />
+      <input type="text" placeholder="label (e.g. Uganda MEMD Project)" id="tx-new-label-${parentKey}" />
+      <button onclick="txAddChild('${parentKey}')" class="primary">Add</button>
+      <button onclick="txCancelAdd('${parentKey}')">Cancel</button>
+    </div>`;
+  setTimeout(() => document.getElementById(`tx-new-key-${parentKey}`).focus(), 30);
+}
+
+function txCancelAdd(parentKey) {
+  const slot = document.getElementById(`tx-form-${parentKey}`);
+  if (slot) slot.innerHTML = '';
+}
+
+async function txAddChild(parentKey) {
+  const key   = document.getElementById(`tx-new-key-${parentKey}`).value.trim().toLowerCase();
+  const label = document.getElementById(`tx-new-label-${parentKey}`).value.trim();
+  if (!key || !label) { showToast('Both key and label are required.'); return; }
+  try {
+    const body = { key, label };
+    if (parentKey) body.parent = parentKey;
+    const r = await fetch('/api/streams', {
+      method: 'POST',
+      headers: {'Content-Type':'application/json'},
+      body: JSON.stringify(body)
+    });
+    const d = await r.json();
+    if (!r.ok) { showToast(d.error || 'could not add'); return; }
+    await fetchSystem();
+    renderTaxonomyTree();
+  } catch (e) { showToast('Error: ' + e.message); }
+}
+
+function txBeginRename(key) {
+  const node = document.getElementById(`tx-node-${key}`);
+  const label = node.querySelector('.tx-node-label').textContent;
+  // Replace the label + actions with an inline edit form.
+  node.querySelector('.tx-node-label').outerHTML = `
+    <div class="tx-rename-form">
+      <input type="text" id="tx-rename-${key}" value="${escapeHtml(label)}" />
+    </div>`;
+  node.querySelector('.tx-node-actions').innerHTML = `
+    <button class="tx-icon-btn" onclick="txCommitRename('${key}')">save</button>
+    <button class="tx-icon-btn" onclick="renderTaxonomyTree()">cancel</button>`;
+  setTimeout(() => {
+    const inp = document.getElementById(`tx-rename-${key}`);
+    inp.focus(); inp.select();
+  }, 30);
+}
+
+async function txCommitRename(key) {
+  const label = document.getElementById(`tx-rename-${key}`).value.trim();
+  if (!label) { showToast('Label cannot be empty.'); return; }
+  try {
+    const r = await fetch(`/api/streams/${encodeURIComponent(key)}`, {
+      method: 'PATCH',
+      headers: {'Content-Type':'application/json'},
+      body: JSON.stringify({ label })
+    });
+    const d = await r.json();
+    if (!r.ok) { showToast(d.error || 'could not rename'); renderTaxonomyTree(); return; }
+    await fetchSystem();
+    renderTaxonomyTree();
+  } catch (e) { showToast('Error: ' + e.message); renderTaxonomyTree(); }
+}
+
+async function txDelete(key, label) {
+  if (!confirm(`Delete stream "${label}"?\n\nRefused if it has children or any Job attached.`)) return;
+  try {
+    const r = await fetch(`/api/streams/${encodeURIComponent(key)}`, { method: 'DELETE' });
+    const d = await r.json();
+    if (!r.ok) { showToast(d.error || 'could not delete'); return; }
+    await fetchSystem();
+    renderTaxonomyTree();
+    showToast(`Deleted "${label}".`);
+  } catch (e) { showToast('Error: ' + e.message); }
+}
+
+
+// ── Today's plan (Morning Plan — v1.7 intent capture) ─────────────────────
+
+// ── Health banner: surface the doctor's verdict ────────────────────────────
+let healthState = null;
+
+async function fetchHealth() {
+  try {
+    const r = await fetch('/api/v2/health');
+    healthState = await r.json();
+  } catch (e) {
+    healthState = {verdict: 'unknown', summary: 'Health check unavailable.', checks: []};
+  }
+  updateHealthDot(healthState);
+}
+
+function updateHealthDot(d) {
+  const dot = document.getElementById('health-dot');
+  const btn = document.getElementById('health-indicator');
+  if (!dot || !btn) return;
+  const v = (d && d.verdict) || 'unknown';
+  if (v === 'ok') {
+    dot.textContent = '●'; dot.style.color = '#16a34a';
+    btn.title = 'All systems healthy';
+  } else if (v === 'fail') {
+    dot.textContent = '▲'; dot.style.color = '#dc2626';
+    btn.title = "Something's wrong, click for details";
+  } else if (v === 'warn') {
+    dot.textContent = '▲'; dot.style.color = '#d97706';
+    btn.title = 'Needs a look, click for details';
+  } else {
+    dot.textContent = '●'; dot.style.color = 'var(--text-faint)';
+    btn.title = 'Health status unknown';
+  }
+}
+
+function openHealthModal(ev) {
+  if (ev) ev.stopPropagation();
+  document.getElementById('health-modal').style.display = 'flex';
+  renderHealthModal();
+}
+function closeHealthModal() {
+  document.getElementById('health-modal').style.display = 'none';
+}
+
+function renderHealthModal() {
+  const body = document.getElementById('health-modal-body');
+  const title = document.getElementById('health-modal-title');
+  const d = healthState || {verdict: 'unknown', checks: []};
+  const verdictLabel = {ok: 'All systems healthy', warn: 'Needs a look',
+                        fail: "Something's wrong", unknown: 'Status unknown'}[d.verdict] || 'Status unknown';
+  const verdictColor = {ok: '#16a34a', warn: '#d97706', fail: '#dc2626',
+                        unknown: 'var(--text-soft)'}[d.verdict] || 'var(--text-soft)';
+  if (title) title.innerHTML = `System health <span style="color:${verdictColor}; font-weight:500;">· ${verdictLabel}</span>`;
+
+  if (!d.checks || !d.checks.length) {
+    body.innerHTML = '<div class="empty">No health check has run yet. The doctor runs every 3 hours.</div>';
+    return;
+  }
+  const iconFor = (s) => s === 'ok'
+    ? '<span style="color:#16a34a;">●</span>'
+    : (s === 'fail' ? '<span style="color:#dc2626;">▲</span>'
+                    : '<span style="color:#d97706;">▲</span>');
+  const nice = (k) => ({
+    sensors_running: 'Sensors running',
+    sensor_liveness: 'Tracker is live',
+    sensor_not_stuck: 'Tracking varied apps',
+    agents_healthy: 'Background agents',
+    data_fresh: 'Recent file activity',
+    nightly_ran: 'Nightly summary',
+  })[k] || k;
+  let html = '<div style="display:flex; flex-direction:column; gap:2px;">';
+  d.checks.forEach(c => {
+    html += `<div style="display:flex; gap:10px; padding:8px 4px; border-bottom:1px solid var(--border, #eee5d2);">
+      <div style="width:16px; text-align:center; flex-shrink:0;">${iconFor(c.status)}</div>
+      <div>
+        <div style="font-weight:500; font-size:14px;">${escapeHtml(nice(c.check))}</div>
+        <div style="font-size:12px; color:var(--text-soft); margin-top:2px;">${escapeHtml(c.message)}</div>
+      </div>
+    </div>`;
+  });
+  html += '</div>';
+  if (d.ts) {
+    html += `<div style="font-size:11px; color:var(--text-faint); margin-top:10px;">Last checked ${new Date(d.ts).toLocaleString()}</div>`;
+  }
+  body.innerHTML = html;
+}
+
+document.addEventListener('keydown', function(e) {
+  if (e.key === 'Escape') {
+    const m = document.getElementById('health-modal');
+    if (m && m.style.display === 'flex') closeHealthModal();
+  }
+});
+document.addEventListener('click', function(e) {
+  const m = document.getElementById('health-modal');
+  if (m && m.style.display === 'flex' && e.target === m) closeHealthModal();
+});
+
+// ── UI cleanup: collapsible cards + View menu (show/hide per card) ─────────
+
+// Per-card UX defaults. Cards not listed default to collapsed=false, visible=true.
+const CARD_DEFAULTS = {
+  today:       { collapsed: false, visible: true },
+  profile:     { collapsed: true,  visible: true },   // summary only by default
+  plan:        { collapsed: true,  visible: true },
+  jobs:        { collapsed: true,  visible: true },
+  heatmap:     { collapsed: true,  visible: true },
+  donut:       { collapsed: true,  visible: true },
+  'last-active': { collapsed: true, visible: true },
+  timeline:    { collapsed: true,  visible: false },  // hidden by default
+  attention:   { collapsed: true,  visible: true },
+  apps:        { collapsed: true,  visible: false },
+  ai:          { collapsed: true,  visible: false },
+};
+
+function getCardStates() {
+  let s;
+  try { s = JSON.parse(localStorage.getItem('wp_card_states') || '{}'); }
+  catch (e) { s = {}; }
+  return s;
+}
+function saveCardStates(s) {
+  localStorage.setItem('wp_card_states', JSON.stringify(s));
+}
+function cardState(id) {
+  const saved = getCardStates()[id];
+  const def = CARD_DEFAULTS[id] || { collapsed: false, visible: true };
+  return Object.assign({}, def, saved || {});
+}
+
+function toggleCard(id, ev) {
+  if (ev) ev.stopPropagation();
+  const el = document.querySelector(`[data-card="${id}"]`);
+  if (!el) return;
+  el.classList.toggle('is-collapsed');
+  const states = getCardStates();
+  states[id] = Object.assign({}, states[id] || {}, {
+    collapsed: el.classList.contains('is-collapsed'),
+  });
+  saveCardStates(states);
+}
+
+function setCardVisibility(id, visible) {
+  const el = document.querySelector(`[data-card="${id}"]`);
+  if (el) el.classList.toggle('hidden', !visible);
+  const states = getCardStates();
+  states[id] = Object.assign({}, states[id] || {}, { visible: !!visible });
+  saveCardStates(states);
+}
+
+function applyCardStates() {
+  document.querySelectorAll('[data-card]').forEach(el => {
+    const id = el.dataset.card;
+    const s = cardState(id);
+    el.classList.toggle('is-collapsed', !!s.collapsed);
+    el.classList.toggle('hidden', s.visible === false);
+  });
+}
+
+// View menu — dropdown with checkboxes per card
+function openViewMenu(ev) {
+  ev.stopPropagation();
+  closeViewMenu();
+  const cards = Array.from(document.querySelectorAll('[data-card]'));
+  const menu = document.createElement('div');
+  menu.className = 'view-menu';
+  const rect = ev.target.getBoundingClientRect();
+  menu.style.top  = (rect.bottom + 6) + 'px';
+  menu.style.right = (window.innerWidth - rect.right) + 'px';
+
+  let html = '<div style="padding:8px 14px; font-size:11px; color:var(--text-soft); text-transform:uppercase; letter-spacing:1.2px;">Show / hide cards</div>';
+  cards.forEach(el => {
+    const id = el.dataset.card;
+    const label = el.dataset.cardLabel || id;
+    const checked = cardState(id).visible !== false;
+    html += `<label class="view-item">
+      <input type="checkbox" ${checked ? 'checked' : ''}
+             onchange="setCardVisibility('${id}', this.checked)" />
+      <span>${escapeHtml(label)}</span>
+    </label>`;
+  });
+  html += '<div class="view-sep"></div>';
+  html += `<div class="view-action" onclick="expandAllCards()">Expand all</div>`;
+  html += `<div class="view-action" onclick="collapseAllCards()">Collapse all</div>`;
+  html += `<div class="view-action" onclick="resetCardLayout()">Reset to defaults</div>`;
+  menu.innerHTML = html;
+  document.body.appendChild(menu);
+
+  setTimeout(() => {
+    function onDocClick(e) {
+      if (!menu.contains(e.target)) {
+        closeViewMenu();
+        document.removeEventListener('click', onDocClick);
+      }
+    }
+    document.addEventListener('click', onDocClick);
+  }, 50);
+}
+function closeViewMenu() {
+  document.querySelectorAll('.view-menu').forEach(el => el.remove());
+}
+function expandAllCards() {
+  document.querySelectorAll('[data-card]').forEach(el => el.classList.remove('is-collapsed'));
+  const states = getCardStates();
+  document.querySelectorAll('[data-card]').forEach(el => {
+    const id = el.dataset.card;
+    states[id] = Object.assign({}, states[id] || {}, { collapsed: false });
+  });
+  saveCardStates(states);
+  closeViewMenu();
+}
+function collapseAllCards() {
+  document.querySelectorAll('[data-card]').forEach(el => el.classList.add('is-collapsed'));
+  const states = getCardStates();
+  document.querySelectorAll('[data-card]').forEach(el => {
+    const id = el.dataset.card;
+    states[id] = Object.assign({}, states[id] || {}, { collapsed: true });
+  });
+  saveCardStates(states);
+  closeViewMenu();
+}
+function resetCardLayout() {
+  localStorage.removeItem('wp_card_states');
+  applyCardStates();
+  closeViewMenu();
+}
+
+// Apply card states on initial load
+document.addEventListener('DOMContentLoaded', applyCardStates);
+// Also apply right now in case DOMContentLoaded already fired
+applyCardStates();
+
+// ── v2 personal: small padlock in topbar + modal on click ──────────────────
+
+let personalState = null;
+
+async function fetchPersonal() {
+  try {
+    const r = await fetch('/api/v2/personal/status');
+    personalState = await r.json();
+    updatePersonalLockIcon(personalState);
+  } catch (e) {
+    // Silent — the padlock just stays in its locked state
+  }
+}
+
+function updatePersonalLockIcon(s) {
+  const btn = document.getElementById('personal-lock-btn');
+  if (!btn || !s) return;
+  if (s.unlocked) {
+    btn.textContent = '🔓';
+    btn.style.opacity = '1';
+    btn.title = 'Personal (unlocked, click to lock)';
+  } else if (s.password_set) {
+    btn.textContent = '🔒';
+    btn.style.opacity = '0.6';
+    btn.title = 'Personal (locked, click to unlock)';
+  } else {
+    btn.textContent = '🔒';
+    btn.style.opacity = '0.35';
+    btn.title = 'Personal — click to set a password';
+  }
+}
+
+function openPersonalModal() {
+  // If already unlocked, fast-lock instead of opening the modal
+  if (personalState && personalState.unlocked) {
+    personalLock();
+    return;
+  }
+  document.getElementById('personal-modal').style.display = 'flex';
+  renderPersonalModal();
+  // Focus the password input after render
+  setTimeout(() => {
+    const inp = document.getElementById('personal-pwd') ||
+                document.getElementById('personal-new-pwd');
+    if (inp) inp.focus();
+  }, 50);
+}
+
+function closePersonalModal() {
+  document.getElementById('personal-modal').style.display = 'none';
+}
+
+function renderPersonalModal() {
+  const body = document.getElementById('personal-modal-body');
+  const s = personalState || {password_set: false, unlocked: false};
+  if (!s.password_set) {
+    body.innerHTML = `
+      <p style="font-size:13px; color:var(--text-soft); margin:0 0 12px 0;">
+        Set a password to protect your personal browsing (banking, healthcare,
+        personal email, social, etc.). Minimum 4 characters.
+      </p>
+      <form onsubmit="personalSetPassword(event); return false;" style="display:flex; gap:8px;">
+        <input type="password" id="personal-new-pwd" placeholder="new password"
+               style="flex:1; padding:8px 12px; border:1px solid var(--border, #ddd); border-radius:6px; font-size:14px;" />
+        <button type="submit"
+                style="padding:8px 14px; border:0; border-radius:6px; background:#6b7280; color:#fff; font-weight:600; cursor:pointer;">
+          Set
+        </button>
+      </form>`;
+    return;
+  }
+  if (!s.unlocked) {
+    body.innerHTML = `
+      <p style="font-size:13px; color:var(--text-soft); margin:0 0 12px 0;">
+        Your personal browsing is hidden from the dashboard. Enter your password
+        to view what's been visited today.
+      </p>
+      <form onsubmit="personalUnlock(event); return false;" style="display:flex; gap:8px;">
+        <input type="password" id="personal-pwd" placeholder="password" autocomplete="current-password"
+               style="flex:1; padding:8px 12px; border:1px solid var(--border, #ddd); border-radius:6px; font-size:14px;" />
+        <button type="submit"
+                style="padding:8px 14px; border:0; border-radius:6px; background:#6b7280; color:#fff; font-weight:600; cursor:pointer;">
+          Unlock
+        </button>
+      </form>
+      <div id="personal-err" style="margin-top:8px; font-size:12px; color:#dc2626;"></div>`;
+    return;
+  }
+  // Unlocked — fetch the data
+  body.innerHTML = '<div class="empty">Loading…</div>';
+  fetch('/api/v2/personal/data').then(r => r.json()).then(d => {
+    let html = '<div style="font-size:12px; color:var(--text-soft); margin-bottom:10px;">Auto-locks in 30 min · session-only</div>';
+    if (d.domains_today && d.domains_today.length) {
+      html += '<div style="font-size:13px; color:var(--text-soft); margin-bottom:6px;">Private-tier domains today:</div>';
+      html += '<ul style="margin:0 0 14px 18px; padding:0;">';
+      d.domains_today.forEach(it => {
+        html += `<li style="margin-bottom:3px;"><strong>${escapeHtml(it.domain)}</strong> · ${it.visits} visit${it.visits === 1 ? '' : 's'}</li>`;
+      });
+      html += '</ul>';
+    } else {
+      html += '<div style="font-size:13px; color:var(--text-soft); margin-bottom:14px;">No private-tier browsing recorded today.</div>';
+    }
+    html += `<button onclick="personalLock()" style="padding:6px 14px; border:0; border-radius:6px; background:var(--border, #ddd); color:var(--text); font-size:13px; cursor:pointer;">Lock now</button>`;
+    body.innerHTML = html;
+  });
+}
+
+async function personalSetPassword(ev) {
+  if (ev) ev.preventDefault();
+  const pwd = document.getElementById('personal-new-pwd').value;
+  if (!pwd) return false;
+  const r = await fetch('/api/v2/personal/set-password', {
+    method: 'POST',
+    headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({password: pwd}),
+  });
+  if (!r.ok) {
+    const d = await r.json();
+    alert('Failed: ' + (d.error || r.status));
+    return false;
+  }
+  await fetchPersonal();
+  renderPersonalModal();
+  return false;
+}
+
+async function personalUnlock(ev) {
+  if (ev) ev.preventDefault();
+  const pwd = document.getElementById('personal-pwd').value;
+  const err = document.getElementById('personal-err');
+  if (!pwd) return false;
+  const r = await fetch('/api/v2/personal/unlock', {
+    method: 'POST',
+    headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({password: pwd}),
+  });
+  if (!r.ok) {
+    if (err) err.textContent = 'wrong password';
+    return false;
+  }
+  await fetchPersonal();
+  renderPersonalModal();
+  if (typeof fetchToday === 'function') fetchToday();
+  return false;
+}
+
+async function personalLock() {
+  await fetch('/api/v2/personal/lock', {method: 'POST'});
+  await fetchPersonal();
+  closePersonalModal();
+  if (typeof fetchToday === 'function') fetchToday();
+}
+
+// Close modal on Escape or click outside
+document.addEventListener('keydown', function(e) {
+  if (e.key === 'Escape') {
+    const m = document.getElementById('personal-modal');
+    if (m && m.style.display === 'flex') closePersonalModal();
+  }
+});
+document.addEventListener('click', function(e) {
+  const m = document.getElementById('personal-modal');
+  if (m && m.style.display === 'flex' && e.target === m) closePersonalModal();
+});
+
+// ── v2 capture bar: post → POST /api/v2/capture → refresh ──────────────────
+
+async function submitCapture(ev) {
+  if (ev) ev.preventDefault();
+  const input = document.getElementById('capture-input');
+  const status = document.getElementById('capture-status');
+  const body = (input.value || '').trim();
+  if (!body) return false;
+  status.textContent = 'capturing…';
+  status.style.color = 'var(--text-soft)';
+  try {
+    const r = await fetch('/api/v2/capture', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({body: body, pin: 'auto'}),
+    });
+    if (!r.ok) throw new Error('http ' + r.status);
+    const d = await r.json();
+    input.value = '';
+    const pinNote = d.pinned_kind ? ` (pinned to ${d.pinned_kind})` : '';
+    status.textContent = '✓ captured' + pinNote;
+    status.style.color = '#16a34a';
+    // Refresh the day panels so the new capture surfaces immediately
+    if (typeof fetchToday === 'function') fetchToday();
+    setTimeout(() => { status.textContent = ''; }, 4000);
+  } catch (e) {
+    status.textContent = 'failed';
+    status.style.color = '#dc2626';
+  }
+  return false;
+}
+
+// Keyboard shortcut: Cmd/Ctrl+Shift+K focuses the capture box
+document.addEventListener('keydown', function(e) {
+  if ((e.metaKey || e.ctrlKey) && e.shiftKey && e.key && e.key.toLowerCase() === 'k') {
+    e.preventDefault();
+    const el = document.getElementById('capture-input');
+    if (el) el.focus();
+  }
+});
+
+// ── v2 brain layer: "Who you are" card (the living profile, Step A) ────────
+
+let profileState = null;
+
+async function fetchProfile() {
+  try {
+    const r = await fetch('/api/v2/profile');
+    if (!r.ok) throw new Error('http ' + r.status);
+    profileState = await r.json();
+    renderProfile(profileState);
+  } catch (e) {
+    document.getElementById('profile-panel').innerHTML =
+      '<div class="empty">Could not load the profile.</div>';
+  }
+}
+
+function renderProfile(d) {
+  const panel = document.getElementById('profile-panel');
+  const meta  = document.getElementById('profile-meta');
+  const summary = document.getElementById('profile-summary');
+  if (!d || !d.exists) {
+    panel.innerHTML =
+      `<div class="empty">No profile yet. Run <code>python -m workpulse.core.about_george update</code>, or wait for tonight&rsquo;s dream cycle.</div>`;
+    meta.textContent = '';
+    if (summary) summary.textContent = 'No profile yet.';
+    return;
+  }
+  const fm = d.frontmatter || {};
+  const updated = fm.last_updated ? new Date(fm.last_updated).toLocaleString() : '';
+  const window  = fm.window || '';
+  const hours   = fm.total_tracked_hours;
+  const bits = [];
+  if (window) bits.push(window);
+  if (hours !== undefined) bits.push(`${hours} h tracked`);
+  if (updated) bits.push(`updated ${updated}`);
+  meta.textContent = bits.join('  ·  ');
+
+  // One-line summary for collapsed state: pull the first paragraph from
+  // the Identity section, truncated.
+  if (summary) {
+    const body = d.body || '';
+    const m = body.match(/##\s+Identity\s*\n+([^\n#]+)/);
+    if (m) {
+      let line = m[1].trim().replace(/\*\*/g, '');
+      if (line.length > 180) line = line.slice(0, 180) + '…';
+      summary.textContent = line;
+    } else if (hours !== undefined) {
+      summary.textContent = `${hours} h over ${window || 'recent days'}.`;
+    } else {
+      summary.textContent = '';
+    }
+  }
+
+  // Render the markdown body. Light renderer: section headers + paragraphs +
+  // bullet lists. Avoid pulling in a markdown library; the profile shape is
+  // controlled and predictable.
+  const body = d.body || '';
+  panel.innerHTML = renderProfileMarkdown(body);
+}
+
+function renderProfileMarkdown(md) {
+  // Split by ## headings into sections, render each
+  const sections = [];
+  let cur = { heading: '', lines: [] };
+  md.split('\n').forEach(line => {
+    const m = line.match(/^##\s+(.+?)\s*$/);
+    if (m) {
+      if (cur.heading || cur.lines.length) sections.push(cur);
+      cur = { heading: m[1].trim(), lines: [] };
+    } else if (line.match(/^#\s/)) {
+      // ignore the title (already in the eyebrow)
+    } else {
+      cur.lines.push(line);
+    }
+  });
+  if (cur.heading || cur.lines.length) sections.push(cur);
+
+  let html = '<div style="display:flex; flex-direction:column; gap:14px;">';
+  sections.forEach(s => {
+    if (!s.heading && !s.lines.some(l => l.trim())) return;
+    html += '<div>';
+    if (s.heading) {
+      html += `<div style="font-size:13px; color:var(--text-soft); font-weight:600; margin-bottom:6px;">${escapeHtml(s.heading)}</div>`;
+    }
+    // Inline render: bullets → ul; ### → bold; blank → paragraph
+    let inUl = false;
+    const out = [];
+    const flushUl = () => { if (inUl) { out.push('</ul>'); inUl = false; } };
+    s.lines.forEach(rawLine => {
+      const line = rawLine.replace(/\s+$/, '');
+      const sub = line.match(/^###\s+(.+?)$/);
+      const bullet = line.match(/^[-*]\s+(.+)$/);
+      if (sub) {
+        flushUl();
+        out.push(`<div style="font-weight:600; margin-top:6px;">${renderInline(sub[1])}</div>`);
+      } else if (bullet) {
+        if (!inUl) { out.push('<ul style="margin:0 0 0 18px; padding:0;">'); inUl = true; }
+        out.push(`<li style="margin-bottom:3px;">${renderInline(bullet[1])}</li>`);
+      } else if (line.trim() === '') {
+        flushUl();
+        out.push('');
+      } else {
+        flushUl();
+        out.push(`<p style="margin:6px 0;">${renderInline(line)}</p>`);
+      }
+    });
+    flushUl();
+    html += out.filter(s => s !== undefined).join('\n');
+    html += '</div>';
+  });
+  html += '</div>';
+  return html;
+}
+
+function renderInline(text) {
+  // **bold**, *italic*, `code`, basic safety
+  return escapeHtml(text)
+    .replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>')
+    .replace(/`([^`]+)`/g, '<code style="background:var(--bg-soft, #f5efe2); padding:1px 5px; border-radius:3px; font-size:90%;">$1</code>')
+    .replace(/\[([0-9]{4}-[0-9]{2}-[0-9]{2})\]/g, '<span style="color:var(--text-faint); font-family:var(--font-mono,monospace); font-size:90%;">[$1]</span>');
+}
+
+// ── v2 brain view: "What you worked on today" card ──────────────────────────
+
+let todayState = null;  // last response from GET /api/v2/today
+
+async function fetchToday() {
+  try {
+    const r = await fetch('/api/v2/today');
+    if (!r.ok) throw new Error('http ' + r.status);
+    todayState = await r.json();
+    renderToday(todayState);
+  } catch (e) {
+    document.getElementById('today-panel').innerHTML =
+      '<div class="empty">Could not load the brain view. The v2 SQLite store may not be initialized yet. Run <code>python -m workpulse.core.db init</code> from the repo.</div>';
+  }
+}
+
+function renderToday(d) {
+  const panel = document.getElementById('today-panel');
+  const meta  = document.getElementById('today-meta');
+  const summary = document.getElementById('today-summary');
+  if (!d) { panel.innerHTML = '<div class="empty">No data.</div>'; return; }
+  meta.textContent = `${d.date} · ${d.total_hours.toFixed(1)} h tracked`;
+
+  // One-line summary used when the card is collapsed
+  if (summary) {
+    if (d.total_hours < 0.05) {
+      summary.textContent = `Nothing tracked yet today.`;
+    } else {
+      const top = (d.by_stream || []).slice(0, 3)
+        .map(s => `${s.stream} ${s.hours.toFixed(1)}h`)
+        .join(' · ');
+      summary.textContent = top ? `${d.total_hours.toFixed(1)}h · ${top}` :
+                                  `${d.total_hours.toFixed(1)}h tracked`;
+    }
+  }
+
+  if (d.total_hours < 0.05) {
+    panel.innerHTML =
+      '<div class="empty">Nothing tracked yet today. Open something, or run <code>python -m workpulse.core.capture "thought" --auto-pin</code> to capture a note.</div>';
+    return;
+  }
+
+  let html = '';
+
+  // Stream bar: a single segmented bar showing per-stream hours
+  if (d.by_stream && d.by_stream.length) {
+    const total = d.total_hours || 0.001;
+    html += '<div style="margin: 10px 0 16px 0;">';
+    html += '<div style="display:flex; height:14px; border-radius:6px; overflow:hidden; background:var(--bg-soft, #f5efe2);">';
+    d.by_stream.forEach((s, i) => {
+      const pct = Math.max(2, Math.round((s.hours / total) * 100));
+      const color = todayStreamColor(s.stream, i);
+      html += `<div title="${escapeHtml(s.stream)}: ${s.hours.toFixed(1)} h" style="width:${pct}%; background:${color};"></div>`;
+    });
+    html += '</div>';
+    html += '<div style="display:flex; flex-wrap:wrap; gap:14px; margin-top:8px; font-size:12px;">';
+    d.by_stream.forEach((s, i) => {
+      const color = todayStreamColor(s.stream, i);
+      html += `<span style="display:inline-flex; align-items:center; gap:6px;"><span style="display:inline-block; width:10px; height:10px; background:${color}; border-radius:2px;"></span><strong>${escapeHtml(s.stream)}</strong> ${s.hours.toFixed(1)} h</span>`;
+    });
+    html += '</div></div>';
+  }
+
+  // Top named clusters — each with a side-channel context line (git + captures + skill runs)
+  if (d.top_clusters && d.top_clusters.length) {
+    html += '<div style="font-size:13px; color:var(--text-soft); margin-bottom:6px;">Top clusters today</div>';
+    html += '<div style="display:flex; flex-direction:column; gap:8px; margin-bottom:14px;">';
+    d.top_clusters.slice(0, 5).forEach(c => {
+      const name = c.name ? escapeHtml(c.name) : '<em style="color:var(--text-faint);">(unnamed cluster)</em>';
+      const oneliner = c.one_liner ? ` — ${escapeHtml(c.one_liner)}` : '';
+
+      // Fix 1.7: project assignment + confidence badge + correction dropdown
+      let assignBadge = '';
+      const label = c.assigned_label || c.assigned_stream || '—';
+      const conf = c.assignment_confidence;
+      const src = c.assignment_source;
+      let badgeBg = '#e5e7eb';
+      let badgeFg = '#374151';
+      let confText = '';
+      if (src === 'user') {
+        badgeBg = '#dcfce7'; badgeFg = '#166534';
+        confText = '· user';
+      } else if (src === 'agent') {
+        badgeBg = conf >= 0.7 ? '#dbeafe' : (conf >= 0.4 ? '#fef3c7' : '#fee2e2');
+        badgeFg = conf >= 0.7 ? '#1e40af' : (conf >= 0.4 ? '#92400e' : '#991b1b');
+        confText = '· ' + (conf * 100).toFixed(0) + '%';
+      } else if (src === 'fallback') {
+        confText = '· fallback';
+      } else {
+        confText = '· not assigned';
+      }
+      assignBadge = `<span style="display:inline-block; padding:2px 8px; background:${badgeBg}; color:${badgeFg}; border-radius:10px; font-size:11px; font-weight:600; cursor:pointer;" onclick="openCorrection('${escapeHtml(c.cluster_id)}', '${escapeHtml(c.assigned_stream || '')}', this)" title="Click to correct">${escapeHtml(label)} ${escapeHtml(confText)}</span>`;
+
+      // Context line: "what was actually happening" — git + captures + brain calls
+      let ctxLine = '';
+      if (c.summary) {
+        ctxLine = `<div style="margin-top:4px; font-size:12px; color:var(--text-soft);">↳ ${escapeHtml(c.summary)}</div>`;
+      }
+      // Top commit subjects (one-line each, max 3)
+      let commitsLine = '';
+      if (c.top_commits && c.top_commits.length) {
+        commitsLine = '<ul style="margin:6px 0 0 18px; padding:0; font-size:12px; color:var(--text-soft);">';
+        c.top_commits.forEach(g => {
+          commitsLine += `<li><span style="font-family:var(--font-mono,monospace); color:var(--text-faint);">${escapeHtml(g.sha)}</span> ${escapeHtml(g.subject)}</li>`;
+        });
+        commitsLine += '</ul>';
+      }
+
+      html += `<div data-cluster="${escapeHtml(c.cluster_id)}" style="padding:10px 12px; background:var(--surface, #fff); border:1px solid var(--border, #eee5d2); border-radius:6px;">
+        <div style="display:flex; align-items:baseline; justify-content:space-between; gap:12px;">
+          <div><strong>${name}</strong>${oneliner}</div>
+          <div style="text-align:right; white-space:nowrap;"><span style="font-variant-numeric:tabular-nums;">${c.hours.toFixed(1)} h</span> &nbsp;${assignBadge}</div>
+        </div>
+        ${ctxLine}
+        ${commitsLine}
+      </div>`;
+    });
+    html += '</div>';
+  }
+
+  // Plan vs actual (if any flagged items today)
+  if (d.plan_vs_actual && d.plan_vs_actual.length) {
+    html += '<div style="font-size:13px; color:var(--text-soft); margin-bottom:6px;">Plan vs actual</div><ul style="margin:0 0 14px 18px; padding:0;">';
+    d.plan_vs_actual.forEach(it => {
+      const flagColor = (it.flag === 'overrun') ? '#d97706'
+                       : (it.flag === 'underrun') ? '#dc2626'
+                       : 'var(--text-soft)';
+      html += `<li style="margin-bottom:4px;"><span style="color:${flagColor}; font-weight:600;">[${escapeHtml(it.flag)}]</span> ${escapeHtml(it.name)} — planned ${it.planned_min}m, actual ${it.actual_min}m</li>`;
+    });
+    html += '</ul>';
+  }
+
+  // Captures
+  if (d.captures && d.captures.length) {
+    html += '<div style="font-size:13px; color:var(--text-soft); margin-bottom:6px;">Captures today</div>';
+    html += '<ul style="margin:0 0 14px 18px; padding:0;">';
+    d.captures.forEach(c => {
+      const t = c.time ? `<span style="color:var(--text-faint); font-variant-numeric:tabular-nums; margin-right:8px;">${escapeHtml(c.time)}</span>` : '';
+      const author = c.author === 'system' ? '<span style="color:var(--text-faint); font-size:11px; margin-left:6px;">(system)</span>' : '';
+      html += `<li style="margin-bottom:4px;">${t}${escapeHtml(c.body)}${author}</li>`;
+    });
+    html += '</ul>';
+  } else {
+    html += '<div style="font-size:13px; color:var(--text-soft); margin-bottom:14px;">No captures today. Run <code>python -m workpulse.core.capture "thought" --auto-pin</code> to add one.</div>';
+  }
+
+  // Untagged buckets — surface only the largest one as a one-liner
+  if (d.untagged_buckets && d.untagged_buckets.length) {
+    const top = d.untagged_buckets[0];
+    if (top.minutes >= 5) {
+      html += `<div style="font-size:12px; color:var(--text-soft); padding:6px 10px; background:var(--bg-warm, #fff6e0); border-radius:6px;">⚠️ ${top.minutes.toFixed(0)} min of untagged "${escapeHtml(top.sample_titles && top.sample_titles[0] || top.token)}" — want to tag it?</div>`;
+    }
+  }
+
+  panel.innerHTML = html;
+}
+
+// ── Fix 1.7 correction UI: dropdown opens on badge click ────────────────────
+let _streamsCache = null;
+async function _getStreams() {
+  if (_streamsCache) return _streamsCache;
+  try {
+    const r = await fetch('/api/v2/streams');
+    const d = await r.json();
+    _streamsCache = d.streams || [];
+  } catch (e) {
+    _streamsCache = [];
+  }
+  return _streamsCache;
+}
+
+async function openCorrection(clusterId, currentStream, anchor) {
+  // Remove any existing popovers
+  document.querySelectorAll('.wp-correction-popover').forEach(el => el.remove());
+  const streams = await _getStreams();
+  const rect = anchor.getBoundingClientRect();
+  const pop = document.createElement('div');
+  pop.className = 'wp-correction-popover';
+  pop.style.cssText = `position:fixed; top:${rect.bottom + 6}px; left:${rect.left}px;
+    background:var(--surface, #fff); border:1px solid var(--border, #ddd0b3);
+    border-radius:8px; padding:8px; box-shadow:0 4px 20px rgba(0,0,0,0.15);
+    z-index:9999; min-width:200px; max-height:300px; overflow:auto;`;
+  let html = '<div style="font-size:11px; color:var(--text-soft); margin-bottom:6px; padding:0 4px;">Set this cluster to:</div>';
+  streams.forEach(s => {
+    const isCurrent = s.key === currentStream;
+    html += `<div style="padding:6px 10px; cursor:pointer; border-radius:4px; ${isCurrent ? 'background:var(--bg-soft, #f5efe2); font-weight:600;' : ''}"
+                onmouseover="this.style.background='var(--bg-warm, #fff6e0)'"
+                onmouseout="this.style.background='${isCurrent ? 'var(--bg-soft, #f5efe2)' : 'transparent'}'"
+                onclick="correctCluster('${clusterId}', '${s.key}', this)">
+       <span style="font-weight:600;">${escapeHtml(s.label || s.key)}</span>
+       <span style="color:var(--text-faint); font-size:11px; margin-left:6px;">${escapeHtml(s.key)}</span>
+     </div>`;
+  });
+  pop.innerHTML = html;
+  document.body.appendChild(pop);
+  // Click outside to close
+  setTimeout(() => {
+    function onDocClick(e) {
+      if (!pop.contains(e.target)) {
+        pop.remove();
+        document.removeEventListener('click', onDocClick);
+      }
+    }
+    document.addEventListener('click', onDocClick);
+  }, 50);
+}
+
+async function correctCluster(clusterId, toStream, anchor) {
+  try {
+    const r = await fetch(`/api/v2/cluster/${clusterId}/correct`, {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({to_stream: toStream}),
+    });
+    if (!r.ok) throw new Error('http ' + r.status);
+    // Close popover + refresh
+    document.querySelectorAll('.wp-correction-popover').forEach(el => el.remove());
+    if (typeof fetchToday === 'function') fetchToday();
+  } catch (e) {
+    alert('Correction failed: ' + e.message);
+  }
+}
+
+// Stable color per stream (matches v1 tinting where possible)
+function todayStreamColor(stream, i) {
+  const palette = ['#3866d0', '#bc38d0', '#d08838', '#38d09a', '#d03866', '#7a7a7a'];
+  if (stream === '<untagged>' || !stream) return '#bbb';
+  // Deterministic hash → palette
+  let h = 0;
+  for (let k = 0; k < stream.length; k++) h = (h * 31 + stream.charCodeAt(k)) >>> 0;
+  return palette[h % palette.length];
+}
+
+let planState = null;  // last response from GET /api/plans/today
+
+async function fetchPlan() {
+  try {
+    const r = await fetch('/api/plans/today');
+    const d = await r.json();
+    planState = d;
+    renderPlan(d);
+  } catch (e) {
+    document.getElementById('plan-panel').innerHTML =
+      '<div class="empty">Could not load plan.</div>';
+  }
+}
+
+// Work-type emoji — picked from item name keywords with a sensible default.
+// Keyword groups intentionally ordered: the FIRST hit wins, so put the more
+// specific ones first (e.g. "model" before "data").
+const WORK_ICONS = [
+  [/\b(report|memo|narrative|brief|letter|draft)/i, '📝'],
+  [/\b(call|meeting|sync|standup|huddle|interview)/i, '🗣'],
+  [/\b(review|read|skim|notes?)\b/i, '📖'],
+  [/\b(research|study|baseline|survey|literature)/i, '🔬'],
+  [/\b(code|build|implement|ship|deploy|refactor|debug)/i, '💻'],
+  [/\b(model|forecast|reforecast|projection)/i, '📈'],
+  [/\b(data|analysis|analyse|analyze|crunch|excel|sheet|kpi)/i, '📊'],
+  [/\b(plan|roadmap|strategy|scoping|design)/i, '🗺'],
+  [/\b(email|inbox|reply|respond|follow.?up)/i, '📧'],
+  [/\b(slide|deck|presentation|pitch)/i, '🎤'],
+  [/\b(carbon|climate|sustainab)/i, '🌱'],
+  [/\b(workpulse|feature|coach|jobs?|plan)/i, '🛠'],
+  [/\b(client|customer|stakeholder)/i, '🤝'],
+];
+function workIcon(name) {
+  for (const [re, ic] of WORK_ICONS) { if (re.test(name)) return ic; }
+  return '✦';
+}
+
+// Time-of-day-aware greeting + matching icon.
+function greetingForNow() {
+  const h = new Date().getHours();
+  if (h < 5)  return { icon: '🌙', text: 'Working late' };
+  if (h < 12) return { icon: '☀️', text: 'Good morning' };
+  if (h < 17) return { icon: '🌤️', text: 'Good afternoon' };
+  if (h < 21) return { icon: '🌇', text: 'Good evening' };
+  return { icon: '🌙', text: 'Late shift' };
+}
+
+// Primary CTA: if no plan today → "Plan your day". If plan exists → "Edit plan".
+function refreshHero() {
+  const g = greetingForNow();
+  document.getElementById('hero-icon').textContent = g.icon;
+  document.getElementById('hero-greeting-text').textContent = g.text;
+  const hasPlan = planState && planState.exists && (planState.items || []).length > 0;
+  document.getElementById('hero-primary-icon').textContent = hasPlan ? '✎' : '🌅';
+  document.getElementById('hero-primary-label').textContent = hasPlan ? 'Edit plan' : 'Plan your day';
+}
+function heroPrimaryAction() { openPlanModal(); }
+
+function renderPlan(p) {
+  const panel = document.getElementById('plan-panel');
+  const btn = document.getElementById('plan-action-btn');
+  refreshHero();
+  if (!p || !p.exists || !p.items || p.items.length === 0) {
+    btn.textContent = '+ Plan your day';
+    panel.innerHTML = '<div class="empty">No plan yet for today. ' +
+      'Take 30 seconds to declare what you\'re working on — ' +
+      'each item becomes a Job that sessions roll up to.</div>';
+    return;
+  }
+  btn.textContent = 'Edit plan';
+  const carried = p.items.filter(it => it.section === 'carried');
+  const fresh   = p.items.filter(it => it.section !== 'carried');
+  const done    = p.items.filter(it => it.done).length;
+  const html = [];
+
+  // Top-line summary: actual vs planned for the whole day
+  const actual = p.actual_minutes_today || 0;
+  const planned = p.planned_minutes || 0;
+  let summary = `${done} of ${p.items.length} done`;
+  if (actual > 0 || planned > 0) {
+    summary += ` · ${fmtMins(actual)} logged` +
+      (planned > 0 ? ` of ${fmtMins(planned)} planned` : '');
+  }
+  html.push(`<div class="sub" style="margin-bottom:14px">${summary}</div>`);
+
+  function gridFor(items, label) {
+    if (!items.length) return '';
+    return `
+      <div class="plan-section-label">${label}</div>
+      <div class="plan-grid">
+        ${items.map(it => renderPlanItem(it, p.items.indexOf(it))).join('')}
+      </div>`;
+  }
+  html.push(gridFor(carried, 'Carried over'));
+  html.push(gridFor(fresh, 'New today'));
+  panel.innerHTML = html.join('');
+}
+
+function renderPlanItem(it, idx) {
+  const checked = it.done ? 'checked' : '';
+  const cls = it.done ? 'plan-item done' : 'plan-item';
+
+  const planned = it.planned_minutes || 0;
+  const actual  = it.actual_minutes_today || 0;
+
+  // Stream color: pulled from systemSnapshot.streams (already fetched).
+  let streamColor = '#6b7280';
+  if (it.stream && systemSnapshot && systemSnapshot.streams) {
+    const found = systemSnapshot.streams.find(s => s.key === it.stream);
+    if (found) streamColor = found.color;
+  }
+
+  const ic = workIcon(it.name);
+
+  // Time line: "45m / 2h planned" or "45m planned" or "45m logged".
+  let timeLine = '';
+  if (planned > 0 && actual > 0) {
+    timeLine = `<span class="actual">${fmtMins(actual)}</span> / ${fmtMins(planned)}`;
+  } else if (planned > 0) {
+    timeLine = `${fmtMins(planned)} planned`;
+  } else if (actual > 0) {
+    timeLine = `<span class="actual">${fmtMins(actual)}</span> logged`;
+  }
+
+  // Progress bar — only when there's a planned target.
+  let barHTML = '';
+  if (planned > 0) {
+    const pct = Math.min(100, Math.round((actual / planned) * 100));
+    const over = actual > planned;
+    const cls2 = over ? 'plan-bar plan-bar-over' : 'plan-bar';
+    barHTML = `<div class="plan-bar-wrap" title="${fmtMins(actual)} of ${fmtMins(planned)} planned">
+      <div class="${cls2}" style="width:${pct}%"></div>
+    </div>`;
+  }
+
+  const streamLabel = it.stream ? `<div class="plan-item-stream">${escapeHtml(it.stream)}</div>` : '';
+
+  return `
+    <div class="${cls}" style="--stream-color:${streamColor}">
+      <div class="plan-item-top">
+        <div class="plan-item-icon">${ic}</div>
+        <div class="plan-item-body">
+          <div class="plan-item-name">${escapeHtml(it.name)}</div>
+          ${streamLabel}
+        </div>
+        <input class="plan-item-check" type="checkbox" ${checked} onchange="togglePlanItem(${idx})" />
+      </div>
+      ${barHTML}
+      <div class="plan-item-bottom">
+        <span class="plan-item-time">${timeLine || '<span style="color:var(--text-faint)">no target set</span>'}</span>
+      </div>
+    </div>`;
+}
+
+async function togglePlanItem(idx) {
+  if (!planState || !planState.items || !planState.items[idx]) return;
+  // Optimistic UI: flip done locally and re-render immediately so the
+  // checkbox + line-through register instantly. We then POST in the
+  // background and replace state with the server's authoritative copy
+  // (which now includes reconciled actual_minutes_today).
+  planState.items[idx].done = !planState.items[idx].done;
+  renderPlan(planState);
+  try {
+    const r = await fetch('/api/plans/today', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({ items: planState.items })
+    });
+    if (r.ok) {
+      const fresh = await r.json();
+      // Only swap if the server returned a valid plan; otherwise keep the
+      // optimistic state and let the next periodic refresh reconcile.
+      if (fresh && fresh.items) {
+        planState = fresh;
+        renderPlan(planState);
+      }
+    } else {
+      // Roll back the optimistic flip on failure.
+      planState.items[idx].done = !planState.items[idx].done;
+      renderPlan(planState);
+      showToast('Could not update plan.');
+    }
+  } catch (e) {
+    planState.items[idx].done = !planState.items[idx].done;
+    renderPlan(planState);
+    showToast('Could not update plan: ' + e.message);
+  }
+}
+
+async function openPlanModal() {
+  // Load suggestions on each open so paused-jobs list is fresh.
+  let sg = { paused: [], yesterday: [], recent: [] };
+  try {
+    const r = await fetch('/api/plans/suggestions');
+    sg = await r.json();
+  } catch (e) {}
+  const block = document.getElementById('plan-suggestions');
+  const sections = [];
+  if (sg.paused && sg.paused.length) {
+    sections.push('<div class="plan-sg-label">Still in flight, carry over?</div>');
+    sg.paused.forEach(j => {
+      sections.push(`
+        <label class="plan-sg-row">
+          <input type="checkbox" data-jobid="${escapeHtml(j.job_id)}"
+                 data-name="${escapeHtml(j.name)}"
+                 data-stream="${escapeHtml(j.stream || '')}"
+                 data-section="carried" />
+          <span>${escapeHtml(j.name)}</span>
+          <span class="meta">${escapeHtml(j.stream || '')}</span>
+        </label>`);
+    });
+  }
+  if (sg.yesterday && sg.yesterday.length) {
+    sections.push('<div class="plan-sg-label">Touched yesterday</div>');
+    sg.yesterday.forEach(j => {
+      sections.push(`
+        <label class="plan-sg-row">
+          <input type="checkbox" data-jobid="${escapeHtml(j.job_id)}"
+                 data-name="${escapeHtml(j.name)}"
+                 data-stream="${escapeHtml(j.stream || '')}"
+                 data-section="carried" />
+          <span>${escapeHtml(j.name)}</span>
+          <span class="meta">${escapeHtml(j.stream || '')}</span>
+        </label>`);
+    });
+  }
+  if (sg.recent && sg.recent.length) {
+    sections.push('<div class="plan-sg-label">Recent (last 7 days)</div>');
+    sg.recent.slice(0, 8).forEach(j => {
+      sections.push(`
+        <label class="plan-sg-row">
+          <input type="checkbox" data-jobid="${escapeHtml(j.job_id)}"
+                 data-name="${escapeHtml(j.name)}"
+                 data-stream="${escapeHtml(j.stream || '')}"
+                 data-section="carried" />
+          <span>${escapeHtml(j.name)}</span>
+          <span class="meta">${escapeHtml(j.last_day || '')}</span>
+        </label>`);
+    });
+  }
+  if (sections.length === 0) {
+    block.innerHTML = '<div class="sub">No previous jobs to carry over yet. Just add new items below.</div>';
+  } else {
+    block.innerHTML = sections.join('');
+  }
+  // Pre-populate the textarea with existing "new" items if a plan already exists today
+  const existingNew = (planState && planState.items)
+    ? planState.items.filter(it => it.section !== 'carried' && !it.job_id)
+                     .map(it => it.planned_minutes
+                       ? `${it.name} (~${it.planned_minutes} min)`
+                       : it.name)
+                     .join('\n')
+    : '';
+  document.getElementById('plan-new-items').value = existingNew;
+  document.getElementById('plan-modal').classList.add('open');
+  setTimeout(() => document.getElementById('plan-new-items').focus(), 60);
+}
+
+function closePlanModal() {
+  document.getElementById('plan-modal').classList.remove('open');
+}
+
+function parsePlanLine(line) {
+  // "Foo bar (~30 min)" -> { name: "Foo bar", planned_minutes: 30 }
+  const trimmed = line.trim();
+  if (!trimmed) return null;
+  const m = trimmed.match(/^(.*?)\s*\(\s*~?\s*(\d+)\s*min\s*\)\s*$/i);
+  if (m) return { name: m[1].trim(), planned_minutes: parseInt(m[2], 10) };
+  return { name: trimmed, planned_minutes: null };
+}
+
+async function submitPlan() {
+  const items = [];
+  // Carried-over (checkbox-selected) suggestions
+  document.querySelectorAll('#plan-suggestions input[type="checkbox"]:checked').forEach(cb => {
+    items.push({
+      name:    cb.dataset.name,
+      job_id:  cb.dataset.jobid,
+      stream:  cb.dataset.stream || null,
+      section: 'carried',
+    });
+  });
+  // New items typed in the textarea
+  const raw = document.getElementById('plan-new-items').value || '';
+  raw.split('\n').forEach(line => {
+    const it = parsePlanLine(line);
+    if (it) items.push({ ...it, section: 'new' });
+  });
+  if (items.length === 0) {
+    showToast('Nothing to save — pick at least one item or type a new one.');
+    return;
+  }
+  try {
+    const r = await fetch('/api/plans/today', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({ items })
+    });
+    const d = await r.json();
+    if (r.ok) {
+      planState = d;
+      renderPlan(d);
+      closePlanModal();
+      showToast('Plan saved — ' + items.length + ' item' + (items.length===1?'':'s'));
+      fetchJobs();  // refresh Jobs in flight since new Jobs may have been created
+    } else {
+      showToast('Error saving plan: ' + (d.error || 'unknown'));
+    }
+  } catch (e) {
+    showToast('Error: ' + e.message);
+  }
+}
+
+async function endJob(id, name) {
+  if (!confirm(`End job "${name}"?\n\nSessions stop rolling up to it. The job's history is preserved.`)) return;
+  try {
+    const r = await fetch(`/api/jobs/${id}/end`, { method: 'POST' });
+    const d = await r.json();
+    if (r.ok) {
+      showToast(`Ended: ${name}`);
+      await fetchJobs();
+    } else {
+      showToast('Error: ' + (d.error || 'could not end job'));
+    }
+  } catch (e) {
+    showToast('Error: ' + e.message);
+  }
+}
+
+// ── Job-name suggestions (v1.2b) ───────────────────────────────────────────
+
+function renderSuggestions(suggestions) {
+  const block = document.getElementById('suggestions-block');
+  if (!suggestions || suggestions.length === 0) { block.innerHTML = ''; return; }
+  block.innerHTML = suggestions.map(s => {
+    const cls = s.confidence === 'high' ? '' : 'medium';
+    const streamLabel = escapeHtml(s.label || s.stream);
+    const name = escapeHtml(s.name);
+    const totalMin = fmtMins(s.total_minutes);
+    const confLabel = s.confidence === 'high' ? 'strong match' : 'possible';
+    return `
+      <div class="sg-card ${cls}">
+        <div class="sg-bulb">💡</div>
+        <div class="sg-body">
+          <div class="sg-line1">
+            Looks like you've been on a single piece of
+            <strong>${streamLabel}</strong> work — call it
+            <strong>"${name}"</strong>?
+          </div>
+          <div class="sg-line2">
+            ${totalMin} of activity in the last 4 hours · ${s.session_count} window${s.session_count===1?'':'s'} · ${confLabel}
+          </div>
+        </div>
+        <div class="sg-actions">
+          <button class="primary" onclick="acceptSuggestion('${escapeHtml(s.stream)}', '${escapeAttr(name)}')">Accept</button>
+          <button onclick="renameSuggestion('${escapeHtml(s.stream)}', '${escapeAttr(name)}')">Rename</button>
+          <button onclick="dismissSuggestion('${escapeHtml(s.stream)}', '${escapeAttr(name)}')">Dismiss</button>
+        </div>
+      </div>`;
+  }).join('');
+}
+
+function escapeAttr(s) {
+  return (s || '').replace(/'/g, "\'").replace(/"/g, '&quot;');
+}
+
+async function acceptSuggestion(stream, name) {
+  try {
+    const r = await fetch('/api/jobs/suggestions/accept', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({ stream, name }),
+    });
+    const d = await r.json();
+    if (r.ok) {
+      showToast(`Started: ${name}`);
+      await fetchJobs();
+    } else {
+      showToast('Error: ' + (d.error || 'could not start job'));
+    }
+  } catch (e) { showToast('Error: ' + e.message); }
+}
+
+function renameSuggestion(stream, name) {
+  // Open the existing Start-Job modal, pre-filled with the suggested name + stream
+  openStartJob();
+  setTimeout(() => {
+    document.getElementById('sj-name').value = name;
+    const sel = document.getElementById('sj-stream');
+    if (sel) sel.value = stream;
+    document.getElementById('sj-name').focus();
+    document.getElementById('sj-name').select();
+  }, 80);
+}
+
+async function dismissSuggestion(stream, name) {
+  try {
+    const r = await fetch('/api/jobs/suggestions/dismiss', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({ stream }),
+    });
+    if (r.ok) {
+      showToast('Suggestion dismissed.');
+      await fetchJobs();
+    } else {
+      showToast('Could not dismiss.');
+    }
+  } catch (e) { showToast('Error: ' + e.message); }
+}
+
+async function resumeJob(id, name) {
+  if (!confirm(`Resume "${name}"?\n\nStarts a new active job with the same name + stream. The previous job's record is preserved.`)) return;
+  try {
+    const r = await fetch(`/api/jobs/${id}/resume`, { method: 'POST' });
+    const d = await r.json();
+    if (r.ok) {
+      showToast(`Resumed: ${name}`);
+      await fetchJobs();
+    } else {
+      showToast('Error: ' + (d.error || 'could not resume'));
+    }
+  } catch (e) {
+    showToast('Error: ' + e.message);
+  }
+}
+
+// ── Job export modal ──────────────────────────────────────────────────────
+let _currentExportJobId = null;
+let _currentExportName = null;
+let _currentExportMarkdown = null;
+
+function openExport(jobId, name) {
+  _currentExportJobId = jobId;
+  _currentExportName = name;
+  _currentExportMarkdown = null;
+  document.getElementById('export-title').textContent = 'Export: ' + name;
+  document.getElementById('export-sub').textContent =
+    'A self-contained markdown digest you can paste into an email, timesheet, or shared note.';
+  document.getElementById('export-preview').innerHTML =
+    '<div class="export-loading">Generating digest…</div>';
+  document.getElementById('export-modal').classList.add('open');
+  loadExport();
+}
+
+function closeExport() {
+  document.getElementById('export-modal').classList.remove('open');
+  _currentExportJobId = null;
+  _currentExportMarkdown = null;
+}
+
+async function loadExport() {
+  if (!_currentExportJobId) return;
+  const includeTitles = document.getElementById('export-include-titles').checked;
+  try {
+    const r = await fetch(`/api/jobs/${_currentExportJobId}/export?include_titles=${includeTitles}`);
+    if (!r.ok) {
+      const err = await r.json().catch(() => ({error:'unknown'}));
+      document.getElementById('export-preview').innerHTML =
+        '<div class="export-loading">Error: ' + escapeHtml(err.error || 'failed') + '</div>';
+      return;
+    }
+    _currentExportMarkdown = await r.text();
+    document.getElementById('export-preview').textContent = _currentExportMarkdown;
+  } catch (e) {
+    document.getElementById('export-preview').innerHTML =
+      '<div class="export-loading">Error: ' + escapeHtml(e.message) + '</div>';
+  }
+}
+
+document.addEventListener('change', e => {
+  if (e.target && e.target.id === 'export-include-titles') loadExport();
+});
+
+async function copyExport() {
+  if (!_currentExportMarkdown) return;
+  try {
+    await navigator.clipboard.writeText(_currentExportMarkdown);
+    showToast('Copied to clipboard.');
+  } catch (e) {
+    showToast('Copy failed: ' + e.message);
+  }
+}
+
+function downloadExport() {
+  if (!_currentExportMarkdown) return;
+  const safe = (_currentExportName || 'job').replace(/[^A-Za-z0-9._-]+/g, '_').replace(/^_+|_+$/g, '');
+  const filename = `${safe}-${_currentExportJobId}.md`;
+  const blob = new Blob([_currentExportMarkdown], { type: 'text/markdown;charset=utf-8' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url; a.download = filename;
+  document.body.appendChild(a); a.click(); document.body.removeChild(a);
+  URL.revokeObjectURL(url);
+  showToast('Downloaded ' + filename);
+}
+
+// ── Weekly heatmap (last 14 days) ──────────────────────────────────────────
+async function fetchHeatmap() {
+  let d;
+  try {
+    const r = await fetch('/api/calendar?days=14');
+    d = await r.json();
+  } catch (e) { return; }
+  const days = d.days || [];
+  if (days.length === 0) {
+    document.getElementById('heatmap').innerHTML = '<div class="empty">No data yet.</div>';
+    return;
+  }
+  const maxMin = Math.max(1, ...days.map(x => x.total_minutes));
+  const activeISO = activeDate();
+  document.getElementById('heatmap').innerHTML = days.map(day => {
+    const top = day.by_stream && day.by_stream[0];
+    const color = top ? top.color : 'var(--border)';
+    const heightPct = day.total_minutes > 0
+      ? Math.max(6, Math.round(day.total_minutes / maxMin * 100)) : 0;
+    const dayLabel = (new Date(day.date + 'T12:00:00'))
+      .toLocaleDateString(undefined, {day:'numeric'});
+    const cls = 'hm-col' + (day.total_minutes === 0 ? ' empty' : '')
+              + (day.date === activeISO ? ' selected' : '');
+    const tip = `${day.weekday} ${day.date} — ${fmtMins(day.total_minutes)}`;
+    return `<div class="${cls}" title="${tip}" onclick="selectDate('${day.date}')">
+              <div class="hm-bar-wrap">
+                <div class="hm-bar" style="background:${color};height:${heightPct}%"></div>
+              </div>
+              <div class="hm-day">${dayLabel}</div>
+            </div>`;
+  }).join('');
+}
+
+// ── Loop A: tag-as dropdown ────────────────────────────────────────────────
+function toggleTagMenu(i) {
+  // close all others first
+  document.querySelectorAll('.tag-menu.open').forEach(m => {
+    if (m.id !== 'tag-menu-' + i) m.classList.remove('open');
+  });
+  const m = document.getElementById('tag-menu-' + i);
+  if (m) m.classList.toggle('open');
+}
+
+document.addEventListener('click', e => {
+  if (!e.target.closest('.attn-tag')) {
+    document.querySelectorAll('.tag-menu.open').forEach(m => m.classList.remove('open'));
+  }
+});
+
+async function learn(rawTitle, streamKey) {
+  try {
+    const r = await fetch('/api/learn', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({ raw_title: rawTitle, stream: streamKey })
+    });
+    const d = await r.json();
+    if (d.ok) {
+      showToast(streamKey
+        ? `Tagged as ${streamKey}. WorkPulse will remember.`
+        : `Will ignore this window in future.`);
+      await fetchRealWork();
+    } else {
+      showToast('Error: ' + (d.error || 'could not save rule'));
+    }
+  } catch (e) {
+    showToast('Error: ' + e.message);
+  }
+}
+
+// ── Settings modal ─────────────────────────────────────────────────────────
+function openSettings() {
+  document.getElementById('settings-modal').classList.add('open');
+  fetch('/api/system').then(r => r.json()).then(d => {
+    const cfg = d || {};
+    // Backend summary block
+    const llm = cfg.llm || {};
+    const ol  = llm.ollama || {};
+    const anth = (llm.anthropic || {});
+    let lines = [];
+    const active = cfg.ai_backend || 'none';
+    const activeLabel = active === 'anthropic' ? 'Cloud (Anthropic Claude)'
+                      : active === 'ollama'    ? `Local (Ollama, ${ol.want_model || ''})`
+                      :                          'OFF — no backend configured';
+    lines.push(`<div><strong>Active:</strong> ${activeLabel}</div>`);
+    lines.push(`<div style="margin-top:6px"><strong>Anthropic:</strong> ${anth.available ? 'key configured' : 'not configured'}</div>`);
+    if (ol.installed) {
+      const m = (ol.models || []).length;
+      lines.push(`<div><strong>Ollama:</strong> running, ${m} model${m===1?'':'s'} pulled${ol.model_ready ? ' (incl. '+ol.want_model+')' : ' (need '+ol.want_model+')'}</div>`);
+      if (!ol.model_ready) {
+        lines.push(`<div style="margin-top:4px;color:var(--text-faint)">Run <code>ollama pull ${ol.want_model}</code> to enable the local backend.</div>`);
+      }
+    } else {
+      lines.push(`<div><strong>Ollama:</strong> not detected. <a href="https://ollama.com/download" target="_blank" rel="noopener" style="color:var(--text-soft)">Install Ollama →</a></div>`);
+    }
+    document.getElementById('backend-summary').innerHTML = lines.join('');
+    document.getElementById('anthropic-status').className =
+      'status-dot' + (cfg.secrets.anthropic_key.configured ? '' : ' off');
+    document.getElementById('smtp-status').className =
+      'status-dot' + (cfg.secrets.smtp_password.configured ? '' : ' off');
+    document.getElementById('email-enabled').checked = !!cfg.email_enabled;
+  });
+}
+function closeSettings() {
+  document.getElementById('settings-modal').classList.remove('open');
+  // Clear inputs so secrets aren't sitting in DOM
+  document.getElementById('anthropic-input').value = '';
+  document.getElementById('smtp-input').value = '';
+}
+
+async function saveSettings() {
+  const anth = document.getElementById('anthropic-input').value.trim();
+  const smtp = document.getElementById('smtp-input').value.trim();
+  const smtpUser = document.getElementById('smtp-user-input').value.trim();
+  const emailOn = document.getElementById('email-enabled').checked;
+
+  const ops = [];
+  if (anth) ops.push(fetch('/api/settings/secret', {
+    method:'POST', headers:{'Content-Type':'application/json'},
+    body: JSON.stringify({ name:'anthropic_key', value: anth })
+  }));
+  if (smtp) ops.push(fetch('/api/settings/secret', {
+    method:'POST', headers:{'Content-Type':'application/json'},
+    body: JSON.stringify({ name:'smtp_password', value: smtp })
+  }));
+  const emailPayload = { enabled: emailOn };
+  if (smtpUser) { emailPayload.smtp_user = smtpUser; emailPayload.from_addr = smtpUser; emailPayload.to_addr = smtpUser; }
+  ops.push(fetch('/api/settings/email', {
+    method:'POST', headers:{'Content-Type':'application/json'},
+    body: JSON.stringify(emailPayload)
+  }));
+
+  try {
+    const results = await Promise.all(ops);
+    const allOk = results.every(r => r.ok);
+    if (allOk) {
+      showToast('Settings saved.');
+      closeSettings();
+      await fetchSystem();
+    } else {
+      const errs = await Promise.all(results.map(r => r.ok ? null : r.json().catch(() => ({error:'unknown'}))));
+      const firstErr = errs.find(e => e && e.error);
+      showToast('Save failed: ' + (firstErr ? firstErr.error : 'unknown'));
+    }
+  } catch (e) {
+    showToast('Save failed: ' + e.message);
+  }
+}
+
+// ── Refresh orchestration ──────────────────────────────────────────────────
+async function refreshDayPanels() {
+  await Promise.all([fetchHealth(), fetchPersonal(), fetchProfile(), fetchToday(), fetchRealWork(), fetchLastActive(), fetchAI(), fetchJobs(), fetchPlan()]);
+  await fetchHeatmap();   // re-render so selected day highlights
+}
+
+async function refresh() {
+  await fetchSystem();
+  if (todayISO) renderDateBar();
+  setHeaderDate();
+  await refreshDayPanels();
+  document.getElementById('refresh-label').textContent =
+    'Updated ' + new Date().toLocaleTimeString();
+}
+
+refresh();
+setInterval(refresh, 30000);

@@ -1,0 +1,436 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>WorkPulse</title>
+<link rel="stylesheet" href="/static/dashboard.css">
+</head>
+<body>
+
+<div class="topbar">
+  <div class="brand" style="display:flex; align-items:center; gap:8px;">
+    <button id="personal-lock-btn" onclick="openPersonalModal()" title="Personal (locked)"
+            style="background:transparent; border:0; cursor:pointer; padding:2px 4px; font-size:14px; color:var(--text-soft); opacity:0.6;">🔒</button>
+    <span class="pulse" id="pulse"></span>WorkPulse <span id="actor-suffix" style="color:var(--text-soft);font-weight:400;margin-left:6px"></span></div>
+  <div class="topbar-right">
+    <span class="date" id="date"></span>
+    <button id="health-indicator" onclick="openHealthModal(event)" title="System health"
+            style="background:transparent; border:0; cursor:pointer; padding:2px 6px; font-size:15px; line-height:1; display:inline-flex; align-items:center; gap:4px;">
+      <span id="health-dot">●</span>
+    </button>
+    <button class="icon-btn" onclick="openViewMenu(event)" title="Show / hide cards" style="margin-right:6px;">View</button>
+    <button class="icon-btn" onclick="openSettings()" title="Settings">Settings</button>
+  </div>
+</div>
+
+<!-- Health modal: opens on the health indicator click -->
+<div id="health-modal" style="display:none; position:fixed; inset:0; background:rgba(0,0,0,0.4); z-index:10000; align-items:center; justify-content:center;">
+  <div style="background:var(--surface, #fff); border-radius:10px; padding:20px; min-width:420px; max-width:560px; box-shadow:0 10px 40px rgba(0,0,0,0.2);">
+    <div style="display:flex; align-items:center; justify-content:space-between; margin-bottom:14px;">
+      <strong id="health-modal-title" style="font-size:16px;">System health</strong>
+      <button onclick="closeHealthModal()" style="background:transparent; border:0; cursor:pointer; font-size:18px; color:var(--text-soft);">×</button>
+    </div>
+    <div id="health-modal-body"><div class="empty">Loading…</div></div>
+  </div>
+</div>
+
+<!-- Personal modal: opens on padlock click -->
+<div id="personal-modal" style="display:none; position:fixed; inset:0; background:rgba(0,0,0,0.4); z-index:10000; align-items:center; justify-content:center;">
+  <div style="background:var(--surface, #fff); border-radius:10px; padding:20px; min-width:380px; max-width:520px; box-shadow:0 10px 40px rgba(0,0,0,0.2);">
+    <div style="display:flex; align-items:center; justify-content:space-between; margin-bottom:12px;">
+      <strong style="font-size:16px;">🔒 Personal</strong>
+      <button onclick="closePersonalModal()" style="background:transparent; border:0; cursor:pointer; font-size:18px; color:var(--text-soft);">×</button>
+    </div>
+    <div id="personal-modal-body"><div class="empty">Loading…</div></div>
+  </div>
+</div>
+
+<!-- AI-off banner (only shown when no backend available) -->
+<div class="banner" id="ai-banner" style="display:none">
+  <div>
+    <strong>Smart auto-tagging is off.</strong>
+    <span id="ai-banner-detail">Add an Anthropic API key in Settings, or install Ollama for free local AI.</span>
+  </div>
+  <button onclick="openSettings()">Open Settings</button>
+</div>
+
+<!-- Date navigation -->
+<div class="datebar" id="datebar"></div>
+
+<div class="hero">
+  <div class="hero-text">
+    <div class="hero-greeting"><span class="sun" id="hero-icon">☀️</span><span id="hero-greeting-text">Good morning</span></div>
+    <h1 id="hero-headline">Loading…</h1>
+    <div class="sub" id="hero-sub"></div>
+  </div>
+  <div class="hero-cta">
+    <button class="btn-hero" id="hero-primary-btn" onclick="heroPrimaryAction()">
+      <span class="ic" id="hero-primary-icon">🌅</span>
+      <span id="hero-primary-label">Plan your day</span>
+    </button>
+    <button class="btn-hero subtle" onclick="openStartJob()">
+      <span class="ic">＋</span><span>Start a job</span>
+    </button>
+  </div>
+</div>
+
+<!-- Untagged-time alert (shows only when threshold crossed) -->
+<div class="alert-card" id="untagged-alert" style="display:none">
+  <div class="alert-head">
+    <span class="alert-icon">⚠</span>
+    <span id="untagged-alert-text"></span>
+  </div>
+  <div id="untagged-alert-items"></div>
+</div>
+
+<div class="cards-grid">
+
+  <!-- v2 capture bar: frictionless input. The brain needs intent declarations
+       to know what work belongs to which project; the CLI verb is too slow. -->
+  <div class="card span-12" id="capture-bar" style="background: var(--bg-warm, #fff6e0); border-left: 3px solid #f59e0b;">
+    <form id="capture-form" onsubmit="return submitCapture(event)" style="display:flex; gap:8px; align-items:center;">
+      <label for="capture-input" style="font-size:13px; color:var(--text-soft); white-space:nowrap;">
+        What are you working on?
+      </label>
+      <input type="text" id="capture-input"
+             placeholder="e.g. Uganda MEMD narrative, methodology section"
+             style="flex:1; padding:8px 12px; border:1px solid var(--border, #eee5d2); border-radius:6px; font-size:14px; background:var(--surface, #fff);"
+             autocomplete="off" />
+      <button type="submit"
+              style="padding:8px 14px; border:0; border-radius:6px; background:#f59e0b; color:#fff; font-weight:600; cursor:pointer;">
+        Capture
+      </button>
+      <span id="capture-status" style="font-size:12px; color:var(--text-soft); min-width:120px; text-align:right;"></span>
+    </form>
+  </div>
+
+  <!-- v2 brain view: what you actually worked on today -->
+  <div class="card span-12 collapsible" id="today-card" data-card="today" data-card-label="What you worked on today" style="border-left: 3px solid var(--accent, #3b82f6);">
+    <div class="eyebrow card-header" onclick="toggleCard('today')">
+      <span class="card-toggle">▾</span>
+      <div class="card-header-text">
+        <span>What you worked on today</span>
+        <span id="today-meta" class="card-header-meta"></span>
+      </div>
+    </div>
+    <div class="card-summary" id="today-summary"></div>
+    <div class="card-body">
+      <div id="today-panel"><div class="empty">Loading…</div></div>
+    </div>
+  </div>
+
+  <!-- v2 brain layer: "About George" — the living profile (Step A) -->
+  <div class="card span-12 collapsible" id="profile-card" data-card="profile" data-card-label="Who you are" style="border-left: 3px solid #8b5cf6;">
+    <div class="eyebrow card-header" onclick="toggleCard('profile')">
+      <span class="card-toggle">▾</span>
+      <div class="card-header-text">
+        <span>Who you are</span>
+        <span id="profile-meta" class="card-header-meta"></span>
+      </div>
+    </div>
+    <div class="card-summary" id="profile-summary"></div>
+    <div class="card-body">
+      <div id="profile-panel"><div class="empty">Loading…</div></div>
+    </div>
+  </div>
+
+  <!-- Today's plan (v1.7 intent capture — the Morning Plan surface) -->
+  <div class="card plan-card span-12 collapsible" id="plan-card" data-card="plan" data-card-label="Today's plan">
+    <div class="eyebrow card-header plan-eyebrow" onclick="toggleCard('plan', event)">
+      <span class="card-toggle">▾</span>
+      <div class="card-header-text">
+        <span>Today's plan</span>
+        <button class="btn-start-job" id="plan-action-btn" onclick="event.stopPropagation(); openPlanModal()">+ Plan your day</button>
+      </div>
+    </div>
+    <div class="card-body">
+      <div id="plan-panel"><div class="empty">Loading…</div></div>
+    </div>
+  </div>
+
+  <!-- Jobs in flight (the Coach surface — v1.1a + v1.2a + v1.2b) -->
+  <div class="card jobs-card span-12 collapsible" id="jobs-card" data-card="jobs" data-card-label="Jobs in flight">
+    <div class="eyebrow card-header jobs-eyebrow" onclick="toggleCard('jobs')">
+      <span class="card-toggle">▾</span>
+      <div class="card-header-text">
+        <span>Jobs in flight</span>
+      </div>
+    </div>
+    <div class="card-body">
+      <div id="suggestions-block" class="sg-block"></div>
+      <div id="jobs-panel"><div class="empty">Loading…</div></div>
+      <div id="recently-ended-block"></div>
+    </div>
+  </div>
+
+  <!-- Weekly heatmap -->
+  <div class="card span-12 collapsible" data-card="heatmap" data-card-label="Last 14 days">
+    <div class="eyebrow card-header" onclick="toggleCard('heatmap')">
+      <span class="card-toggle">▾</span>
+      <div class="card-header-text"><span>Last 14 days</span></div>
+    </div>
+    <div class="card-body">
+      <div class="heatmap" id="heatmap"><div class="empty">Loading…</div></div>
+    </div>
+  </div>
+
+  <div class="card span-8 collapsible" data-card="donut" data-card-label="Where the time went">
+    <div class="eyebrow card-header" onclick="toggleCard('donut')">
+      <span class="card-toggle">▾</span>
+      <div class="card-header-text"><span>Where the time went</span></div>
+    </div>
+    <div class="card-body">
+      <div id="donut-panel"><div class="empty">Loading…</div></div>
+    </div>
+  </div>
+  <div class="card span-4 collapsible" data-card="last-active" data-card-label="Last active">
+    <div class="eyebrow card-header" onclick="toggleCard('last-active')">
+      <span class="card-toggle">▾</span>
+      <div class="card-header-text"><span>Last active</span></div>
+    </div>
+    <div class="card-body">
+      <div id="last-active"><div class="empty">Loading…</div></div>
+    </div>
+  </div>
+
+  <div class="card span-12 collapsible" data-card="timeline" data-card-label="Today's flow">
+    <div class="eyebrow card-header" onclick="toggleCard('timeline')">
+      <span class="card-toggle">▾</span>
+      <div class="card-header-text"><span>Today's flow</span></div>
+    </div>
+    <div class="card-body">
+      <div class="tl-wrap">
+        <div class="tl" id="timeline"></div>
+        <div class="tl-axis" id="tl-axis"></div>
+      </div>
+    </div>
+  </div>
+
+  <div class="card span-8 collapsible" data-card="attention" data-card-label="Needs your attention">
+    <div class="eyebrow card-header" onclick="toggleCard('attention')">
+      <span class="card-toggle">▾</span>
+      <div class="card-header-text"><span>Needs your attention</span></div>
+    </div>
+    <div class="card-body">
+      <div id="attn-panel"><div class="empty">Nothing untagged today.</div></div>
+    </div>
+  </div>
+  <div class="card span-4 collapsible" data-card="apps" data-card-label="Apps used">
+    <div class="eyebrow card-header" onclick="toggleCard('apps')">
+      <span class="card-toggle">▾</span>
+      <div class="card-header-text"><span>Apps used</span></div>
+    </div>
+    <div class="card-body">
+      <div id="apps-panel"><div class="empty">Loading…</div></div>
+    </div>
+  </div>
+
+  <div class="card span-12 collapsible" data-card="ai" data-card-label="AI sessions">
+    <div class="eyebrow card-header" onclick="toggleCard('ai')">
+      <span class="card-toggle">▾</span>
+      <div class="card-header-text"><span>AI sessions</span></div>
+    </div>
+    <div class="card-body">
+      <div id="ai-panel"><div class="empty">Loading…</div></div>
+    </div>
+  </div>
+
+  <div class="span-12">
+    <details>
+      <summary style="cursor:pointer; color:var(--text-soft); font-size:13px; padding:8px 4px;">Show every window visit today</summary>
+      <div class="card" style="margin-top: 8px">
+        <div id="sessions-panel"><div class="empty">Loading…</div></div>
+      </div>
+    </details>
+  </div>
+
+</div>
+
+<footer>
+  <div class="foot-status">
+    <span id="foot-status">Checking watcher…</span>
+    <button class="btn-link" id="toggle-btn" onclick="toggleWatcher()">…</button>
+  </div>
+  <div id="refresh-label"></div>
+</footer>
+
+<!-- Settings modal (hidden until openSettings()) -->
+<div class="modal-bg" id="settings-modal" onclick="if(event.target===this)closeSettings()">
+  <div class="modal" role="dialog" aria-labelledby="set-title">
+    <h2 id="set-title">Settings</h2>
+    <div class="sub">All values stay on this machine. Nothing is sent anywhere except direct API calls you make.</div>
+
+    <div class="modal-row" style="background:var(--bg);padding:14px 16px;border-radius:10px;border:1px solid var(--border);margin-bottom:14px">
+      <label style="margin-bottom:8px">Taxonomy (stream hierarchy)</label>
+      <div style="font-size:13px;color:var(--text-soft);line-height:1.6;margin-bottom:10px">
+        Tree of contexts that everything you do gets tagged under.
+      </div>
+      <button class="btn-hero subtle" style="font-size:13px;padding:8px 14px" onclick="closeSettings(); openTaxonomy('edit');">Edit taxonomy</button>
+    </div>
+
+    <!-- AI backend status block (read-only summary) -->
+    <div class="modal-row" style="background:var(--bg);padding:14px 16px;border-radius:10px;border:1px solid var(--border)">
+      <label style="margin-bottom:8px">AI backend currently in use</label>
+      <div id="backend-summary" style="font-size:13px;color:var(--text-soft);line-height:1.6">
+        Loading…
+      </div>
+    </div>
+
+    <div class="modal-row">
+      <label>
+        <span id="anthropic-status" class="status-dot off"></span>
+        Anthropic API key <span style="color:var(--text-faint);font-weight:400">(cloud, best quality, pay per call)</span>
+      </label>
+      <input type="password" id="anthropic-input" placeholder="sk-ant-…" autocomplete="off" />
+      <div class="help">
+        Unlocks AI auto-tagging of windows and (later) AI-written reports.
+        <a href="https://console.anthropic.com/settings/keys" target="_blank" rel="noopener">Get a key →</a>
+      </div>
+    </div>
+
+    <div class="modal-row">
+      <label>
+        <span id="smtp-status" class="status-dot off"></span>
+        Gmail App Password (for email reports)
+      </label>
+      <input type="password" id="smtp-input" placeholder="xxxx xxxx xxxx xxxx" autocomplete="off" />
+      <div class="help">
+        Optional. Used only if you turn on email reports below.
+        <a href="https://myaccount.google.com/apppasswords" target="_blank" rel="noopener">Create one →</a>
+      </div>
+    </div>
+
+    <div class="modal-row">
+      <label>Gmail address (used as the From and To)</label>
+      <input type="email" id="smtp-user-input" placeholder="you@gmail.com" autocomplete="off" />
+    </div>
+
+    <div class="modal-row toggle-row">
+      <div>
+        <label style="margin:0">Email me daily &amp; weekly reports</label>
+        <div class="help">Off by default. Requires App Password above.</div>
+      </div>
+      <label class="switch">
+        <input type="checkbox" id="email-enabled" />
+      </label>
+    </div>
+
+    <div class="modal-actions">
+      <button class="btn-ghost" onclick="closeSettings()">Cancel</button>
+      <button class="btn-primary" onclick="saveSettings()">Save</button>
+    </div>
+  </div>
+</div>
+
+<!-- Job-Export modal -->
+<div class="modal-bg export-modal" id="export-modal" onclick="if(event.target===this)closeExport()">
+  <div class="modal" role="dialog" aria-labelledby="export-title">
+    <h2 id="export-title">Export job</h2>
+    <div class="sub" id="export-sub">Building digest…</div>
+    <div class="export-meta">
+      <label style="display:inline-flex;gap:6px;align-items:center;font-size:12px">
+        <input type="checkbox" id="export-include-titles" checked />
+        Include window titles in the day-by-day breakdown
+      </label>
+    </div>
+    <div class="export-preview" id="export-preview"><div class="export-loading">Generating…</div></div>
+    <div class="modal-actions">
+      <button class="btn-ghost" onclick="closeExport()">Close</button>
+      <div style="display:flex;gap:8px">
+        <button class="btn-link" onclick="copyExport()">Copy</button>
+        <button class="btn-primary" onclick="downloadExport()">Download .md</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- Taxonomy / stream-tree wizard (v1.7 Slice 2) -->
+<div class="modal-bg" id="tx-modal" onclick="if(event.target===this)closeTaxonomy()">
+  <div class="modal" role="dialog" aria-labelledby="tx-title" style="max-width: 720px">
+    <h2 id="tx-title">Set up your taxonomy</h2>
+    <div class="sub" id="tx-intro">
+      WorkPulse organises your work as a tree of contexts. Build the tree once;
+      every Job and every window's time rolls up through it. You can edit this any time
+      from Settings.
+    </div>
+
+    <div id="tx-quickstart" style="margin: 18px 0; display: none;">
+      <div class="plan-sg-label">Quick start: tap to add a top-level domain</div>
+      <div style="display:flex; flex-wrap:wrap; gap:8px; margin-top:8px;">
+        <button class="tx-qs-btn" onclick="txQuickAdd('personal','Personal')">+ Personal</button>
+        <button class="tx-qs-btn" onclick="txQuickAdd('masters','Master\'s')">+ Master's</button>
+        <button class="tx-qs-btn" onclick="txQuickAdd('work','Work')">+ Work</button>
+      </div>
+    </div>
+
+    <div id="tx-tree" style="margin-top: 18px;"></div>
+
+    <div id="tx-migration" style="margin-top: 18px; display: none;"></div>
+
+    <div class="modal-actions">
+      <button class="btn-ghost" onclick="closeTaxonomy()">Close</button>
+      <button class="btn-primary" onclick="finishTaxonomy()">Done</button>
+    </div>
+  </div>
+</div>
+
+<!-- Plan-the-day modal -->
+<div class="modal-bg" id="plan-modal" onclick="if(event.target===this)closePlanModal()">
+  <div class="modal" role="dialog" aria-labelledby="plan-title">
+    <h2 id="plan-title">Plan today</h2>
+    <div class="sub">Declare what you intend to work on. Each item becomes a Job. Sessions roll up to it automatically. End-of-day you can see planned vs actual.</div>
+
+    <div id="plan-suggestions" class="plan-sg-block"></div>
+
+    <div class="sj-row">
+      <label for="plan-new-items">New items (one per line)</label>
+      <textarea id="plan-new-items" rows="6" placeholder="One item per line, e.g.&#10;NKCC Q3 narrative (~120 min)&#10;Call Mwangi (~30 min)&#10;Review v1.7 brief"></textarea>
+      <div class="sub plan-hint">Tip: add <code>(~N min)</code> for an optional time target.</div>
+    </div>
+
+    <div class="modal-actions">
+      <button class="btn-ghost" onclick="closePlanModal()">Cancel</button>
+      <button class="btn-primary" onclick="submitPlan()">Save plan</button>
+    </div>
+  </div>
+</div>
+
+<!-- Start-Job modal -->
+<div class="modal-bg" id="sj-modal" onclick="if(event.target===this)closeStartJob()">
+  <div class="modal" role="dialog" aria-labelledby="sj-title">
+    <h2 id="sj-title">Start a job</h2>
+    <div class="sub">A job is a coherent unit of work: "NKCC Q3 report", "Chapter 3 lit review". Sessions inside this stream from now until you end the job will roll up to it.</div>
+    <div class="sj-row">
+      <label for="sj-name">What are you working on?</label>
+      <input type="text" id="sj-name" placeholder="e.g. NKCC Q3 report" autocomplete="off" />
+    </div>
+    <div class="sj-row">
+      <label for="sj-stream">Stream</label>
+      <select id="sj-stream" onchange="onStreamSelectChange()"></select>
+      <div id="sj-newstream" style="display:none; margin-top:10px; padding:12px; background:var(--bg-soft); border-radius:8px; border:1px dashed var(--border-d)">
+        <div style="display:grid; grid-template-columns: 1fr 1.4fr; gap:8px; margin-bottom:8px">
+          <input type="text" id="sj-newstream-key" placeholder="key (e.g. client-x)" />
+          <input type="text" id="sj-newstream-label" placeholder="label (e.g. Client X / Consulting)" />
+        </div>
+        <div style="font-size:11px; color:var(--text-faint)">
+          Key: lowercase letters / digits / hyphens. The label is what shows on the dashboard.
+        </div>
+      </div>
+    </div>
+    <div class="sj-row">
+      <label for="sj-note">Note (optional)</label>
+      <textarea id="sj-note" placeholder="A line or two about the goal of this job. Used later when reviewing how it went."></textarea>
+    </div>
+    <div class="modal-actions">
+      <button class="btn-ghost" onclick="closeStartJob()">Cancel</button>
+      <button class="btn-primary" onclick="submitStartJob()">Start job</button>
+    </div>
+  </div>
+</div>
+
+<div class="toast" id="toast"></div>
+
+<script src="/static/dashboard.js"></script>
+</body>
+</html>
