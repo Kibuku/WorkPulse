@@ -967,11 +967,19 @@ def api_realwork(date: Optional[str] = None):  # noqa: A002 — param name is th
 
     active = [s for s in sessions if not s.get("idle")]
 
-    # Re-tag at read-time so config edits to stream_path_patterns take effect
-    # immediately on existing log entries (not just newly-written sessions).
+    # Re-tag at read-time so config edits to stream_path_patterns AND rules the
+    # user just taught via the Tag-as dropdown take effect immediately on
+    # existing log entries — not only on newly-written sessions. Without the
+    # match_learned() pass, a window tagged from the "Needs your attention" panel
+    # would stay in that panel until the next capture, looking like the tag
+    # didn't stick.
     from workpulse.signals.activity import _tag_stream
+    from workpulse.core.learning import has_negative_rule, match_learned
     for s in active:
-        retagged = _tag_stream(s.get("title") or "", s.get("exe_path") or "", cfg)
+        title = s.get("title") or ""
+        retagged = _tag_stream(title, s.get("exe_path") or "", cfg)
+        if not retagged:
+            retagged = match_learned(title, cfg)  # user-taught rules
         if retagged:
             s["stream"] = retagged
 
@@ -993,9 +1001,12 @@ def api_realwork(date: Optional[str] = None):  # noqa: A002 — param name is th
             by_stream_secs[stream] += dur
         else:
             untagged_secs += dur
-            # Group untagged by title (trimmed)
-            trimmed = title[:70] if title else f"({app})"
-            by_untagged_title[trimmed] += dur
+            # A window the user explicitly chose to "Never tag" still counts as
+            # untagged time, but must not keep resurfacing in the attention panel.
+            if not has_negative_rule(title, cfg):
+                # Group untagged by title (trimmed)
+                trimmed = title[:70] if title else f"({app})"
+                by_untagged_title[trimmed] += dur
 
         by_app_secs[app] += dur
 
