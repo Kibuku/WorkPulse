@@ -1295,7 +1295,7 @@ def _taxonomy_is_trivial(cfg: dict) -> bool:
 def _streams_payload(cfg: dict) -> list[dict]:
     from workpulse.core.tree import normalise, breadcrumb, ancestors
     tree = normalise(cfg)
-    return [
+    out = [
         {
             "key":        k,
             "label":      rec["label"],
@@ -1307,6 +1307,27 @@ def _streams_payload(cfg: dict) -> list[dict]:
         }
         for k, rec in tree.items()
     ]
+    # Include streams that exist in the data (e.g. migrated from v1) but aren't
+    # in config.yaml yet, so they're taggable rather than invisible in the
+    # "Tag as" dropdown. Without this a migrated user sees only "ignore".
+    try:
+        from workpulse.core import db as wp_db
+        seen = {e["key"] for e in out}
+        con = wp_db.connect(cfg)
+        for r in con.execute("SELECT key, label FROM stream ORDER BY label"):
+            k = r["key"]
+            if not k or k in seen:
+                continue
+            label = r["label"] or k
+            out.append({
+                "key": k, "label": label, "parent": None,
+                "color": stream_color(k), "recognize": _recognize_for(k, cfg),
+                "ancestors": [], "breadcrumb": label,
+            })
+            seen.add(k)
+    except Exception:
+        pass
+    return out
 
 
 # ── Loop A: user correction → permanent learned rule ─────────────────────────
@@ -1326,7 +1347,10 @@ async def api_learn(payload: dict):
     pattern   = (payload.get("pattern")   or normalize_title(raw_title)).strip().lower()
     stream    = payload.get("stream")
     if stream and stream not in cfg.get("streams", {}):
-        return JSONResponse({"error": f"unknown stream: {stream}"}, status_code=400)
+        # also accept streams that exist in the data (migrated from v1, etc.)
+        if not wp_db.connect(cfg).execute(
+                "SELECT 1 FROM stream WHERE key = ?", (stream,)).fetchone():
+            return JSONResponse({"error": f"unknown stream: {stream}"}, status_code=400)
     if not pattern or len(pattern) < 2:
         return JSONResponse({"error": "pattern too short"}, status_code=400)
     _add_rule(cfg=cfg, pattern=pattern, stream=stream, raw_title=raw_title, source="user")
