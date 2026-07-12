@@ -110,6 +110,25 @@ def test_locate_locked_only_when_password_set(client):
 
 # ── "what have I worked on this week" must be a detailed, evidenced answer ─────
 
+def test_learn_survives_null_streams_config(tmp_path, monkeypatch):
+    # A real YAML gotcha: `streams:` with no value parses to None, so
+    # cfg.get("streams", {}) returns None and `x not in None` used to 500.
+    from fastapi.testclient import TestClient
+    from workpulse.core import db as _db
+    monkeypatch.setattr(_db, "db_path", lambda cfg=None: tmp_path / "wp.db")
+    cfg = {"paths": {"logs": str(tmp_path)}, "streams": None, "llm": {}}
+    monkeypatch.setattr(appmod, "load_config", lambda: cfg)
+    con = _db.connect(cfg={"paths": {}})
+    con.execute("INSERT OR IGNORE INTO stream(key,label,parent_key) "
+                "VALUES ('consulting','consulting',NULL)")
+    con.commit()
+    client = TestClient(appmod.app)
+    r = client.post("/api/learn",
+                    json={"raw_title": "NKCC notes", "stream": "consulting"})
+    assert r.status_code == 200, r.text
+    assert r.json().get("ok") is True
+
+
 def test_route_what_have_i_worked_on():
     assert appmod._ask_route("what have I worked on this week") == "retrospective"
     assert appmod._ask_route("what have i worked on recently") == "retrospective"
