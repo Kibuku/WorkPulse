@@ -1332,6 +1332,86 @@ async def api_learn(payload: dict):
     return {"ok": True, "pattern": pattern, "stream": stream}
 
 
+# ── Ask WorkPulse: conversational retrieval over your own work ────────────────
+
+_ASK_RETRO_RE = re.compile(
+    r"\b(how did i|how do i|what did i|what have i been|summari[sz]e|recap|"
+    r"walk me through|make (a|an) sop|as an sop|retrospective|"
+    r"last week|last month|this week|past week|yesterday)\b", re.I)
+_ASK_LOCATE_RE = re.compile(
+    r"\b(where('?s| is| are)?|find|locate|open|which file|what file|"
+    r"path (to|of)|show me the)\b", re.I)
+
+
+def _ask_route(question: str) -> str:
+    """Deterministic intent routing: retrospective > locate > general."""
+    if _ASK_RETRO_RE.search(question):
+        return "retrospective"
+    if _ASK_LOCATE_RE.search(question):
+        return "locate"
+    return "general"
+
+
+@app.post("/api/ask")
+async def api_ask(payload: dict, request: Request):
+    """Ask WorkPulse a question about your own work. Body: {question}.
+    Routes to file-locate, a work retrospective, or the general think() brain.
+    locate + retrospective read private paths, so they need the personal unlock.
+    Keyless: answers work with no API key; a backend only sharpens the phrasing."""
+    question = (payload.get("question") or "").strip()
+    if not question:
+        return JSONResponse({"error": "missing question"}, status_code=400)
+
+    from workpulse.core import (db as wp_db, files as wp_files,
+                                retrospective as wp_retro, think as wp_think,
+                                llm as wp_llm)
+    cfg = load_config()
+    con = wp_db.connect(cfg)
+    kind = _ask_route(question)
+    backend = wp_llm.active_backend(cfg)
+
+    if kind in ("locate", "retrospective"):
+        # The private tier is protected only if the user set a personal password.
+        # No password means no lock, so file search works out of the box.
+        from workpulse.core import personal as wp_personal
+        if wp_personal.is_password_set(con) and not _personal_unlocked(request):
+            return JSONResponse({
+                "kind": kind, "backend": backend, "locked": True,
+                "answer": "Unlock your private data (Settings) to search your "
+                          "files and work history.",
+            }, status_code=401)
+
+    if kind == "locate":
+        hits = wp_files.locate(con, question, cfg=cfg)
+        return {
+            "kind": "locate", "backend": backend, "fallback": backend == "none",
+            "answer": wp_files.format_hits(hits, question),
+            "evidence": [{"type": "file", "path": h["path"],
+                          "basename": h["basename"],
+                          "last_touched": h["last_touched"]} for h in hits],
+        }
+
+    if kind == "retrospective":
+        roll = wp_retro.summarize(con, query=question, cfg=cfg)
+        return {
+            "kind": "retrospective", "backend": backend,
+            "fallback": backend == "none",
+            "answer": wp_retro.to_sop_markdown(roll, cfg=cfg),
+            "window": roll["window"], "total_seconds": roll["total_seconds"],
+            "evidence": [{"type": "file", "path": f["path"],
+                          "basename": f["basename"]} for f in roll["files"][:10]],
+        }
+
+    result = wp_think.think(con, question, cfg=cfg)
+    return {
+        "kind": "general", "backend": backend, "fallback": result["fallback"],
+        "answer": result["answer"], "gap": result["gap"],
+        "evidence": [{"type": "atom", "atom_id": a.get("atom_id"),
+                      "atom_kind": a.get("atom_kind")}
+                     for a in result["atoms"][:10]],
+    }
+
+
 # ── Settings: in-app secret + email config (no terminal needed) ──────────────
 
 _ALLOWED_SECRETS = {"anthropic_key", "smtp_password", "smtp_user", "smtp_to"}
