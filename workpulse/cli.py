@@ -24,7 +24,7 @@ import sys
 from pathlib import Path
 
 from workpulse import __version__
-from workpulse.common import ROOT
+from workpulse.common import ROOT, enable_utf8_console
 
 
 def _deep_merge_defaults(user: dict, template: dict, prefix: str = "") -> list[str]:
@@ -98,7 +98,7 @@ def cmd_install(args: argparse.Namespace) -> int:
         print("Done. Next steps:")
     else:
         print("Finished with some agent errors above. Next steps:")
-    print("  1. Start the dashboard:   workpulse web    → http://127.0.0.1:5700")
+    print("  1. Start the dashboard:   workpulse web    -> http://127.0.0.1:5700")
     print("  2. Set up your streams — the wizard opens on first load.")
     print("  3. (optional) Add a calendar: put its ICS URL in config/config.yaml")
     print("     under `calendar.ics_url`, then: workpulse status")
@@ -202,6 +202,7 @@ _COMMANDS = {
 
 
 def main(argv: list[str] | None = None) -> int:
+    enable_utf8_console()  # never crash on Windows cp1252 consoles
     p = argparse.ArgumentParser(prog="workpulse",
                                 description="WorkPulse — a local-first attention brain.")
     sub = p.add_subparsers(dest="cmd")

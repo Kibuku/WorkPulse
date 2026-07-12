@@ -258,7 +258,7 @@ def run_loop(*, interval: int = 30, cfg: dict | None = None) -> None:
                 print(f"  [deny] {res.get('reason')}")
             else:
                 tag = "🔒" if res.get("is_private") else ""
-                print(f"  [{res['tier']}] {tag} {res['domain']:30s} → "
+                print(f"  [{res['tier']}] {tag} {res['domain']:30s} -> "
                       f"{res['stream'] or '—'}")
         except KeyboardInterrupt:
             return

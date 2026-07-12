@@ -219,7 +219,7 @@ def main(argv: list[str]) -> int:
     else:
         pin_note = f" (pinned to {pinned_kind}:{pinned_id})" if pinned_kind else ""
         print(f"captured  id={cid}{pin_note}")
-        print(f"           → {_today_path()}")
+        print(f"           -> {_today_path()}")
     return 0
 
 
