@@ -703,23 +703,41 @@ def api_streams_delete(key: str):
     if not in_config and not in_db:
         return JSONResponse({"error": f"stream '{key}' not found"}, status_code=404)
 
+    # Clear EVERY reference to the stream, then delete its row. This is the part
+    # that silently blocked before: session / plan_item / browser_visit /
+    # calendar_event .stream are nullable FKs (null them); cluster_assignment and
+    # daily_candidate .stream are NOT NULL FKs (delete those rows); child streams
+    # get orphaned to top level. On a real failure, surface it instead of hiding.
+    try:
+        con.execute("UPDATE session SET stream = NULL WHERE stream = ?", (key,))
+        con.execute("UPDATE plan_item SET stream = NULL WHERE stream = ?", (key,))
+        con.execute("UPDATE browser_visit SET stream = NULL WHERE stream = ?", (key,))
+        con.execute("UPDATE calendar_event SET stream = NULL WHERE stream = ?", (key,))
+        con.execute("UPDATE stream SET parent_key = NULL WHERE parent_key = ?", (key,))
+        con.execute("DELETE FROM cluster_assignment WHERE stream = ?", (key,))
+        con.execute("DELETE FROM daily_candidate WHERE stream = ?", (key,))
+        con.execute("DELETE FROM edge WHERE rel = 'in_stream' AND dst_id = ?", (key,))
+        con.execute("DELETE FROM stream WHERE key = ?", (key,))
+        con.commit()
+    except Exception as e:  # noqa: BLE001
+        con.rollback()
+        return JSONResponse(
+            {"ok": False, "error": f"could not delete '{key}': {type(e).__name__}: {e}"},
+            status_code=200)
+
+    # Drop learned rules that assigned to it, so it isn't re-derived (best-effort).
+    try:
+        rules = [r for r in learning.load_learned_rules(eff) if r.get("stream") != key]
+        learning._save_learned_rules(eff, rules)
+    except Exception:
+        pass
+
+    # Remove from config too, if it was there.
     if in_config:
         del streams[key]
         cfg["streams"] = streams
         _write_config(cfg, cfg_path)
 
-    # Remove it from the data too, so a data-derived (migrated) stream doesn't
-    # reappear: untag its sessions (the FK would otherwise block the delete),
-    # drop its edges + stream row, and delete any learned rule assigning to it.
-    try:
-        con.execute("UPDATE session SET stream = NULL WHERE stream = ?", (key,))
-        con.execute("DELETE FROM edge WHERE rel = 'in_stream' AND dst_id = ?", (key,))
-        con.execute("DELETE FROM stream WHERE key = ?", (key,))
-        con.commit()
-        rules = [r for r in learning.load_learned_rules(eff) if r.get("stream") != key]
-        learning._save_learned_rules(eff, rules)
-    except Exception:
-        pass
     return {"ok": True, "deleted": key}
 
 
