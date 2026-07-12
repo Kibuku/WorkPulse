@@ -1598,6 +1598,8 @@ const WP_TOUR_STEPS = [
     body: "WorkPulse quietly notices what you work on and files it under your projects. Here are the three things that matter — then we'll set up your projects together. Takes about a minute." },
   { target: "#capture-bar", title: "Say what you're working on",
     body: "Type one line, anytime. It sharpens how your time gets attributed — especially work that isn't tied to a file, like a call or planning." },
+  { target: "#ask-card", title: "Ask it anything",
+    body: "Once it knows your work, just ask. Try \"where is my client proposal?\" or \"what have I worked on this week?\" and it answers from your own activity, with the files as evidence. It works offline; add an API key or Ollama for richer answers." },
   { target: "#today-card", title: "Your day, by project",
     body: "Everything you did today, grouped by project. This is only as sharp as your project list — which is why the last step matters most." },
   { target: "#profile-card", title: "What WorkPulse learns",
@@ -1793,6 +1795,10 @@ async function submitAsk(event) {
     const ev = data.evidence || [];
     if (ev.length) {
       evidence.innerHTML = ev.map(function (e) {
+        if (e.type === 'work') {
+          const h = e.hours ? ' · ' + e.hours + 'h' : '';
+          return '<span class="ask-chip">' + escapeHtml((e.name || 'work') + h) + '</span>';
+        }
         if (e.type === 'file') {
           return '<span class="ask-chip" title="' + escapeHtml(e.path || '') + '">' +
                  escapeHtml(e.basename || e.path || 'file') + '</span>';
