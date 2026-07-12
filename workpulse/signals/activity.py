@@ -35,11 +35,20 @@ from pathlib import Path
 
 import psutil
 
-if hasattr(sys.stdout, "buffer"):
-    sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding="utf-8", errors="replace")
-    sys.stderr = io.TextIOWrapper(sys.stderr.buffer, encoding="utf-8", errors="replace")
-
 from workpulse.common import ensure_dir, load_config, resolve
+
+
+def _force_utf8_streams() -> None:
+    """Make stdout/stderr UTF-8 so the tracker's console output survives on a
+    Windows cp1252 console. Called only from run() (the tracker process) — never
+    at import, because importing this module (e.g. app.py using _tag_stream at
+    read-time) must not reassign the process's global streams, which corrupts
+    pytest's output capture and anything else that owns stdout."""
+    for name in ("stdout", "stderr"):
+        stream = getattr(sys, name, None)
+        if stream is not None and hasattr(stream, "buffer"):
+            setattr(sys, name, io.TextIOWrapper(
+                stream.buffer, encoding="utf-8", errors="replace"))
 
 # ── platform backend ──────────────────────────────────────────────────────────
 # Each backend exposes:
@@ -235,6 +244,7 @@ class Session:
 
 
 def run() -> None:
+    _force_utf8_streams()
     cfg = load_config()
     print(f"[activity] WorkPulse activity tracker starting (PID {__import__('os').getpid()})")
     print(f"[activity] Sample every {SAMPLE_INTERVAL_S}s, idle threshold {IDLE_THRESHOLD_S}s")
