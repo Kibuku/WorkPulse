@@ -49,8 +49,29 @@ Other commands:
 ```bash
 workpulse status     # background agents + a health summary
 workpulse doctor     # run the health checks
+workpulse version    # the installed version
 workpulse uninstall  # remove the background agents
 ```
+
+## Updating
+
+New versions ship on GitHub. To move to the latest, from the WorkPulse folder:
+
+```bash
+workpulse update
+```
+
+This pulls the latest code, syncs dependencies, and applies it in place — safely,
+from any older version:
+
+- **Your settings are preserved.** `config.yaml` is gitignored (so a pull never
+  conflicts with it), and `update` *merges* any new settings a release adds into
+  your file without touching your existing values.
+- **Your data migrates automatically.** Database schema changes are forward-only
+  and applied on the next run.
+- **Agents refresh** to pick up any new or changed background jobs.
+
+If you don't have `git` set up, re-clone the repo and run the setup script again.
 
 **Calendar (optional).** Put your published calendar's ICS URL in
 `config/config.yaml` under `calendar.ics_url` — configuring it in the file (rather

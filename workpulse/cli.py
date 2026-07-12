@@ -17,26 +17,63 @@ actually run on a schedule instead of only when invoked by hand.
 from __future__ import annotations
 
 import argparse
+import copy
 import shutil
+import subprocess
 import sys
 from pathlib import Path
 
+from workpulse import __version__
 from workpulse.common import ROOT
 
 
+def _deep_merge_defaults(user: dict, template: dict, prefix: str = "") -> list[str]:
+    """Add keys present in `template` but missing in `user` (recursively),
+    never overwriting an existing user value. Returns the added key paths.
+    This is what makes updates seamless: new settings a release introduces get
+    added to the user's config.yaml while their own choices are preserved."""
+    added: list[str] = []
+    for k, tv in (template or {}).items():
+        path = f"{prefix}{k}"
+        if k not in user:
+            user[k] = copy.deepcopy(tv)
+            added.append(path)
+        elif isinstance(user.get(k), dict) and isinstance(tv, dict):
+            added += _deep_merge_defaults(user[k], tv, path + ".")
+    return added
+
+
 def _ensure_config() -> Path:
-    cfg = ROOT / "config" / "config.yaml"
-    example = ROOT / "config" / "config.example.yaml"
-    if cfg.exists():
-        print(f"  config    using existing {cfg}")
-    elif example.exists():
-        cfg.parent.mkdir(parents=True, exist_ok=True)
-        shutil.copyfile(example, cfg)
-        print(f"  config    created {cfg} from template")
+    import yaml
+    cfg_path = ROOT / "config" / "config.yaml"
+    example  = ROOT / "config" / "config.example.yaml"
+
+    if not cfg_path.exists():
+        if example.exists():
+            cfg_path.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copyfile(example, cfg_path)
+            print(f"  config    created {cfg_path} from template")
+        else:
+            print("  config    WARNING: no template found — create config/config.yaml by hand",
+                  file=sys.stderr)
+        return cfg_path
+
+    if not example.exists():
+        print(f"  config    using existing {cfg_path}")
+        return cfg_path
+
+    # Exists → merge in any new keys the template gained, preserving user values.
+    user = yaml.safe_load(cfg_path.read_text(encoding="utf-8")) or {}
+    tmpl = yaml.safe_load(example.read_text(encoding="utf-8")) or {}
+    added = _deep_merge_defaults(user, tmpl)
+    if added:
+        cfg_path.write_text(
+            yaml.safe_dump(user, sort_keys=False, allow_unicode=True), encoding="utf-8")
+        shown = ", ".join(added[:6]) + (" …" if len(added) > 6 else "")
+        print(f"  config    added {len(added)} new setting(s) to {cfg_path}: {shown}")
     else:
-        print("  config    WARNING: no template found — create config/config.yaml by hand",
-              file=sys.stderr)
-    return cfg
+        print(f"  config    using existing {cfg_path} (up to date)")
+    return cfg_path
 
 
 def _init_db() -> None:
@@ -106,12 +143,61 @@ def cmd_web(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_version(args: argparse.Namespace) -> int:
+    print(f"WorkPulse {__version__}")
+    return 0
+
+
+def _run(cmd: list[str]) -> tuple[int, str]:
+    r = subprocess.run(cmd, capture_output=True, text=True)
+    return r.returncode, (r.stdout + r.stderr).strip()
+
+
+def cmd_update(args: argparse.Namespace) -> int:
+    """Pull the latest version from GitHub and apply it in place.
+
+    Seamless by construction: config.yaml is gitignored (so `git pull` never
+    conflicts on it), DB migrations are forward-only (applied on connect), and
+    the apply step runs in a fresh process so it uses the just-pulled code."""
+    print(f"WorkPulse — update (currently {__version__})")
+    print("=" * 52)
+    if not (ROOT / ".git").exists():
+        print("  Not a git checkout — nothing to pull. Re-clone from GitHub, or run")
+        print("  `workpulse install` to re-apply config + agents.")
+        return 1
+
+    print("  git       pulling latest…")
+    rc, out = _run(["git", "-C", str(ROOT), "pull", "--ff-only"])
+    print("    " + out.replace("\n", "\n    "))
+    if rc != 0:
+        print("  git pull failed (local changes or diverged history). Resolve, then retry.",
+              file=sys.stderr)
+        return rc
+
+    print("  deps      syncing (fast when unchanged)…")
+    extra = "mac" if sys.platform == "darwin" else "win" if sys.platform == "win32" else ""
+    spec = f".[{extra}]" if extra else "."
+    rc, out = _run([sys.executable, "-m", "pip", "install", "-e", spec])
+    if rc != 0:
+        print("    " + out.replace("\n", "\n    "), file=sys.stderr)
+        return rc
+
+    # Apply config merge + migrations + agent refresh with the NEW code.
+    print("  apply     migrating config, database, and agents…")
+    rc, out = _run([sys.executable, "-m", "workpulse.cli", "install"])
+    print("    " + out.replace("\n", "\n    "))
+    print("\nUpdate complete. If the dashboard was running, restart it: workpulse web")
+    return rc
+
+
 _COMMANDS = {
     "install":   cmd_install,
     "uninstall": cmd_uninstall,
+    "update":    cmd_update,
     "status":    cmd_status,
     "doctor":    cmd_doctor,
     "web":       cmd_web,
+    "version":   cmd_version,
 }
 
 
@@ -121,8 +207,10 @@ def main(argv: list[str] | None = None) -> int:
     sub = p.add_subparsers(dest="cmd")
     sub.add_parser("install",   help="set up config, database, and background agents")
     sub.add_parser("uninstall", help="remove the background agents")
+    sub.add_parser("update",    help="pull the latest version from GitHub and apply it")
     sub.add_parser("status",    help="show agents + a health summary")
     sub.add_parser("doctor",    help="run the health checks")
+    sub.add_parser("version",   help="print the installed version")
     w = sub.add_parser("web",   help="run the local dashboard")
     w.add_argument("--host", default="127.0.0.1")
     w.add_argument("--port", type=int, default=5700)

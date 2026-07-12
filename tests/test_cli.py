@@ -60,3 +60,50 @@ def test_install_propagates_agent_failure(tmp_path, monkeypatch):
     monkeypatch.setattr(db, "db_path", lambda cfg=None: tmp_path / "wp.db")
     monkeypatch.setattr(scheduler, "install_all", lambda: 1)   # an agent failed
     assert cli.main(["install"]) == 1                          # non-zero surfaces to caller
+
+
+def test_deep_merge_preserves_user_values_and_adds_new():
+    user = {"reports": {"timezone": "Africa/Nairobi"}, "streams": {"x": 1}}
+    tmpl = {"reports": {"timezone": "UTC", "daily": {"enabled": True}},
+            "streams": {}, "new_block": {"k": "v"}}
+    added = cli._deep_merge_defaults(user, tmpl)
+    # user's own value untouched...
+    assert user["reports"]["timezone"] == "Africa/Nairobi"
+    assert user["streams"] == {"x": 1}
+    # ...but new keys the template introduced are added
+    assert user["reports"]["daily"] == {"enabled": True}
+    assert user["new_block"] == {"k": "v"}
+    assert set(added) == {"reports.daily", "new_block"}
+
+
+def test_update_config_merge_on_install(tmp_path, monkeypatch, capsys):
+    """Re-running install merges new template keys into an existing config
+    without clobbering the user's edits — the seamless-update path."""
+    cfgdir = tmp_path / "config"; cfgdir.mkdir()
+    (cfgdir / "config.yaml").write_text(
+        "reports:\n  timezone: Africa/Nairobi\n", encoding="utf-8")
+    (cfgdir / "config.example.yaml").write_text(
+        "reports:\n  timezone: UTC\n  daily:\n    enabled: true\nemail:\n  enabled: false\n",
+        encoding="utf-8")
+    monkeypatch.setattr(cli, "ROOT", tmp_path)
+    monkeypatch.setattr(db, "db_path", lambda cfg=None: tmp_path / "wp.db")
+    monkeypatch.setattr(scheduler, "install_all", lambda: 0)
+
+    assert cli.main(["install"]) == 0
+    import yaml
+    merged = yaml.safe_load((cfgdir / "config.yaml").read_text())
+    assert merged["reports"]["timezone"] == "Africa/Nairobi"   # user value kept
+    assert merged["reports"]["daily"] == {"enabled": True}     # new key added
+    assert merged["email"] == {"enabled": False}               # new block added
+
+
+def test_version_command(capsys):
+    from workpulse import __version__
+    assert cli.main(["version"]) == 0
+    assert __version__ in capsys.readouterr().out
+
+
+def test_update_outside_git_returns_1(tmp_path, monkeypatch, capsys):
+    monkeypatch.setattr(cli, "ROOT", tmp_path)                 # no .git here
+    assert cli.main(["update"]) == 1
+    assert "Not a git checkout" in capsys.readouterr().out
