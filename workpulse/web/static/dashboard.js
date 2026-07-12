@@ -1728,3 +1728,83 @@ function tourFinishToStreams() {
   closeTourNow();
   openTaxonomy('first-load');
 }
+
+// ── Ask WorkPulse ────────────────────────────────────────────────────────────
+
+function askBackendLabel(b) {
+  if (b === 'anthropic') return 'Hosted · Claude';
+  if (b === 'ollama') return 'Local · Ollama';
+  return 'Manual';
+}
+
+// Minimal, safe markdown → HTML: escape first, then apply a small subset.
+function renderMarkdownLite(md) {
+  let h = escapeHtml(md || '');
+  h = h.replace(/`([^`]+)`/g, '<code>$1</code>');
+  h = h.replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>');
+  const lines = h.split('\n');
+  const out = [];
+  let inList = false;
+  const closeList = () => { if (inList) { out.push('</ul>'); inList = false; } };
+  for (const ln of lines) {
+    if (/^###\s+/.test(ln))      { closeList(); out.push('<h4>' + ln.replace(/^###\s+/, '') + '</h4>'); }
+    else if (/^##\s+/.test(ln))  { closeList(); out.push('<h3>' + ln.replace(/^##\s+/, '') + '</h3>'); }
+    else if (/^#\s+/.test(ln))   { closeList(); out.push('<h2>' + ln.replace(/^#\s+/, '') + '</h2>'); }
+    else if (/^\s*[-*]\s+/.test(ln))   { if (!inList) { out.push('<ul>'); inList = true; } out.push('<li>' + ln.replace(/^\s*[-*]\s+/, '') + '</li>'); }
+    else if (/^\s*\d+\.\s+/.test(ln))  { if (!inList) { out.push('<ul>'); inList = true; } out.push('<li>' + ln.replace(/^\s*\d+\.\s+/, '') + '</li>'); }
+    else if (ln.trim() === '')   { closeList(); }
+    else                          { closeList(); out.push('<p>' + ln + '</p>'); }
+  }
+  closeList();
+  return out.join('');
+}
+
+async function submitAsk(event) {
+  event.preventDefault();
+  const input = document.getElementById('ask-input');
+  const q = (input.value || '').trim();
+  if (!q) return false;
+  const result = document.getElementById('ask-result');
+  const answer = document.getElementById('ask-answer');
+  const evidence = document.getElementById('ask-evidence');
+  const badge = document.getElementById('ask-backend');
+  result.style.display = 'block';
+  answer.innerHTML = '<div class="empty">Thinking…</div>';
+  evidence.innerHTML = '';
+  try {
+    const r = await fetch('/api/ask', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ question: q }),
+    });
+    const data = await r.json();
+    badge.textContent = askBackendLabel(data.backend);
+    if (r.status === 401 && data.locked) {
+      answer.innerHTML = renderMarkdownLite(data.answer) +
+        '<p><button class="ask-btn" onclick="openPersonalModal()">Unlock</button></p>';
+      return false;
+    }
+    if (!r.ok) {
+      answer.innerHTML = '<div class="empty">' +
+        escapeHtml(data.error || 'Something went wrong.') + '</div>';
+      return false;
+    }
+    answer.innerHTML = renderMarkdownLite(data.answer);
+    const ev = data.evidence || [];
+    if (ev.length) {
+      evidence.innerHTML = ev.map(function (e) {
+        if (e.type === 'file') {
+          return '<span class="ask-chip" title="' + escapeHtml(e.path || '') + '">' +
+                 escapeHtml(e.basename || e.path || 'file') + '</span>';
+        }
+        if (e.type === 'atom') {
+          return '<span class="ask-chip">' + escapeHtml(e.atom_kind || 'atom') + '</span>';
+        }
+        return '';
+      }).join('');
+    }
+  } catch (err) {
+    answer.innerHTML = '<div class="empty">Could not reach WorkPulse.</div>';
+  }
+  return false;
+}
