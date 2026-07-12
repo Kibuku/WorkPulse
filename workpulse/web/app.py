@@ -1319,6 +1319,8 @@ def _streams_payload(cfg: dict) -> list[dict]:
             if not k or k in seen:
                 continue
             label = r["label"] or k
+            if label == k:                        # raw key like "personal-dev"
+                label = k.replace("-", " ").replace("_", " ").title()
             out.append({
                 "key": k, "label": label, "parent": None,
                 "color": stream_color(k), "recognize": _recognize_for(k, cfg),
@@ -1353,11 +1355,20 @@ async def api_learn(payload: dict):
             return JSONResponse({"error": f"unknown stream: {stream}"}, status_code=400)
     if not pattern or len(pattern) < 2:
         return JSONResponse({"error": "pattern too short"}, status_code=400)
-    _add_rule(cfg=cfg, pattern=pattern, stream=stream, raw_title=raw_title, source="user")
     # Persist the tag onto sessions so the retrospective / Ask see it immediately,
     # not just the read-time-retagged dashboard views. This is the learning loop:
     # tag one window, every matching session (past and future) gets attributed.
-    retagged = retag_sessions(wp_db.connect(cfg), cfg)
+    # Never let this raise a 500 — the dashboard can't parse an HTML error page,
+    # so on any failure return a JSON error the UI can show.
+    retagged = 0
+    try:
+        _add_rule(cfg=cfg, pattern=pattern, stream=stream, raw_title=raw_title, source="user")
+        retagged = retag_sessions(wp_db.connect(cfg), cfg)
+    except Exception as e:  # noqa: BLE001 — the tag action must never 500
+        import logging
+        logging.getLogger("workpulse.web").warning("learn/retag failed: %r", e)
+        return JSONResponse({"ok": False, "error": f"{type(e).__name__}: {e}"},
+                            status_code=200)
     return {"ok": True, "pattern": pattern, "stream": stream, "retagged": retagged}
 
 
