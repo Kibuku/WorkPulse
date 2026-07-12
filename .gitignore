@@ -15,6 +15,7 @@ dist/
 *.db-shm
 config/config.yaml
 config/projects.yaml
+config/identity.yaml
 config/calendar.url
 config/secrets.json
 logs/
@@ -22,6 +23,7 @@ captures/
 consolidation/
 reports/
 brain/
+vault/
 
 # OS / IDE
 .DS_Store
