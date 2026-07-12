@@ -143,3 +143,28 @@ def test_validation_and_cycle_guard(tmp_path, monkeypatch):
     # Cycle: making 'alpha' a child of its own descendant 'beta' must be refused.
     r = client.patch("/api/streams/alpha", json={"parent": "beta"})
     assert r.status_code == 400 and "descendant" in r.json()["error"]
+
+
+def test_delete_migrated_db_only_stream(tmp_path, monkeypatch):
+    """A stream that exists only in the DB (migrated from v1, config streams
+    null) must be deletable, not 'stream not found'."""
+    from fastapi.testclient import TestClient
+    import workpulse.web.app as appmod
+    from workpulse.core import db as _db
+    cfgfile = tmp_path / "config.yaml"
+    monkeypatch.setattr(_db, "db_path", lambda cfg=None: tmp_path / "wp.db")
+    real_resolve = appmod.resolve
+    monkeypatch.setattr(appmod, "resolve",
+                        lambda rel: cfgfile if rel == "config/config.yaml" else real_resolve(rel))
+    monkeypatch.setattr(appmod, "load_config",
+                        lambda: {"paths": {"logs": str(tmp_path)}, "streams": None})
+    con = _db.connect(cfg={"paths": {}})
+    con.execute("INSERT OR IGNORE INTO stream(key,label,parent_key) VALUES ('oldproj','Old Proj',NULL)")
+    con.commit()
+    client = TestClient(appmod.app)
+    r = client.delete("/api/streams/oldproj")
+    assert r.status_code == 200, r.text
+    assert r.json().get("deleted") == "oldproj"
+    gone = _db.connect(cfg={"paths": {}}).execute(
+        "SELECT 1 FROM stream WHERE key='oldproj'").fetchone()
+    assert gone is None

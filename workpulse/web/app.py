@@ -685,10 +685,9 @@ async def api_streams_patch(key: str, payload: dict):
 def api_streams_delete(key: str):
     """Remove a stream. Refused if it still has child streams — re-parent or
     delete those first."""
+    from workpulse.core import db as wp_db, learning
     cfg, cfg_path = _load_streams_config()
     streams = cfg.get("streams") or {}
-    if key not in streams:
-        return JSONResponse({"error": f"stream '{key}' not found"}, status_code=404)
 
     kids = [k for k, v in streams.items()
             if isinstance(v, dict) and v.get("parent") == key]
@@ -697,9 +696,30 @@ def api_streams_delete(key: str):
             {"error": f"stream '{key}' has children: {kids}. Re-parent or delete them first."},
             status_code=400)
 
-    del streams[key]
-    cfg["streams"] = streams
-    _write_config(cfg, cfg_path)
+    eff = load_config()
+    con = wp_db.connect(eff)
+    in_config = key in streams
+    in_db = con.execute("SELECT 1 FROM stream WHERE key = ?", (key,)).fetchone() is not None
+    if not in_config and not in_db:
+        return JSONResponse({"error": f"stream '{key}' not found"}, status_code=404)
+
+    if in_config:
+        del streams[key]
+        cfg["streams"] = streams
+        _write_config(cfg, cfg_path)
+
+    # Remove it from the data too, so a data-derived (migrated) stream doesn't
+    # reappear: untag its sessions (the FK would otherwise block the delete),
+    # drop its edges + stream row, and delete any learned rule assigning to it.
+    try:
+        con.execute("UPDATE session SET stream = NULL WHERE stream = ?", (key,))
+        con.execute("DELETE FROM edge WHERE rel = 'in_stream' AND dst_id = ?", (key,))
+        con.execute("DELETE FROM stream WHERE key = ?", (key,))
+        con.commit()
+        rules = [r for r in learning.load_learned_rules(eff) if r.get("stream") != key]
+        learning._save_learned_rules(eff, rules)
+    except Exception:
+        pass
     return {"ok": True, "deleted": key}
 
 
