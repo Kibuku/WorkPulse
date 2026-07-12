@@ -26,7 +26,7 @@ from pathlib import Path
 from watchdog.events import FileSystemEvent, FileSystemEventHandler
 from watchdog.observers import Observer
 
-from workpulse.common import ensure_dir, load_config, resolve
+from workpulse.common import ensure_dir, load_config, resolve, ROOT
 
 import io
 import os
@@ -250,12 +250,12 @@ def main() -> None:
         log.error("No valid watch roots found. Exiting.")
         sys.exit(1)
 
-    # Always exclude WorkPulse's own generated dirs to prevent self-logging
+    # Always exclude WorkPulse's own files so it never logs itself: the whole
+    # install dir (code, .venv, logs, reports), plus the shared-package
+    # extraction folder that the installer unzips next to it.
     workpulse_internal = [
-        str(resolve(cfg["paths"]["logs"])),
-        str(resolve(cfg["paths"]["reports_daily"])),
-        str(resolve(cfg["paths"]["reports_weekly"])),
-        str(Path(__file__).resolve().parent.parent / ".venv"),
+        str(ROOT),            # the entire WorkPulse install directory
+        "WorkPulse-pkg",      # installer's package-extraction folder (by name)
     ]
     cfg["watcher"]["ignore_dirs"] = workpulse_internal + cfg["watcher"]["ignore_dirs"]
 

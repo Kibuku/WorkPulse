@@ -50,9 +50,10 @@ def test_summarize_totals_and_apps(env):
     roll = rmod.summarize(con, stream="client-work", cfg=CFG)
     assert roll["session_count"] == 2
     assert roll["total_seconds"] == 90 * 60
-    apps = {a["app"]: a["seconds"] for a in roll["apps"]}
+    area = next(a for a in roll["areas"] if a["stream"] == "client-work")
+    apps = {x["label"]: x["seconds"] for x in area["apps"]}
     assert apps["Word"] == 3600 and apps["Excel"] == 1800
-    assert roll["apps"][0]["app"] == "Word"  # sorted by time desc
+    assert area["apps"][0]["label"] == "Word"  # sorted by time desc
 
 
 def test_resolves_stream_from_query(env):
@@ -96,7 +97,7 @@ def test_sop_markdown_deterministic_without_backend(env):
              start=now - timedelta(days=1), dur_minutes=90)
     roll = rmod.summarize(con, stream="client-work", cfg=CFG)
     md = rmod.to_sop_markdown(roll, cfg=CFG)  # no API key in tests -> deterministic
-    assert "How you worked on client-work" in md
-    assert "Day by day" in md
+    assert "What you worked on" in md
+    assert "Client work" in md               # the stream label, not the raw key
     assert "## Gap" in md
     assert "→" not in md and "—" not in md  # house voice: no arrows / em dashes

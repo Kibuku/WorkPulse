@@ -39,7 +39,22 @@ import sys
 from datetime import datetime, timezone
 
 from workpulse.core import db
-from workpulse.common import load_config
+from workpulse.common import load_config, ROOT
+
+# WorkPulse's own files (its install dir, packaged copies, virtualenvs, caches)
+# get captured by the watcher but are never what a user is looking for. Drop them
+# so a query like "report" surfaces your documents, not WorkPulse internals.
+_NOISE_MARKERS = ("workpulse-pkg", "site-packages", "__pycache__",
+                  "node_modules", "/.venv/", "appdata/local/temp",
+                  "appdata/local/packages")
+_WP_ROOT_KEY = str(ROOT).replace("\\", "/").lower().rstrip("/") + "/"
+
+
+def _is_noise(path: str) -> bool:
+    p = (path or "").replace("\\", "/").lower()
+    if len(_WP_ROOT_KEY) > 1 and p.startswith(_WP_ROOT_KEY):
+        return True
+    return any(m in p for m in _NOISE_MARKERS)
 
 # Words that carry no signal for locating a file.
 _STOPWORDS = {
@@ -113,7 +128,7 @@ def _gather(con: sqlite3.Connection, since: str | None) -> dict[str, _Cand]:
     cands: dict[str, _Cand] = {}
 
     def add(path: str | None, ts: str | None, stream: str | None):
-        if not path:
+        if not path or _is_noise(path):
             return
         key = _norm_key(path)
         c = cands.get(key)

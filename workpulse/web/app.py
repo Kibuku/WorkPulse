@@ -1399,8 +1399,9 @@ async def api_ask(payload: dict, request: Request):
             "answer": wp_retro.to_sop_markdown(roll, cfg=cfg),
             "window": roll["window"], "total_seconds": roll["total_seconds"],
             "evidence": (
-                [{"type": "work", "name": c["name"], "hours": c["hours"]}
-                 for c in roll["clusters"] if c.get("name")][:6]
+                [{"type": "work", "name": a["label"],
+                  "hours": round(a["seconds"] / 3600.0, 1)}
+                 for a in roll["areas"] if a["tagged"] and a["seconds"] >= 60][:6]
                 + [{"type": "file", "path": f["path"],
                     "basename": f["basename"]} for f in roll["files"][:10]]
             ),
