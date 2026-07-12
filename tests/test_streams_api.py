@@ -187,3 +187,43 @@ def test_delete_migrated_db_only_stream(tmp_path, monkeypatch):
     check = _db.connect(cfg={"paths": {}})
     assert check.execute("SELECT 1 FROM stream WHERE key='oldproj'").fetchone() is None
     assert check.execute("SELECT stream FROM session WHERE id=?", (sid,)).fetchone()[0] is None
+
+
+def test_migrated_db_streams_are_not_flagged_as_unset(tmp_path, monkeypatch):
+    """A user who migrated from v1 has streams in the DB but a null config
+    `streams:`. /api/system must NOT nag them to set up streams
+    (taxonomy_trivial is False once >= 2 real streams exist in the DB)."""
+    import workpulse.web.app as appmod
+    from workpulse.core import db as _db
+    cfgfile = tmp_path / "config.yaml"
+    monkeypatch.setattr(_db, "db_path", lambda cfg=None: tmp_path / "wp.db")
+    real_resolve = appmod.resolve
+    monkeypatch.setattr(appmod, "resolve",
+                        lambda rel: cfgfile if rel == "config/config.yaml" else real_resolve(rel))
+    monkeypatch.setattr(appmod, "load_config",
+                        lambda: {"paths": {"logs": str(tmp_path)}, "streams": None})
+    con = _db.connect(cfg={"paths": {}})
+    con.execute("INSERT OR IGNORE INTO stream(key,label,parent_key) VALUES ('majicom','Majicom',NULL)")
+    con.execute("INSERT OR IGNORE INTO stream(key,label,parent_key) VALUES ('consulting','Consulting',NULL)")
+    con.commit()
+
+    client = TestClient(appmod.app)
+    body = client.get("/api/system").json()
+    assert body["taxonomy_trivial"] is False
+
+
+def test_empty_config_and_db_is_flagged_as_unset(tmp_path, monkeypatch):
+    """Conversely, a genuinely fresh install (no config streams, no DB streams)
+    still gets the setup nudge."""
+    import workpulse.web.app as appmod
+    from workpulse.core import db as _db
+    cfgfile = tmp_path / "config.yaml"
+    monkeypatch.setattr(_db, "db_path", lambda cfg=None: tmp_path / "wp.db")
+    real_resolve = appmod.resolve
+    monkeypatch.setattr(appmod, "resolve",
+                        lambda rel: cfgfile if rel == "config/config.yaml" else real_resolve(rel))
+    monkeypatch.setattr(appmod, "load_config",
+                        lambda: {"paths": {"logs": str(tmp_path)}, "streams": None})
+    _db.connect(cfg={"paths": {}})  # create schema, no streams
+    client = TestClient(appmod.app)
+    assert client.get("/api/system").json()["taxonomy_trivial"] is True

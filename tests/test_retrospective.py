@@ -101,3 +101,58 @@ def test_sop_markdown_deterministic_without_backend(env):
     assert "Client work" in md               # the stream label, not the raw key
     assert "## Gap" in md
     assert "→" not in md and "—" not in md  # house voice: no arrows / em dashes
+
+
+# ── Natural-language date windows ────────────────────────────────────────────
+# _parse_window turns "in June" / "last month" / "last 30 days" into concrete
+# (since, until) ISO dates. Anchored to a fixed 'today' so the tests are stable.
+from datetime import date
+
+
+_TODAY = date(2026, 7, 12)  # a Sunday in July, fixed anchor
+
+
+def test_parse_window_named_month_current_year():
+    # "in June" -> the whole of the most-recent June (this year, since June < July)
+    assert rmod._parse_window("what happened in June", today=_TODAY) == \
+        ("2026-06-01", "2026-06-30")
+
+
+def test_parse_window_named_month_rolls_back_a_year():
+    # "in December" while it's July -> last December, not a future one
+    assert rmod._parse_window("recap of December", today=_TODAY) == \
+        ("2025-12-01", "2025-12-31")
+
+
+def test_parse_window_last_n_days():
+    assert rmod._parse_window("what did i do the last 30 days", today=_TODAY) == \
+        ("2026-06-12", "2026-07-12")
+
+
+def test_parse_window_last_month():
+    assert rmod._parse_window("summarise last month", today=_TODAY) == \
+        ("2026-06-01", "2026-06-30")
+
+
+def test_parse_window_yesterday():
+    assert rmod._parse_window("what happened yesterday", today=_TODAY) == \
+        ("2026-07-11", "2026-07-11")
+
+
+def test_parse_window_this_month():
+    assert rmod._parse_window("this month", today=_TODAY) == \
+        ("2026-07-01", "2026-07-12")
+
+
+def test_parse_window_may_is_not_the_verb():
+    # bare "may" (the verb) must NOT be read as the month of May
+    assert rmod._parse_window("how may i improve", today=_TODAY) is None
+    # but "in May" is a real month reference
+    assert rmod._parse_window("what happened in May", today=_TODAY) == \
+        ("2026-05-01", "2026-05-31")
+
+
+def test_parse_window_none_when_no_date():
+    assert rmod._parse_window("how did i work on the proposal", today=_TODAY) is None
+    assert rmod._parse_window("", today=_TODAY) is None
+    assert rmod._parse_window(None, today=_TODAY) is None
