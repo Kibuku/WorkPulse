@@ -138,6 +138,25 @@ def _call_anthropic(prompt: str, *, model: str, cfg: dict | None
     return text, int(resp.usage.input_tokens), int(resp.usage.output_tokens), duration
 
 
+def _call_ollama(prompt: str, *, cfg: dict | None
+                 ) -> tuple[str, int, int, float, str] | None:
+    """Local-LLM fallthrough via the core.llm façade. Only fires when the
+    configured backend resolves to Ollama (i.e. no Anthropic key, or
+    llm.backend='ollama'). Returns (text, in_tok, out_tok, duration_s, model)
+    or None. Kept separate from _call_anthropic so the existing tests, which
+    monkeypatch _call_anthropic, still drive the Anthropic path unchanged."""
+    from workpulse.core import llm
+    if llm.active_backend(cfg) != "ollama":
+        return None
+    text, meta = llm.ask_text(prompt, max_tokens=1024, cfg=cfg)
+    if not text or meta.get("backend") != "ollama":
+        return None
+    return (text, int(meta.get("input_tokens", 0)),
+            int(meta.get("output_tokens", 0)),
+            float(meta.get("duration_s", 0.0)),
+            meta.get("model") or "ollama")
+
+
 def _cost(in_tok: int, out_tok: int, cfg: dict | None) -> float:
     pricing = (cfg or {}).get("llm", {}).get("pricing") or {}
     in_p  = float(pricing.get("input_per_mtok",  3.0))  # default Sonnet 4.5 rate
@@ -229,14 +248,23 @@ def think(con: sqlite3.Connection, question: str, *,
     duration_s = 0.0
     fallback = True
     status = "fallback"
+    provider = "anthropic"
 
     if not force_fallback:
         result = _call_anthropic(prompt, model=model, cfg=cfg)
         if result is not None:
             raw, in_tok, out_tok, duration_s = result
             used_model = model
+            provider = "anthropic"
             fallback = False
             status = "ok"
+        else:
+            oll = _call_ollama(prompt, cfg=cfg)
+            if oll is not None:
+                raw, in_tok, out_tok, duration_s, used_model = oll
+                provider = "ollama"
+                fallback = False
+                status = "ok"
 
     if fallback:
         raw = _fallback(question, retrieved)
@@ -249,11 +277,12 @@ def think(con: sqlite3.Connection, question: str, *,
         gap = "(no gap section produced — model failed to follow contract.)"
 
     # Record the call to skill_run and (if LLM used) ai_call.
+    cost = _cost(in_tok, out_tok, cfg) if provider == "anthropic" else 0.0
     skill_run_id = _record(con, slug="think", question=question,
                            raw=raw, model=used_model,
                            in_tok=in_tok, out_tok=out_tok,
-                           cost_usd=_cost(in_tok, out_tok, cfg),
-                           status=status, cfg=cfg)
+                           cost_usd=cost, status=status,
+                           provider=provider, cfg=cfg)
 
     return {
         "question":  question,
@@ -269,7 +298,8 @@ def think(con: sqlite3.Connection, question: str, *,
 
 def _record(con: sqlite3.Connection, *, slug: str, question: str,
             raw: str, model: str | None, in_tok: int, out_tok: int,
-            cost_usd: float, status: str, cfg: dict | None) -> str:
+            cost_usd: float, status: str, cfg: dict | None,
+            provider: str = "anthropic") -> str:
     sr_id = atoms.new_id()
     ts = datetime.now(timezone.utc).isoformat()
     con.execute(
@@ -284,7 +314,7 @@ def _record(con: sqlite3.Connection, *, slug: str, question: str,
     )
     if model and not status == "fallback":
         atoms.write_ai_call(
-            con, provider="anthropic", model=model,
+            con, provider=provider, model=model,
             in_tokens=in_tok, out_tokens=out_tok, cost_usd=cost_usd,
             prompt_slug=f"skill:{slug}", ts=ts,
         )

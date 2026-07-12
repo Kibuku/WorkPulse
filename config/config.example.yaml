@@ -106,7 +106,16 @@ watcher:
 # the report engine. WorkPulse runs without these features if no API key is
 # configured; set the key via the dashboard Settings page.
 llm:
-  model: "claude-sonnet-4-6"
+  # Which backend answers questions and classifies work:
+  #   auto      -> hosted Claude if a key is set, else local Ollama if running, else off
+  #   anthropic -> hosted Claude only
+  #   ollama    -> local Ollama only (free, private, runs on your machine)
+  #   none      -> no AI; deterministic/templated answers only
+  backend: "auto"
+  model: "claude-sonnet-4-6"          # hosted (Anthropic)
+  ollama:                              # free local backend (https://ollama.com)
+    url: "http://127.0.0.1:11434"
+    model: "llama3.2:3b"              # pull once with:  ollama pull llama3.2:3b
   pricing_per_million_tokens:
     input_usd: 3.00
     output_usd: 15.00
