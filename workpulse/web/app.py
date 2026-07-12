@@ -682,9 +682,11 @@ async def api_streams_patch(key: str, payload: dict):
 
 
 @app.delete("/api/streams/{key}")
-def api_streams_delete(key: str):
-    """Remove a stream. Refused if it still has child streams — re-parent or
-    delete those first."""
+def api_streams_delete(key: str, confirm: bool = False):
+    """Remove a stream. Two-phase and non-destructive by default: without
+    ?confirm=true it returns the work currently tagged to the stream so the UI
+    can ask first. Deleting untags that work (it reverts to unclassified).
+    Refused if the stream still has child streams."""
     from workpulse.core import db as wp_db, learning
     cfg, cfg_path = _load_streams_config()
     streams = cfg.get("streams") or {}
@@ -702,6 +704,24 @@ def api_streams_delete(key: str):
     in_db = con.execute("SELECT 1 FROM stream WHERE key = ?", (key,)).fetchone() is not None
     if not in_config and not in_db:
         return JSONResponse({"error": f"stream '{key}' not found"}, status_code=404)
+
+    # What deleting will cost: the work currently tagged to this stream, which
+    # reverts to unclassified. Surface it and require explicit confirmation so we
+    # never quietly throw away someone's tagging.
+    row = con.execute(
+        """SELECT COUNT(*) AS n,
+                  COALESCE(SUM((julianday(ended_at) - julianday(started_at)) * 86400.0), 0) AS secs,
+                  COUNT(DISTINCT substr(started_at,1,10)) AS days
+           FROM session WHERE stream = ? AND ended_at IS NOT NULL""", (key,)).fetchone()
+    impact = {"sessions": int(row["n"] or 0),
+              "hours": round((row["secs"] or 0) / 3600.0, 1),
+              "active_days": int(row["days"] or 0),
+              "reverts_to": "unclassified"}
+    if not confirm:
+        label = streams.get(key)
+        label = label.get("label") if isinstance(label, dict) else (label or key)
+        return {"ok": False, "needs_confirm": True, "stream": key,
+                "label": label, "impact": impact}
 
     # Clear EVERY reference to the stream, then delete its row. This is the part
     # that silently blocked before: session / plan_item / browser_visit /
@@ -738,7 +758,7 @@ def api_streams_delete(key: str):
         cfg["streams"] = streams
         _write_config(cfg, cfg_path)
 
-    return {"ok": True, "deleted": key}
+    return {"ok": True, "deleted": key, "untagged_sessions": impact["sessions"]}
 
 
 @app.post("/api/v2/capture")
