@@ -158,13 +158,18 @@ def test_delete_migrated_db_only_stream(tmp_path, monkeypatch):
                         lambda rel: cfgfile if rel == "config/config.yaml" else real_resolve(rel))
     monkeypatch.setattr(appmod, "load_config",
                         lambda: {"paths": {"logs": str(tmp_path)}, "streams": None})
+    from workpulse.core import atoms
+    from datetime import datetime, timezone
     con = _db.connect(cfg={"paths": {}})
     con.execute("INSERT OR IGNORE INTO stream(key,label,parent_key) VALUES ('oldproj','Old Proj',NULL)")
     con.commit()
+    # a session tagged to it — the FK that used to silently block the delete
+    sid = atoms.write_session(con, app="Word", title="old work", stream="oldproj",
+                              started_at=datetime.now(timezone.utc).isoformat())
     client = TestClient(appmod.app)
     r = client.delete("/api/streams/oldproj")
     assert r.status_code == 200, r.text
     assert r.json().get("deleted") == "oldproj"
-    gone = _db.connect(cfg={"paths": {}}).execute(
-        "SELECT 1 FROM stream WHERE key='oldproj'").fetchone()
-    assert gone is None
+    check = _db.connect(cfg={"paths": {}})
+    assert check.execute("SELECT 1 FROM stream WHERE key='oldproj'").fetchone() is None
+    assert check.execute("SELECT stream FROM session WHERE id=?", (sid,)).fetchone()[0] is None
