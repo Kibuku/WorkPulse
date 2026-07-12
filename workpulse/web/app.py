@@ -1348,7 +1348,7 @@ async def api_learn(payload: dict):
     raw_title = (payload.get("raw_title") or "").strip()
     pattern   = (payload.get("pattern")   or normalize_title(raw_title)).strip().lower()
     stream    = payload.get("stream")
-    if stream and stream not in cfg.get("streams", {}):
+    if stream and stream not in (cfg.get("streams") or {}):
         # also accept streams that exist in the data (migrated from v1, etc.)
         if not wp_db.connect(cfg).execute(
                 "SELECT 1 FROM stream WHERE key = ?", (stream,)).fetchone():

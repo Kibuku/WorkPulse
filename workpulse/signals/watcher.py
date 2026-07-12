@@ -150,7 +150,7 @@ class MachineHandler(FileSystemEventHandler):
         self._logs_dir = logs_dir
         self._ignore_dirs = cfg["watcher"]["ignore_dirs"]
         self._ignore_files = cfg["watcher"]["ignore_patterns"]
-        self._streams = cfg["streams"]
+        self._streams = cfg.get("streams") or {}
         self._stream_patterns = cfg["watcher"].get("stream_path_patterns", [])
         self._debouncer = Debouncer(
             delay_ms=cfg["watcher"]["debounce_ms"],
