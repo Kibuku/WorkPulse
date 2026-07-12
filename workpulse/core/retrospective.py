@@ -67,6 +67,50 @@ def _default_window() -> tuple[str, str]:
     return (today - timedelta(days=7)).isoformat(), today.isoformat()
 
 
+_MONTHS = {"january": 1, "february": 2, "march": 3, "april": 4, "may": 5,
+           "june": 6, "july": 7, "august": 8, "september": 9, "october": 10,
+           "november": 11, "december": 12, "jan": 1, "feb": 2, "mar": 3,
+           "apr": 4, "jun": 6, "jul": 7, "aug": 8, "sep": 9, "sept": 9,
+           "oct": 10, "nov": 11, "dec": 12}
+
+
+def _parse_window(query: str | None, today=None) -> tuple[str, str] | None:
+    """Extract a date window from a natural-language question ("in June",
+    "last month", "last 30 days", "yesterday"). Returns (since, until) ISO dates,
+    or None to fall back to the default (last 7 days)."""
+    import calendar
+    q = (query or "").lower()
+    if not q:
+        return None
+    today = today or datetime.now(timezone.utc).date()
+    m = re.search(r"last (\d+)\s+(day|week|month)s?", q)
+    if m:
+        days = int(m.group(1)) * {"day": 1, "week": 7, "month": 30}[m.group(2)]
+        return ((today - timedelta(days=days)).isoformat(), today.isoformat())
+    if "yesterday" in q:
+        y = today - timedelta(days=1)
+        return (y.isoformat(), y.isoformat())
+    if "today" in q:
+        return (today.isoformat(), today.isoformat())
+    if "last week" in q or "past week" in q or "this week" in q:
+        return ((today - timedelta(days=7)).isoformat(), today.isoformat())
+    if "this month" in q:
+        return (today.replace(day=1).isoformat(), today.isoformat())
+    if "last month" in q:
+        last_prev = today.replace(day=1) - timedelta(days=1)
+        return (last_prev.replace(day=1).isoformat(), last_prev.isoformat())
+    for name, mo in _MONTHS.items():
+        # "may" collides with the verb; only treat it as a month in a date context
+        if name == "may" and not re.search(
+                r"(in|of|during|for|since|from|through|throughout)\s+may\b|\bmay\s+20\d\d", q):
+            continue
+        if re.search(r"\b" + name + r"\b", q):
+            year = today.year if mo <= today.month else today.year - 1
+            last_day = calendar.monthrange(year, mo)[1]
+            return (f"{year}-{mo:02d}-01", f"{year}-{mo:02d}-{last_day:02d}")
+    return None
+
+
 def _basename(path: str) -> str:
     return (path or "").replace("\\", "/").rstrip("/").rsplit("/", 1)[-1]
 
@@ -141,6 +185,10 @@ def summarize(con: sqlite3.Connection, *, stream: str | None = None,
               until: str | None = None, cfg: dict | None = None) -> dict:
     """Analysis-oriented rollup of the work in [since, until]."""
     cfg = cfg or {}
+    if since is None and until is None:
+        parsed = _parse_window(query)     # "in June", "last month", etc.
+        if parsed:
+            since, until = parsed
     d_since, d_until = _default_window()
     since = since or d_since
     until = until or d_until

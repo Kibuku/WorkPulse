@@ -1340,6 +1340,18 @@ def api_system():
 def _taxonomy_is_trivial(cfg: dict) -> bool:
     from workpulse.core.tree import normalise
     tree = normalise(cfg)
+    # Real streams in the DATA (e.g. migrated from v1) count as "set up" too,
+    # even when config.yaml has none — otherwise a migrated user is told to set
+    # up streams that already exist.
+    try:
+        from workpulse.core import db as wp_db
+        n = wp_db.connect(cfg).execute(
+            "SELECT COUNT(*) FROM stream WHERE key IS NOT NULL AND key <> 'misc'"
+        ).fetchone()[0]
+        if n >= 2:
+            return False
+    except Exception:
+        pass
     if len(tree) < 2:
         return True
     # If nothing has a parent, the user hasn't engaged with the hierarchy.
@@ -1448,9 +1460,11 @@ async def api_v2_retag(payload: dict):
 # ── Ask WorkPulse: conversational retrieval over your own work ────────────────
 
 _ASK_RETRO_RE = re.compile(
-    r"\b(how (did|do) i|what (did|have) i|what have i been|summari[sz]e|recap|"
-    r"walk me through|make (a|an) sop|as an sop|retrospective|"
-    r"last week|last month|this week|past week|recently|yesterday)\b", re.I)
+    r"\b(how (did|do) i|what (did|have|was) i|what happened|what have i been|"
+    r"summari[sz]e|recap|walk me through|make (a|an) sop|as an sop|retrospective|"
+    r"last week|last month|this (week|month)|past week|recently|yesterday|"
+    r"in (january|february|march|april|may|june|july|august|september|october|"
+    r"november|december))\b", re.I)
 _ASK_LOCATE_RE = re.compile(
     r"\b(where('?s| is| are)?|find|locate|open|which file|what file|"
     r"path (to|of)|show me the)\b", re.I)

@@ -46,6 +46,9 @@ def test_route_classification():
     assert appmod._ask_route("find the budget spreadsheet") == "locate"
     assert appmod._ask_route("how did I work on the report last week") == "retrospective"
     assert appmod._ask_route("summarize what I did this week") == "retrospective"
+    # month / "what happened" phrasings must reach the retrospective, not general
+    assert appmod._ask_route("what happened in June") == "retrospective"
+    assert appmod._ask_route("what was I doing in December") == "retrospective"
     assert appmod._ask_route("what is the state of the acme project") == "general"
 
 

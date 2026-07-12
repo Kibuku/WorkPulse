@@ -1593,7 +1593,24 @@ async function refreshDayPanels() {
   await fetchHeatmap();   // re-render so selected day highlights
 }
 
+// Greeting follows the viewer's local clock — morning/afternoon/evening/night —
+// instead of the hard-coded "Good morning" the page ships with.
+function setGreeting() {
+  const h = new Date().getHours();
+  let text, icon;
+  if (h < 5)       { text = 'Still up';       icon = '🌙'; }
+  else if (h < 12) { text = 'Good morning';   icon = '☀️'; }
+  else if (h < 17) { text = 'Good afternoon'; icon = '🌤️'; }
+  else if (h < 22) { text = 'Good evening';   icon = '🌇'; }
+  else             { text = 'Winding down';   icon = '🌙'; }
+  const t = document.getElementById('hero-greeting-text');
+  const i = document.getElementById('hero-icon');
+  if (t) t.textContent = text;
+  if (i) i.textContent = icon;
+}
+
 async function refresh() {
+  setGreeting();
   await fetchSystem();
   if (todayISO) renderDateBar();
   setHeaderDate();
