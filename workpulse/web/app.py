@@ -1332,6 +1332,21 @@ async def api_learn(payload: dict):
     return {"ok": True, "pattern": pattern, "stream": stream}
 
 
+@app.post("/api/v2/retag")
+async def api_v2_retag(payload: dict):
+    """Tag the untagged. Body: {ai: bool=true}. Applies learned rules to every
+    untagged session (retroactively), and when ai=true and an LLM backend is
+    available, first AI-classifies the biggest untagged windows into streams.
+    Returns how many sessions got attributed."""
+    from workpulse.core import db as wp_db, learning
+    cfg = load_config()
+    con = wp_db.connect(cfg)
+    if payload.get("ai", True) is not False:
+        res = learning.classify_untagged(con, cfg=cfg)
+        return {"ok": True, "retagged": res["retagged"], "ai": res}
+    return {"ok": True, "retagged": learning.retag_sessions(con, cfg)}
+
+
 # ── Ask WorkPulse: conversational retrieval over your own work ────────────────
 
 _ASK_RETRO_RE = re.compile(

@@ -159,3 +159,113 @@ def has_negative_rule(title: str, cfg: dict) -> bool:
         if pat and pat in norm and r.get("stream") is None:
             return True
     return False
+
+
+# ── the tag-the-untagged loop ─────────────────────────────────────────────────
+# Rules are only useful if they attribute time. retag_sessions applies them to
+# already-captured sessions (so teaching one window tags every matching one,
+# past and future); classify_untagged is v1's "Loop B" restored — the LLM names
+# the biggest untagged window-groups and writes a rule for each.
+
+def retag_sessions(con, cfg: dict | None = None) -> int:
+    """Apply learned rules to untagged sessions, updating session.stream in place.
+    Returns the number retagged. Keyless: pure rule lookup, no LLM."""
+    cfg = cfg or load_config()
+    rows = con.execute(
+        """SELECT s.id AS id, sl.raw_title AS title
+           FROM session s JOIN session_local sl ON sl.session_id = s.id
+           WHERE s.stream IS NULL AND sl.raw_title IS NOT NULL AND sl.raw_title <> ''"""
+    ).fetchall()
+    now = datetime.now().astimezone().isoformat(timespec="seconds")
+    n = 0
+    for r in rows:
+        stream = match_learned(r["title"], cfg)
+        if not stream:                      # None = no rule, or a negative rule
+            continue
+        con.execute("INSERT OR IGNORE INTO stream(key, label, parent_key) VALUES (?, ?, NULL)",
+                    (stream, stream))
+        con.execute("UPDATE session SET stream = ? WHERE id = ?", (stream, r["id"]))
+        con.execute(
+            "INSERT OR IGNORE INTO edge(src_kind, src_id, rel, dst_kind, dst_id, created_at) "
+            "VALUES ('session', ?, 'in_stream', 'stream', ?, ?)", (r["id"], stream, now))
+        n += 1
+    con.commit()
+    return n
+
+
+def _ask_llm_classify(title: str, streams: dict, cfg: dict) -> tuple[str | None, str]:
+    """Ask the LLM which stream a window belongs to, plus a stable anchor phrase.
+    Returns (stream_key_or_None, anchor). The prompt is seeded with each stream's
+    known keywords (config patterns + already-learned rules) so it self-sharpens."""
+    from workpulse.core import llm
+    known: dict = {k: [] for k in streams}
+    for p in (cfg.get("watcher", {}) or {}).get("stream_path_patterns", []):
+        if p.get("stream") in known:
+            known[p["stream"]].append(p.get("path", ""))
+    for r in load_learned_rules(cfg):
+        if r.get("stream") in known and r.get("pattern"):
+            known[r["stream"]].append(r["pattern"])
+    lines = []
+    for k, v in streams.items():
+        label = v.get("label") if isinstance(v, dict) else str(v)
+        ex = [e for e in known.get(k, []) if e][:12]
+        lines.append(f"  - {k}: {label}" + (f"  (keywords: {', '.join(ex)})" if ex else ""))
+    prompt = (
+        "Tag this window into one of the user's work streams.\n\n"
+        "Streams:\n" + "\n".join(lines) + "\n\n"
+        f"Window title: {title}\n\n"
+        "Prefer specific project keywords over generic app or channel names "
+        "(Gmail, WhatsApp, Inbox, the browser). Use 'none' for clearly off-task or "
+        "personal windows.\n"
+        "Reply with ONLY one JSON object:\n"
+        '  {"stream": "<key or none>", "anchor": "<2-4 word phrase taken from the title>"}'
+    )
+    obj, _meta = llm.ask_json(prompt, max_tokens=80, cfg=cfg)
+    if not obj:
+        return None, ""
+    stream = obj.get("stream")
+    anchor = (obj.get("anchor") or "").strip().lower()
+    if (not isinstance(stream, str) or stream.lower() in ("none", "", "null")
+            or stream not in streams):
+        return None, anchor
+    return stream, anchor
+
+
+def classify_untagged(con, *, cfg: dict | None = None, max_windows: int = 10) -> dict:
+    """Loop B: AI-classify the biggest untagged window-groups into streams,
+    learning a rule for each (a negative rule when off-task), then retag every
+    matching session. No-op (backend='none') without an LLM. Returns
+    {backend, classified, rules, retagged}."""
+    from collections import defaultdict
+    cfg = cfg or load_config()
+    from workpulse.core import llm
+    backend = llm.active_backend(cfg)
+    streams = cfg.get("streams") or {}
+    if backend == "none" or not streams:
+        return {"backend": backend, "classified": 0, "rules": 0, "retagged": 0}
+    rows = con.execute(
+        """SELECT sl.raw_title AS title,
+                  SUM((julianday(s.ended_at) - julianday(s.started_at)) * 86400.0) AS secs
+           FROM session s JOIN session_local sl ON sl.session_id = s.id
+           WHERE s.stream IS NULL AND s.ended_at IS NOT NULL
+                 AND sl.raw_title IS NOT NULL AND sl.raw_title <> ''
+           GROUP BY sl.raw_title"""
+    ).fetchall()
+    groups: dict = defaultdict(float)
+    sample: dict = {}
+    for r in rows:
+        nt = normalize_title(r["title"])
+        if not nt or len(nt) < 4:
+            continue
+        if match_learned(r["title"], cfg) is not None or has_negative_rule(r["title"], cfg):
+            continue
+        groups[nt] += float(r["secs"] or 0)
+        sample.setdefault(nt, r["title"])
+    top = sorted(groups.items(), key=lambda x: -x[1])[:max_windows]
+    for nt, _secs in top:
+        stream, anchor = _ask_llm_classify(sample[nt], streams, cfg)
+        pattern = anchor if (anchor and anchor in nt) else nt
+        _add_rule(cfg, pattern=pattern, stream=stream, raw_title=sample[nt], source="ai")
+    retagged = retag_sessions(con, cfg)
+    return {"backend": backend, "classified": len(top),
+            "rules": len(top), "retagged": retagged}
