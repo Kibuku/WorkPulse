@@ -147,3 +147,26 @@ def test_verdict_is_worst_of_checks(env, monkeypatch):
 def test_summary_ok_when_all_ok(env, monkeypatch):
     checks = [{"check": "x", "status": doctor.OK, "message": "fine"}]
     assert "healthy" in doctor._summary_line(doctor.OK, checks).lower()
+
+
+def test_agents_healthy_ignores_windows_status_codes(monkeypatch):
+    """267011 (SCHED_S_TASK_HAS_NOT_RUN) is a status, not a failure; calendar-sync
+    exiting non-zero (no ICS configured) is a WARN, not a FAIL."""
+    from workpulse import platform_util
+    monkeypatch.setattr(platform_util, "is_windows", lambda: True)
+    monkeypatch.setattr(platform_util, "is_mac", lambda: False)
+    monkeypatch.setattr(platform_util, "agent_last_exit",
+                        lambda slug: (True, 1 if slug == "calendar-sync" else 267011))
+    r = doctor.check_agents_healthy()
+    assert r["status"] == "warn"
+    assert "calendar-sync" in r["message"]
+
+
+def test_agents_healthy_real_failure_still_fails(monkeypatch):
+    from workpulse import platform_util
+    monkeypatch.setattr(platform_util, "is_windows", lambda: True)
+    monkeypatch.setattr(platform_util, "is_mac", lambda: False)
+    monkeypatch.setattr(platform_util, "agent_last_exit",
+                        lambda slug: (True, 78 if slug == "activity" else 0))
+    r = doctor.check_agents_healthy()
+    assert r["status"] == "fail" and "activity" in r["message"]
