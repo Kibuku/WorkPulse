@@ -65,7 +65,8 @@ def test_ask_retrospective(client):
     assert r.status_code == 200, r.text
     body = r.json()
     assert body["kind"] == "retrospective"
-    assert "How you worked on client-work" in body["answer"]
+    assert "What you worked on" in body["answer"]
+    assert "Client work" in body["answer"]
 
 
 def test_ask_general_uses_think(client):
@@ -122,6 +123,5 @@ def test_this_week_is_detailed_with_evidence(client):
     body = r.json()
     assert body["kind"] == "retrospective"
     assert body["total_seconds"] > 0            # the seeded session counts
-    assert "Day by day" in body["answer"]       # detailed, multi-section
-    assert "Where the time went" in body["answer"]
-    assert len(body["evidence"]) >= 1           # files / pieces of work as evidence
+    assert "What you worked on" in body["answer"]   # analysis, not a raw dump
+    assert len(body["evidence"]) >= 1           # areas / files as evidence

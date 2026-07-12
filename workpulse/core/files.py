@@ -34,12 +34,48 @@ from __future__ import annotations
 
 import argparse
 import json
+import re
 import sqlite3
 import sys
 from datetime import datetime, timezone
 
 from workpulse.core import db
-from workpulse.common import load_config
+from workpulse.common import load_config, ROOT
+
+# Not every file the sensors see is a document. Apps churn through databases,
+# caches, and hash-named blobs the user never "worked on". Drop those (and
+# WorkPulse's own files) so a query surfaces real documents, not internals.
+_NOISE_MARKERS = ("workpulse-pkg", "site-packages", "__pycache__", "node_modules",
+                  "/.venv/", "/.git/", "/appdata/local/", "/appdata/locallow/",
+                  "/appdata/roaming/", "/cache/", "/caches/", "/gpucache/",
+                  "/code cache/", "/user data/")
+_NOISE_EXT = {"db", "db-journal", "db-wal", "db-shm", "sqlite", "sqlite3",
+              "bin", "log", "tmp", "temp", "lock", "ldb", "pack", "idx",
+              "dat", "cache", "etl", "crdownload", "part", "old", "bak"}
+_NOISE_NAMES = {"local state", "cookies", "preferences", "history", "favicons",
+                "top sites", "web data", "login data", "shortcuts",
+                "current session", "current tabs", "last session", "last tabs",
+                "visited links", "network action predictor"}
+_HASHNAME_RE = re.compile(r"^(?:[0-9a-f]{12,}|[0-9a-f-]{20,}|r_[0-9a-z]{10,})$", re.I)
+_WP_ROOT_KEY = str(ROOT).replace("\\", "/").lower().rstrip("/") + "/"
+
+
+def _is_noise(path: str) -> bool:
+    p = (path or "").replace("\\", "/").lower()
+    if len(_WP_ROOT_KEY) > 1 and p.startswith(_WP_ROOT_KEY):
+        return True
+    if any(m in p for m in _NOISE_MARKERS):
+        return True
+    base = p.rsplit("/", 1)[-1]
+    if "." in base:
+        name_no_ext, ext = base.rsplit(".", 1)
+    else:
+        name_no_ext, ext = base, ""
+    if ext and ext in _NOISE_EXT:
+        return True
+    if _HASHNAME_RE.match(name_no_ext):
+        return True
+    return base in _NOISE_NAMES
 
 # Words that carry no signal for locating a file.
 _STOPWORDS = {
@@ -113,7 +149,7 @@ def _gather(con: sqlite3.Connection, since: str | None) -> dict[str, _Cand]:
     cands: dict[str, _Cand] = {}
 
     def add(path: str | None, ts: str | None, stream: str | None):
-        if not path:
+        if not path or _is_noise(path):
             return
         key = _norm_key(path)
         c = cands.get(key)
