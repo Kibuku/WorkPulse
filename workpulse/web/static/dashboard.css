@@ -649,3 +649,28 @@ footer { margin-top: 64px; padding-top: 24px; border-top: 1px solid var(--border
 .tx-node-recog.none { color: var(--text-faint); background: transparent;
   border: 1px dashed var(--border); font-family: inherit; font-style: italic; }
 .tx-icon-btn.primary { color: #c8790a; font-weight: 700; }
+
+/* ── Ask WorkPulse panel ─────────────────────────────────────────────────── */
+.ask-form { display: flex; gap: 8px; align-items: center; }
+.ask-input { flex: 1; padding: 8px 12px; border: 1px solid var(--border);
+  border-radius: 6px; font-size: 14px; background: var(--surface); color: var(--text); }
+.ask-input:focus { outline: none; border-color: var(--accent); }
+.ask-btn { padding: 8px 16px; border: 0; border-radius: 6px; background: var(--accent);
+  color: #fff; font-weight: 600; cursor: pointer; }
+.ask-btn:hover { filter: brightness(0.96); }
+.ask-badge { font-size: 11px; color: var(--text-soft); min-width: 96px;
+  text-align: right; font-variant: all-small-caps; letter-spacing: .04em; }
+.ask-result { margin-top: 14px; border-top: 1px solid var(--border); padding-top: 12px; }
+.ask-answer { font-size: 14px; line-height: 1.6; color: var(--text); }
+.ask-answer h2 { font-size: 16px; margin: .4em 0; }
+.ask-answer h3 { font-size: 14px; margin: .7em 0 .2em; }
+.ask-answer h4 { font-size: 13px; margin: .5em 0 .2em; color: var(--text-soft); }
+.ask-answer p { margin: .4em 0; }
+.ask-answer ul { margin: .3em 0 .3em 1.1em; padding: 0; }
+.ask-answer li { margin: .15em 0; }
+.ask-answer code { background: var(--bg-soft); padding: .05em .35em;
+  border-radius: 4px; font-size: 12.5px; }
+.ask-evidence { margin-top: 10px; display: flex; flex-wrap: wrap; gap: 6px; }
+.ask-chip { font-size: 11.5px; padding: 3px 9px; border-radius: 999px;
+  background: var(--bg-soft); border: 1px solid var(--border); color: var(--text-soft);
+  max-width: 280px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }

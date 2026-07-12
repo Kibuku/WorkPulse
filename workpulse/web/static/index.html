@@ -105,6 +105,20 @@
     </form>
   </div>
 
+  <!-- Ask WorkPulse: conversational retrieval over your own work -->
+  <div class="card span-12" id="ask-card" style="border-left: 3px solid var(--accent, #d97757);">
+    <form id="ask-form" onsubmit="return submitAsk(event)" class="ask-form">
+      <input type="text" id="ask-input" class="ask-input" autocomplete="off"
+             placeholder="Ask about your work — e.g. where is my client Z proposal? how did I work on the report last week?" />
+      <button type="submit" class="ask-btn">Ask</button>
+      <span id="ask-backend" class="ask-badge" title="Which brain answered"></span>
+    </form>
+    <div id="ask-result" class="ask-result" style="display:none;">
+      <div id="ask-answer" class="ask-answer"></div>
+      <div id="ask-evidence" class="ask-evidence"></div>
+    </div>
+  </div>
+
   <!-- v2 brain view: what you actually worked on today -->
   <div class="card span-12 collapsible" id="today-card" data-card="today" data-card-label="What you worked on today" style="border-left: 3px solid var(--accent, #3b82f6);">
     <div class="eyebrow card-header" onclick="toggleCard('today')">
