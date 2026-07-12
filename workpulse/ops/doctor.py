@@ -131,24 +131,38 @@ def check_sensor_not_stuck(con) -> dict:
             "message": f"{distinct} distinct apps in 4h, tracking live"}
 
 
+# Windows Task Scheduler "Last Result" codes in the SCHED_S_* range are STATUS,
+# not failures: ready (0x41300=267008), running (267009), not-yet-run
+# (0x41303=267011), queued, terminated. A scheduled/daemon task that hasn't
+# completed a run yet reports these, so they must not read as errors.
+_WIN_SCHED_BENIGN = set(range(267008, 267016))  # 0x41300 .. 0x41307
+
+
 def check_agents_healthy() -> dict:
     # Cross-platform: launchctl on macOS, schtasks on Windows, via
     # platform_util.agent_last_exit(). Returns (loaded, last_exit_code).
     if not (platform_util.is_mac() or platform_util.is_windows()):
         return {"check": "agents_healthy", "status": OK,
                 "message": "unsupported platform, skipped"}
-    problems = []
+    hard, soft = [], []
     for slug in _EXPECTED_AGENTS:
         loaded, code = platform_util.agent_last_exit(slug)
         if not loaded:
-            problems.append(f"{slug}: NOT loaded")
-        elif code is not None and code != 0:
-            problems.append(f"{slug}: last exit {code}")
-    if not problems:
+            hard.append(f"{slug}: NOT loaded")
+        elif code is not None and code != 0 and code not in _WIN_SCHED_BENIGN:
+            # calendar-sync is optional: it exits non-zero when no calendar ICS
+            # URL is configured, which is not a system fault.
+            if slug == "calendar-sync":
+                soft.append(f"{slug}: exit {code} (no calendar configured?)")
+            else:
+                hard.append(f"{slug}: last exit {code}")
+    if not hard and not soft:
         return {"check": "agents_healthy", "status": OK,
-                "message": f"all {len(_EXPECTED_AGENTS)} agents loaded, exit 0"}
+                "message": f"all {len(_EXPECTED_AGENTS)} agents loaded and healthy"}
+    if not hard:
+        return {"check": "agents_healthy", "status": WARN, "message": "; ".join(soft)}
     return {"check": "agents_healthy", "status": FAIL,
-            "message": "; ".join(problems)}
+            "message": "; ".join(hard + soft)}
 
 
 def check_data_fresh(con) -> dict:
