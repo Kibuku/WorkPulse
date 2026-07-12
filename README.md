@@ -28,15 +28,41 @@ workpulse/
   skills/     markdown procedures the LLM follows
 ```
 
-## Install (one command)
+## Getting access
+
+WorkPulse is a **private** repository — you can't clone it without being granted
+access first. To add a pilot user:
+
+1. **Owner:** on GitHub, go to the repo **Settings → Collaborators and teams →
+   Add people**, enter the person's GitHub username or email, and set their role
+   to **Read**. Read access lets them clone and pull updates but not push changes.
+2. **New user:** accept the emailed invitation (or open
+   `github.com/Kibuku/WorkPulse/invitations`).
+3. **New user:** the first `git clone`/`pull` will ask you to sign in to GitHub.
+   Because the account uses 2FA, authenticate with a **Personal Access Token**
+   (create one at `github.com/settings/tokens`, scoped to this repo) rather than a
+   password. macOS Keychain caches it, so `workpulse update` works silently after.
+
+> Prefer not to hand out GitHub access? See **Install from a shared package**
+> below — it lets a pilot user install and update from a folder you send them,
+> with no GitHub account required.
+
+## First-time install (one command)
+
+This is the entry point for a machine that does **not** have WorkPulse yet. Clone
+the repo, then run the setup script from inside the folder:
 
 **macOS**
 ```bash
+git clone https://github.com/Kibuku/WorkPulse.git
+cd WorkPulse
 ./setup.sh
 ```
 
 **Windows**
 ```powershell
+git clone https://github.com/Kibuku/WorkPulse.git
+cd WorkPulse
 powershell -ExecutionPolicy Bypass -File .\setup.ps1
 ```
 
@@ -58,9 +84,41 @@ workpulse version    # the installed version
 workpulse uninstall  # remove the background agents
 ```
 
-## Updating
+## Install from a shared package (no GitHub account needed)
 
-New versions ship on GitHub. To move to the latest, from the WorkPulse folder:
+For pilot users you'd rather not add as GitHub collaborators, ship a **package**
+instead — a self-contained folder you send them (AirDrop, Drive, email, a zip).
+
+**You (maintainer), build the package** from a git checkout:
+```bash
+./installer/build-package.sh          # → dist/WorkPulse-v<version>.zip
+```
+The zip contains only tracked files (no database, no `config.yaml`, no vault —
+user data is gitignored and excluded by construction), plus the installers.
+
+**The user** unzips it and runs the installer for their OS:
+
+- **macOS:** double-click `install.command` (or `bash install.command`)
+- **Windows:** right-click `install.ps1` → *Run with PowerShell*
+
+It installs to `~/WorkPulse` (override with `WORKPULSE_HOME`), sets up the venv,
+dependencies, config, database, and background agents — the same setup the git
+install performs.
+
+**To update a package install,** send a newer package and have them run the
+installer again. It targets the same `~/WorkPulse` and applies the new version
+in place:
+
+- **New and changed files** are copied in.
+- **Files removed in the new version (archived)** are deleted from the install,
+  so nothing stale lingers.
+- **Your data and settings are preserved** — `config.yaml`, the database, `vault/`,
+  `logs/`, reports and the venv are shielded from the sync, then the standard
+  config-merge and forward-only migrations run over them.
+
+## Updating a git checkout
+
+If you cloned from GitHub, move to the latest from the WorkPulse folder:
 
 ```bash
 workpulse update
@@ -76,7 +134,9 @@ from any older version:
   and applied on the next run.
 - **Agents refresh** to pick up any new or changed background jobs.
 
-If you don't have `git` set up, re-clone the repo and run the setup script again.
+If you installed from a shared package rather than a clone, `workpulse update`
+has nothing to pull — update by running the installer from a newer package (see
+above).
 
 **Calendar (optional).** Put your published calendar's ICS URL in
 `config/config.yaml` under `calendar.ics_url` — configuring it in the file (rather
