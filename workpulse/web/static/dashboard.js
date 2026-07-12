@@ -1479,8 +1479,9 @@ async function learn(rawTitle, streamKey) {
     });
     const d = await r.json();
     if (d.ok) {
+      const n = d.retagged || 1;
       showToast(streamKey
-        ? `Tagged as ${streamKey}. WorkPulse will remember.`
+        ? `Tagged as ${streamKey}. Attributed ${n} matching window${n === 1 ? '' : 's'}; WorkPulse remembers.`
         : `Will ignore this window in future.`);
       await fetchRealWork();
     } else {

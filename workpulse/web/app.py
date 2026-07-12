@@ -1319,7 +1319,8 @@ async def api_learn(payload: dict):
     stream   — the stream key to assign, or null to mark this pattern as
                permanently untagged.
     """
-    from workpulse.core.learning import normalize_title, _add_rule
+    from workpulse.core.learning import normalize_title, _add_rule, retag_sessions
+    from workpulse.core import db as wp_db
     cfg = load_config()
     raw_title = (payload.get("raw_title") or "").strip()
     pattern   = (payload.get("pattern")   or normalize_title(raw_title)).strip().lower()
@@ -1329,7 +1330,11 @@ async def api_learn(payload: dict):
     if not pattern or len(pattern) < 2:
         return JSONResponse({"error": "pattern too short"}, status_code=400)
     _add_rule(cfg=cfg, pattern=pattern, stream=stream, raw_title=raw_title, source="user")
-    return {"ok": True, "pattern": pattern, "stream": stream}
+    # Persist the tag onto sessions so the retrospective / Ask see it immediately,
+    # not just the read-time-retagged dashboard views. This is the learning loop:
+    # tag one window, every matching session (past and future) gets attributed.
+    retagged = retag_sessions(wp_db.connect(cfg), cfg)
+    return {"ok": True, "pattern": pattern, "stream": stream, "retagged": retagged}
 
 
 @app.post("/api/v2/retag")
