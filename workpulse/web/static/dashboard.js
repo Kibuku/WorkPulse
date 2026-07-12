@@ -616,14 +616,30 @@ async function txCommitRename(key) {
 }
 
 async function txDelete(key, label) {
-  if (!confirm(`Delete stream "${label}"?\n\nRefused if it has children or any Job attached.`)) return;
   try {
-    const r = await fetch(`/api/streams/${encodeURIComponent(key)}`, { method: 'DELETE' });
+    // Phase 1: ask the server what deleting would cost (this does NOT delete).
+    const pr = await fetch(`/api/streams/${encodeURIComponent(key)}`, { method: 'DELETE' });
+    const pd = await pr.json();
+    if (!pr.ok) { showToast(pd.error || 'could not delete'); return; }   // children / not found
+    if (!pd.needs_confirm) {                                            // nothing to confirm
+      await fetchSystem(); renderTaxonomyTree(); showToast(`Deleted "${label}".`); return;
+    }
+    const im = pd.impact || {};
+    const body = im.sessions
+      ? `${im.sessions} session${im.sessions === 1 ? '' : 's'} (${im.hours}h across `
+        + `${im.active_days} day${im.active_days === 1 ? '' : 's'}) is tagged to this stream. `
+        + `Deleting it untags that work; it reverts to unclassified.`
+      : `No tracked work is tagged to this stream.`;
+    if (!confirm(`Delete "${label}"?\n\n${body}\n\nThis cannot be undone.`)) return;
+    // Phase 2: confirmed — actually delete.
+    const r = await fetch(`/api/streams/${encodeURIComponent(key)}?confirm=true`, { method: 'DELETE' });
     const d = await r.json();
-    if (!r.ok) { showToast(d.error || 'could not delete'); return; }
+    if (!d.ok) { showToast('Error: ' + (d.error || 'could not delete')); return; }
     await fetchSystem();
     renderTaxonomyTree();
-    showToast(`Deleted "${label}".`);
+    const n = d.untagged_sessions || 0;
+    showToast(`Deleted "${label}".` +
+      (n ? ` ${n} window${n === 1 ? '' : 's'} reverted to unclassified.` : ''));
   } catch (e) { showToast('Error: ' + e.message); }
 }
 

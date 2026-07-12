@@ -81,9 +81,12 @@ def test_add_child_edit_and_delete_flow(tmp_path, monkeypatch):
     r = client.delete("/api/streams/work")
     assert r.status_code == 400 and "children" in r.json()["error"]
 
-    # Delete child, then parent.
-    assert client.delete("/api/streams/acme").status_code == 200
-    assert client.delete("/api/streams/work").status_code == 200
+    # Delete requires explicit confirmation (surfaces impact first).
+    prev = client.delete("/api/streams/acme")
+    assert prev.status_code == 200 and prev.json().get("needs_confirm") is True
+    # Delete child, then parent, with confirm.
+    assert client.delete("/api/streams/acme?confirm=true").json()["ok"] is True
+    assert client.delete("/api/streams/work?confirm=true").json()["ok"] is True
     cfg = yaml.safe_load(cfgfile.read_text())
     assert not (cfg.get("streams") or {})
 
@@ -159,15 +162,26 @@ def test_delete_migrated_db_only_stream(tmp_path, monkeypatch):
     monkeypatch.setattr(appmod, "load_config",
                         lambda: {"paths": {"logs": str(tmp_path)}, "streams": None})
     from workpulse.core import atoms
-    from datetime import datetime, timezone
+    from datetime import datetime, timedelta, timezone
     con = _db.connect(cfg={"paths": {}})
     con.execute("INSERT OR IGNORE INTO stream(key,label,parent_key) VALUES ('oldproj','Old Proj',NULL)")
     con.commit()
     # a session tagged to it — the FK that used to silently block the delete
+    now = datetime.now(timezone.utc)
     sid = atoms.write_session(con, app="Word", title="old work", stream="oldproj",
-                              started_at=datetime.now(timezone.utc).isoformat())
+                              started_at=now.isoformat())
+    atoms.close_session(con, sid, ended_at=(now + timedelta(minutes=30)).isoformat())
     client = TestClient(appmod.app)
-    r = client.delete("/api/streams/oldproj")
+
+    # Phase 1: preview the impact, delete nothing.
+    prev = client.delete("/api/streams/oldproj")
+    assert prev.status_code == 200 and prev.json().get("needs_confirm") is True
+    assert prev.json()["impact"]["sessions"] == 1
+    assert _db.connect(cfg={"paths": {}}).execute(
+        "SELECT 1 FROM stream WHERE key='oldproj'").fetchone() is not None  # still there
+
+    # Phase 2: confirm -> deletes + untags the session.
+    r = client.delete("/api/streams/oldproj?confirm=true")
     assert r.status_code == 200, r.text
     assert r.json().get("deleted") == "oldproj"
     check = _db.connect(cfg={"paths": {}})
