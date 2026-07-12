@@ -129,7 +129,9 @@ def _stream_label(key: str | None, cfg: dict | None) -> str:
     val = streams.get(key)
     if isinstance(val, dict) and val.get("label"):
         return val["label"]
-    return str(val) if val else key
+    if val:
+        return str(val)
+    return key.replace("-", " ").replace("_", " ").title()
 
 
 # ── the rollup ────────────────────────────────────────────────────────────────
