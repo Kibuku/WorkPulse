@@ -105,3 +105,23 @@ def test_locate_locked_only_when_password_set(client):
     # General questions are not path reads, so they stay open.
     r3 = client.post("/api/ask", json={"question": "what is the acme project state"})
     assert r3.status_code == 200
+
+
+# ── "what have I worked on this week" must be a detailed, evidenced answer ─────
+
+def test_route_what_have_i_worked_on():
+    assert appmod._ask_route("what have I worked on this week") == "retrospective"
+    assert appmod._ask_route("what have i worked on recently") == "retrospective"
+    assert appmod._ask_route("what have i been up to this week") == "retrospective"
+
+
+def test_this_week_is_detailed_with_evidence(client):
+    r = client.post("/api/ask",
+                    json={"question": "what have I worked on this week"})
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert body["kind"] == "retrospective"
+    assert body["total_seconds"] > 0            # the seeded session counts
+    assert "Day by day" in body["answer"]       # detailed, multi-section
+    assert "Where the time went" in body["answer"]
+    assert len(body["evidence"]) >= 1           # files / pieces of work as evidence

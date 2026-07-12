@@ -1335,9 +1335,9 @@ async def api_learn(payload: dict):
 # ── Ask WorkPulse: conversational retrieval over your own work ────────────────
 
 _ASK_RETRO_RE = re.compile(
-    r"\b(how did i|how do i|what did i|what have i been|summari[sz]e|recap|"
+    r"\b(how (did|do) i|what (did|have) i|what have i been|summari[sz]e|recap|"
     r"walk me through|make (a|an) sop|as an sop|retrospective|"
-    r"last week|last month|this week|past week|yesterday)\b", re.I)
+    r"last week|last month|this week|past week|recently|yesterday)\b", re.I)
 _ASK_LOCATE_RE = re.compile(
     r"\b(where('?s| is| are)?|find|locate|open|which file|what file|"
     r"path (to|of)|show me the)\b", re.I)
@@ -1398,8 +1398,12 @@ async def api_ask(payload: dict, request: Request):
             "fallback": backend == "none",
             "answer": wp_retro.to_sop_markdown(roll, cfg=cfg),
             "window": roll["window"], "total_seconds": roll["total_seconds"],
-            "evidence": [{"type": "file", "path": f["path"],
-                          "basename": f["basename"]} for f in roll["files"][:10]],
+            "evidence": (
+                [{"type": "work", "name": c["name"], "hours": c["hours"]}
+                 for c in roll["clusters"] if c.get("name")][:6]
+                + [{"type": "file", "path": f["path"],
+                    "basename": f["basename"]} for f in roll["files"][:10]]
+            ),
         }
 
     result = wp_think.think(con, question, cfg=cfg)
