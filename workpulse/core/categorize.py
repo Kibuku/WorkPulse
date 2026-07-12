@@ -499,7 +499,7 @@ def _cli_show(cluster_id: str) -> int:
         print(f"no cluster {cluster_id}")
         return 1
     print(f"cluster {cluster_id}")
-    print(f"  {meta['started_at']} → {meta['ended_at']}")
+    print(f"  {meta['started_at']} -> {meta['ended_at']}")
     print(f"  total_seconds: {meta['total_seconds']} ({meta['total_seconds']/3600:.1f}h)")
     print(f"  stream:        {meta['stream']}")
     signals = gather_signals(con, cluster_id, meta["started_at"], meta["ended_at"])

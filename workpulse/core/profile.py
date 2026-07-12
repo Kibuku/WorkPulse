@@ -694,7 +694,7 @@ def _cli_update(args: argparse.Namespace) -> int:
     source = "fallback" if r["fallback"] else f"model={r['model']}"
     print(f"  source:    {source}")
     print(f"  skill_run: {r['skill_run']}")
-    print(f"  window:    {r['findings']['window']['start']} → "
+    print(f"  window:    {r['findings']['window']['start']} -> "
           f"{r['findings']['window']['end']} "
           f"({r['findings']['window']['days']} days)")
     print(f"  signal:    "

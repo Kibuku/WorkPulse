@@ -62,3 +62,18 @@ def ensure_dir(path: Path) -> Path:
     """Create directory (and parents) if it doesn't exist. Returns the path."""
     path.mkdir(parents=True, exist_ok=True)
     return path
+
+
+def enable_utf8_console() -> None:
+    """Make stdout/stderr encode as UTF-8 so non-ASCII output (arrows, em
+    dashes, emoji) never crashes on a Windows cp1252 console. Without this,
+    printing a character the console codepage lacks raises UnicodeEncodeError
+    and aborts the command. Safe no-op where the streams can't be reconfigured
+    (already wrapped, or redirected to a pipe that fixes the encoding)."""
+    for stream in (sys.stdout, sys.stderr):
+        reconfigure = getattr(stream, "reconfigure", None)
+        if reconfigure is not None:
+            try:
+                reconfigure(encoding="utf-8")
+            except (ValueError, OSError):
+                pass
