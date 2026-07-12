@@ -7,7 +7,12 @@ brain still doesn't know.
 
 Everything runs on your machine. Nothing leaves it unless you choose to sync.
 
-> **Status:** v2 in active development. macOS working; Windows parity in progress.
+> **This is WorkPulse v2 — the current version.** macOS is fully working; Windows
+> is in validation. Install it with the one command below and keep it current with
+> `workpulse update`.
+>
+> Version 1 is preserved on the **`v1`** branch (tag **`v1.0.0`**) but is no longer
+> the default — new installs and updates track v2.
 
 ## Layout
 
