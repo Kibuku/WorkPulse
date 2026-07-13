@@ -27,6 +27,17 @@ function escapeHtml(s) {
       ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 }
 
+function jsAttr(s) {
+  // Safe as an argument inside  onclick="f('...')"  — escape for a JS
+  // single-quoted string first (backslash, then quote), then HTML-encode the
+  // characters that would break the attribute. Meeting titles carry '|', '&',
+  // and sometimes apostrophes, which plain escapeHtml would mangle here.
+  return (s || '')
+    .replace(/\\/g, '\\\\')
+    .replace(/'/g, "\\'")
+    .replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+}
+
 function activeDate() { return currentDate || todayISO; }
 function isViewingToday() { return !currentDate || currentDate === todayISO; }
 
@@ -1496,10 +1507,12 @@ async function learn(rawTitle, streamKey) {
     const d = await r.json();
     if (d.ok) {
       const n = d.retagged || 1;
+      const mtg = d.meetings_retagged || 0;
+      const mtgBit = mtg ? ` and ${mtg} meeting${mtg === 1 ? '' : 's'}` : '';
       showToast(streamKey
-        ? `Tagged as ${streamKey}. Attributed ${n} matching window${n === 1 ? '' : 's'}; WorkPulse remembers.`
-        : `Will ignore this window in future.`);
-      await fetchRealWork();
+        ? `Tagged as ${streamKey}. Attributed ${n} window${n === 1 ? '' : 's'}${mtgBit}; WorkPulse remembers.`
+        : `Will ignore this in future.`);
+      await Promise.all([fetchRealWork(), fetchMeetings()]);
     } else {
       showToast('Error: ' + (d.error || 'could not save rule'));
     }
@@ -1587,9 +1600,53 @@ async function saveSettings() {
   }
 }
 
+// ── Meetings to file (calendar side of the tag-the-untagged loop) ───────────
+// Surfaces meetings the calendar knows about that aren't tied to a project yet.
+// Tagging one reuses learn(), which now also files matching meetings + windows.
+async function fetchMeetings() {
+  const panel = document.getElementById('meetings-panel');
+  const card = document.getElementById('meetings-card');
+  if (!panel) return;
+  let d;
+  try {
+    d = await (await fetch('/api/meetings/untagged')).json();
+  } catch (e) {
+    panel.innerHTML = '<div class="empty">Could not load meetings.</div>';
+    return;
+  }
+  const meetings = d.meetings || [];
+  if (!meetings.length) {
+    // Nothing to file (or no calendar configured) — keep the dashboard quiet.
+    if (card) card.style.display = 'none';
+    return;
+  }
+  if (card) card.style.display = '';
+  panel.innerHTML = meetings.map((m, i) => {
+    const meta = m.count > 1 ? `${m.count}×` : relativeDateLabel((m.last_at || '').slice(0, 10));
+    return `
+      <div class="attn-row">
+        <div class="attn-title" title="${escapeHtml(m.title)}">${escapeHtml(m.title)}</div>
+        <div class="attn-min">${escapeHtml(meta)}</div>
+        <div class="attn-tag">
+          <button class="tag-btn" onclick="toggleTagMenu('mtg${i}')">Tag as ▾</button>
+          <div class="tag-menu" id="tag-menu-mtg${i}">
+            ${availableStreams.map(s => `
+              <div class="tag-opt" onclick="learn('${jsAttr(m.title)}', '${s.key}')">
+                <span class="lg-dot" style="background:${s.color}"></span>
+                <span>${escapeHtml(s.label)}</span>
+              </div>`).join('')}
+            <div class="tag-opt ignore" onclick="learn('${jsAttr(m.title)}', null)">
+              Not a project (ignore)
+            </div>
+          </div>
+        </div>
+      </div>`;
+  }).join('');
+}
+
 // ── Refresh orchestration ──────────────────────────────────────────────────
 async function refreshDayPanels() {
-  await Promise.all([fetchHealth(), fetchPersonal(), fetchProfile(), fetchToday(), fetchRealWork(), fetchLastActive(), fetchAI()]);
+  await Promise.all([fetchHealth(), fetchPersonal(), fetchProfile(), fetchToday(), fetchRealWork(), fetchLastActive(), fetchAI(), fetchMeetings()]);
   await fetchHeatmap();   // re-render so selected day highlights
 }
 

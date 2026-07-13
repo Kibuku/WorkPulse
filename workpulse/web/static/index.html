@@ -212,6 +212,19 @@
     </div>
   </div>
 
+  <div class="card span-12 collapsible" data-card="meetings" data-card-label="Meetings to file" id="meetings-card">
+    <div class="eyebrow card-header" onclick="toggleCard('meetings')">
+      <span class="card-toggle">▾</span>
+      <div class="card-header-text"><span>Meetings to file</span></div>
+    </div>
+    <div class="card-body">
+      <div class="hint" style="font-size:12px;color:var(--text-soft);margin-bottom:8px">
+        Meetings your calendar knows about but that aren't tied to a project yet. Tag one and WorkPulse files every matching meeting and work session, now and later.
+      </div>
+      <div id="meetings-panel"><div class="empty">Loading…</div></div>
+    </div>
+  </div>
+
   <div class="card span-12 collapsible" data-card="ai" data-card-label="AI sessions">
     <div class="eyebrow card-header" onclick="toggleCard('ai')">
       <span class="card-toggle">▾</span>
