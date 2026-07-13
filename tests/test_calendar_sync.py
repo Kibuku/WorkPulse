@@ -229,3 +229,46 @@ def test_calendar_event_outside_window_is_ignored(env, monkeypatch):
 
     res = cat.assign_cluster(con, cid)
     assert res["stream"] != "uganda"  # no signal, so misc or other
+
+
+def test_event_matches_config_stream_pattern(env, monkeypatch):
+    """A meeting attributes via the SAME stream_path_patterns keyword list that
+    work sessions use (activity._tag_stream) — not just projects.yaml — so a
+    meeting isn't dumped unattributed when its title carries a known keyword."""
+    monkeypatch.setattr(cs.wp_projects, "load_projects", lambda: [])  # isolate projects.yaml
+    con = _con()
+    now = datetime.now(timezone.utc)
+    body = _ics([
+        {"title": "Enersave quarterly sync", "uid": "e1",
+         "start": now.strftime("%Y%m%dT%H%M%SZ"),
+         "end":   (now + timedelta(hours=1)).strftime("%Y%m%dT%H%M%SZ")},
+    ])
+    monkeypatch.setattr(cs, "fetch_ics", lambda url, **kw: body)
+    cfg = {"paths": {}, "watcher": {"stream_path_patterns": [
+        {"path": "enersave", "stream": "enersave"}]}}
+    counts = cs.sync(con, url="x", cfg=cfg)
+    assert counts["with_stream"] == 1
+    assert con.execute("SELECT stream FROM calendar_event").fetchone()["stream"] == "enersave"
+
+
+def test_event_matches_taught_rule(env, monkeypatch):
+    """A rule taught from the attention panel (learning._add_rule) tags matching
+    meetings too — one tag-the-untagged loop for work AND meetings."""
+    monkeypatch.setattr(cs.wp_projects, "load_projects", lambda: [])
+    from workpulse.core import learning
+    learning._RULES_CACHE["mtime"] = 0.0
+    learning._RULES_CACHE["rules"] = []
+    cfg = {"paths": {"logs": str(env)}}  # env is tmp_path; rules live under logs/
+    learning._add_rule(cfg=cfg, pattern="mercy corps", stream="mercycorps",
+                       raw_title="Mercy Corps", source="user")
+    con = _con()
+    now = datetime.now(timezone.utc)
+    body = _ics([
+        {"title": "Mercy Corps stakeholder mapping", "uid": "m1",
+         "start": now.strftime("%Y%m%dT%H%M%SZ"),
+         "end":   (now + timedelta(hours=1)).strftime("%Y%m%dT%H%M%SZ")},
+    ])
+    monkeypatch.setattr(cs, "fetch_ics", lambda url, **kw: body)
+    counts = cs.sync(con, url="x", cfg=cfg)
+    assert counts["with_stream"] == 1
+    assert con.execute("SELECT stream FROM calendar_event").fetchone()["stream"] == "mercycorps"

@@ -166,12 +166,38 @@ def _to_dt(v) -> datetime:
 
 # ── write to DB ─────────────────────────────────────────────────────────────
 
-def _resolve_event_stream(event: dict, projects: list[dict]) -> str | None:
+def _resolve_event_stream(event: dict, projects: list[dict],
+                          cfg: dict | None = None) -> str | None:
+    """Attribute a meeting to a stream using the SAME knowledge your work
+    sessions use, so meetings aren't just dumped in unattributed:
+      1. projects.yaml declarative mapping (resolve_stream),
+      2. the config stream_path_patterns keyword list (what activity._tag_stream
+         matches titles against — e.g. a "mercy corps" keyword tags both the
+         files and the meeting),
+      3. rules you taught from the "Needs your attention" panel (match_learned) —
+         teach a meeting/window once and every matching one, past and future,
+         attributes.
+    Returns None only when none of these know the meeting yet (then it surfaces
+    for one-click tagging, same loop as untagged work)."""
     text = " ".join([event.get("title") or "",
                      event.get("location") or "",
                      event.get("body") or "",
                      " ".join(event.get("attendees") or [])])
-    return wp_projects.resolve_stream(text, projects)
+    s = wp_projects.resolve_stream(text, projects)
+    if s:
+        return s
+    if cfg is None:
+        return None
+    haystack = text.lower()
+    for p in (cfg.get("watcher", {}) or {}).get("stream_path_patterns", []) or []:
+        needle = str(p.get("path", "")).replace("\\", "/").lower()
+        if needle and (needle in haystack or needle.replace("/", " ") in haystack):
+            return p.get("stream")
+    try:
+        from workpulse.core.learning import match_learned
+        return match_learned(event.get("title") or "", cfg)
+    except Exception:
+        return None  # no readable rule store -> unmatched, never break the sync
 
 
 def sync(con: sqlite3.Connection, *, url: str | None = None,
@@ -201,7 +227,7 @@ def sync(con: sqlite3.Connection, *, url: str | None = None,
     con.execute("BEGIN")
     try:
         for ev in events:
-            stream = _resolve_event_stream(ev, projects)
+            stream = _resolve_event_stream(ev, projects, cfg)
             if stream:
                 con.execute(
                     "INSERT OR IGNORE INTO stream(key, label, parent_key) "
