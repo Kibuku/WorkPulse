@@ -238,3 +238,35 @@ def test_uninstall_unsupported_platform_returns_2(monkeypatch):
     monkeypatch.setattr(sys, "platform", "linux")
     rc = scheduler.uninstall_all()
     assert rc == 2
+
+
+def test_gui_agents_present_and_darwin_only():
+    """The dashboard + menu-bar GUI agents ship, but only on macOS — Windows
+    uses ops/tray.py for that role, so they must never register there."""
+    slugs = [j["slug"] for j in scheduler.jobs()]
+    assert "dashboard" in slugs and "menubar" in slugs
+    for slug in ("dashboard", "menubar"):
+        j = next(x for x in scheduler.jobs() if x["slug"] == slug)
+        assert j["platforms"] == ("darwin",)
+        assert j["daemon"] is True                      # long-running GUI agents
+
+
+def test_jobs_for_platform_filters_gui_agents(monkeypatch):
+    monkeypatch.setattr(scheduler.sys, "platform", "darwin")
+    darwin = {j["slug"] for j in scheduler._jobs_for_platform()}
+    assert {"dashboard", "menubar"} <= darwin
+    assert "activity" in darwin                          # unpinned jobs stay
+
+    monkeypatch.setattr(scheduler.sys, "platform", "win32")
+    win = {j["slug"] for j in scheduler._jobs_for_platform()}
+    assert "dashboard" not in win and "menubar" not in win
+    assert "activity" in win                             # sensors still register
+
+
+def test_dashboard_agent_runs_the_web_server():
+    j = next(x for x in scheduler.jobs() if x["slug"] == "dashboard")
+    xml = scheduler.render_launchd_plist(j)
+    # python -m workpulse.cli web --port 5700
+    for tok in ("workpulse.cli", "web", "--port", "5700"):
+        assert f"<string>{tok}</string>" in xml
+    assert "<key>KeepAlive</key>" in xml and "<string>Aqua</string>" in xml
