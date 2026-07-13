@@ -40,6 +40,14 @@ from workpulse.common import ROOT
 _LABEL_PREFIX = "com.workpulse"
 
 
+def _jobs_for_platform() -> list[dict]:
+    """Jobs that belong on the current OS. A job with no 'platforms' key runs
+    everywhere (the sensors, rollups); the macOS GUI agents pin themselves to
+    darwin so they never get registered on Windows."""
+    return [j for j in jobs()
+            if sys.platform in j.get("platforms", ("darwin", "win32"))]
+
+
 def jobs() -> list[dict]:
     """All autonomous agents, expressed once. Times are local.
 
@@ -119,6 +127,33 @@ def jobs() -> list[dict]:
             "hour":    None, "minute": None, "weekday": None,
             "interval_seconds": 10800,           # every 3 hours
             "description": "Self-health check; macOS-notifies on any problem.",
+        },
+        # ── macOS GUI agents ────────────────────────────────────────────────
+        # On Windows these two are handled by ops/tray.py (pystray), which
+        # starts the server itself and shows the tray. On macOS there was no
+        # equivalent, so a fresh install left the dashboard headless and
+        # invisible ("WorkPulse didn't launch"). These give the Mac the same
+        # visible, always-there home. darwin-only so the Windows install is
+        # untouched.
+        {
+            "slug":    "dashboard",
+            "label":   f"{_LABEL_PREFIX}.dashboard",
+            "module":  "workpulse.cli",
+            "args":    ["web", "--port", "5700"],
+            "hour":    None, "minute": None, "weekday": None,
+            "daemon":  True,
+            "platforms": ("darwin",),
+            "description": "The local dashboard web server (127.0.0.1:5700).",
+        },
+        {
+            "slug":    "menubar",
+            "label":   f"{_LABEL_PREFIX}.menubar",
+            "module":  "workpulse.menubar",
+            "args":    [],
+            "hour":    None, "minute": None, "weekday": None,
+            "daemon":  True,
+            "platforms": ("darwin",),
+            "description": "Menu-bar icon: opens the dashboard, shows sensor status.",
         },
         # NOTE: browser capture is no longer a standalone agent. It's bound
         # into activity.py's frontmost-app sample loop (see
@@ -273,7 +308,7 @@ def _macos_uninstall_one(job: dict) -> str:
 
 def _macos_status() -> list[dict]:
     out = []
-    for job in jobs():
+    for job in _jobs_for_platform():
         plist = _launchd_plist_path(job["label"])
         loaded = subprocess.run(
             ["launchctl", "list", job["label"]], capture_output=True, text=True
@@ -403,7 +438,7 @@ def _windows_uninstall_one(job: dict) -> str:
 
 def _windows_status() -> list[dict]:
     out = []
-    for job in jobs():
+    for job in _jobs_for_platform():
         r = subprocess.run(["schtasks", "/Query", "/TN", job["label"]],
                            capture_output=True, text=True)
         out.append({
@@ -441,7 +476,7 @@ def install_all() -> int:
         print(f"unsupported platform: {sys.platform}", file=sys.stderr)
         return 2
     rc = 0
-    for job in jobs():
+    for job in _jobs_for_platform():
         line = fn(job)
         print(line)
         if line.startswith("FAIL"):
@@ -456,7 +491,7 @@ def uninstall_all() -> int:
     if fn is None:
         print(f"unsupported platform: {sys.platform}", file=sys.stderr)
         return 2
-    for job in jobs():
+    for job in _jobs_for_platform():
         print(fn(job))
     return 0
 
