@@ -564,6 +564,32 @@ def _set_recognize(key: str, value: str, cfg: dict) -> None:
         pats.append({"path": value, "stream": key})
 
 
+def _ensure_parent_in_config(parent, streams: dict) -> bool:
+    """A chosen parent may live only in the DB (migrated from v1, when
+    config.yaml's `streams:` was null). If so, pull it into the config tree as a
+    top-level stream so a new child has a real parent — instead of rejecting a
+    stream the user can plainly see in their list. Returns True when `parent` is
+    None or is now a known config stream; False when it exists nowhere.
+
+    Safe against duplication: once the parent is in config, normalise() owns it
+    and _streams_payload's DB pass skips it (config wins on key)."""
+    if not parent or parent in streams:
+        return True
+    try:
+        from workpulse.core import db as wp_db
+        row = wp_db.connect(load_config()).execute(
+            "SELECT label FROM stream WHERE key = ?", (parent,)).fetchone()
+    except Exception:
+        row = None
+    if not row:
+        return False
+    label = row["label"] if row["label"] else parent
+    if label == parent:                       # raw key -> a friendlier label
+        label = parent.replace("-", " ").replace("_", " ").title()
+    streams[parent] = {"label": label}
+    return True
+
+
 @app.post("/api/streams")
 async def api_streams_add(payload: dict):
     """Body: {key, label, parent?}. Append a new stream to config.yaml.
@@ -596,7 +622,9 @@ async def api_streams_add(payload: dict):
                             status_code=500)
     if key in streams:
         return JSONResponse({"error": f"stream '{key}' already exists"}, status_code=409)
-    if parent and parent not in streams:
+    # Accept a parent that lives in config OR only in the DB (migrated v1
+    # streams), materializing the latter into config so the child has a home.
+    if parent and not _ensure_parent_in_config(parent, streams):
         return JSONResponse({"error": f"parent '{parent}' is not a known stream"},
                             status_code=400)
     streams[key] = {"label": label}
@@ -626,7 +654,12 @@ async def api_streams_patch(key: str, payload: dict):
     of itself)."""
     cfg, cfg_path = _load_streams_config()
     streams = cfg.get("streams") or {}
-    if not isinstance(streams, dict) or key not in streams:
+    if not isinstance(streams, dict):
+        streams = {}
+    # The stream being edited may live only in the DB (migrated from v1). Pull
+    # it into config so it can be renamed or reparented, instead of 404ing a
+    # stream the user can plainly see and reorganise.
+    if key not in streams and not _ensure_parent_in_config(key, streams):
         return JSONResponse({"error": f"stream '{key}' not found"}, status_code=404)
 
     # Normalise the entry to dict shape so partial updates compose cleanly.
@@ -649,7 +682,7 @@ async def api_streams_patch(key: str, payload: dict):
         new_parent = (new_parent or "").strip().lower() or None
         if new_parent == key:
             return JSONResponse({"error": "stream cannot be its own parent"}, status_code=400)
-        if new_parent and new_parent not in streams:
+        if new_parent and not _ensure_parent_in_config(new_parent, streams):
             return JSONResponse({"error": f"parent '{new_parent}' is not a known stream"},
                                 status_code=400)
         # Cycle guard: walk up from new_parent — if we encounter `key`, abort.
