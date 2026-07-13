@@ -227,3 +227,56 @@ def test_empty_config_and_db_is_flagged_as_unset(tmp_path, monkeypatch):
     _db.connect(cfg={"paths": {}})  # create schema, no streams
     client = TestClient(appmod.app)
     assert client.get("/api/system").json()["taxonomy_trivial"] is True
+
+
+def test_add_child_under_migrated_db_parent(tmp_path, monkeypatch):
+    """Adding a child under a stream that lives only in the DB (migrated from
+    v1, config streams null) must work — the parent is materialised into config,
+    not rejected as 'parent is not a known stream'."""
+    import workpulse.web.app as appmod
+    from workpulse.core import db as _db
+    cfgfile = tmp_path / "config.yaml"
+    monkeypatch.setattr(_db, "db_path", lambda cfg=None: tmp_path / "wp.db")
+    real_resolve = appmod.resolve
+    monkeypatch.setattr(appmod, "resolve",
+                        lambda rel: cfgfile if rel == "config/config.yaml" else real_resolve(rel))
+    monkeypatch.setattr(appmod, "load_config",
+                        lambda: {"paths": {"logs": str(tmp_path)}, "streams": None})
+    con = _db.connect(cfg={"paths": {}})
+    con.execute("INSERT OR IGNORE INTO stream(key,label,parent_key) VALUES ('work','Work',NULL)")
+    con.commit()
+    client = TestClient(appmod.app)
+
+    r = client.post("/api/streams",
+                    json={"key": "mercycorps", "label": "Mercy Corps", "parent": "work"})
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert body["parent"] == "work"
+    assert body["breadcrumb"] == "Work › Mercy Corps"
+
+    cfg = yaml.safe_load(cfgfile.read_text())
+    assert cfg["streams"]["work"]["label"] == "Work"                 # parent pulled in
+    assert cfg["streams"]["mercycorps"] == {"label": "Mercy Corps", "parent": "work"}
+
+
+def test_rename_migrated_db_stream(tmp_path, monkeypatch):
+    """A migrated (DB-only) stream can be renamed/reparented, not 404'd."""
+    import workpulse.web.app as appmod
+    from workpulse.core import db as _db
+    cfgfile = tmp_path / "config.yaml"
+    monkeypatch.setattr(_db, "db_path", lambda cfg=None: tmp_path / "wp.db")
+    real_resolve = appmod.resolve
+    monkeypatch.setattr(appmod, "resolve",
+                        lambda rel: cfgfile if rel == "config/config.yaml" else real_resolve(rel))
+    monkeypatch.setattr(appmod, "load_config",
+                        lambda: {"paths": {"logs": str(tmp_path)}, "streams": None})
+    con = _db.connect(cfg={"paths": {}})
+    con.execute("INSERT OR IGNORE INTO stream(key,label,parent_key) VALUES ('work','Work',NULL)")
+    con.commit()
+    client = TestClient(appmod.app)
+
+    r = client.patch("/api/streams/work", json={"label": "Client Work"})
+    assert r.status_code == 200, r.text
+    assert r.json()["label"] == "Client Work"
+    cfg = yaml.safe_load(cfgfile.read_text())
+    assert cfg["streams"]["work"]["label"] == "Client Work"
