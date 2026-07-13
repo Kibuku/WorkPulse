@@ -88,3 +88,29 @@ def test_classify_untagged_learns_and_retags(env, monkeypatch):
     assert any(r["stream"] == "client-work" for r in learning.load_learned_rules(env))
     streams = [r[0] for r in con.execute("SELECT stream FROM session").fetchall()]
     assert "client-work" in streams
+
+
+def _seed_meeting(con, event_id, title):
+    con.execute(
+        "INSERT INTO calendar_event(id,source,started_at,ended_at,title_hash,"
+        "stream,is_organizer,fetched_at) VALUES (?,'ics',"
+        "'2026-07-01T09:00:00+00:00','2026-07-01T10:00:00+00:00','h',NULL,0,"
+        "'2026-07-01T00:00:00+00:00')", (event_id,))
+    con.execute(
+        "INSERT INTO calendar_event_local(event_id,raw_title,raw_body,"
+        "raw_location,attendees) VALUES (?,?,NULL,NULL,NULL)", (event_id, title))
+    con.commit()
+
+
+def test_retag_calendar_events_applies_rules(env):
+    con = _con()
+    _seed_meeting(con, "e1", "Mercy Corps kickoff")
+    _seed_meeting(con, "e2", "Random all-hands")
+    learning._add_rule(env, pattern="mercy corps", stream="mercycorps",
+                       raw_title="Mercy Corps", source="user")
+    n = learning.retag_calendar_events(con, env)
+    assert n == 1                             # only the Mercy Corps meeting matches
+    streams = dict(con.execute(
+        "SELECT id, stream FROM calendar_event ORDER BY id").fetchall())
+    assert streams["e1"] == "mercycorps"
+    assert streams["e2"] is None              # unmatched meeting stays untagged

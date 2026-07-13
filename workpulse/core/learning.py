@@ -193,6 +193,31 @@ def retag_sessions(con, cfg: dict | None = None) -> int:
     return n
 
 
+def retag_calendar_events(con, cfg: dict | None = None) -> int:
+    """Apply learned rules to still-unattributed meetings, updating
+    calendar_event.stream in place. The calendar counterpart of retag_sessions,
+    so teaching a rule once files matching meetings AND work windows. Keyless."""
+    cfg = cfg or load_config()
+    rows = con.execute(
+        """SELECT ce.id AS id, cel.raw_title AS title
+           FROM calendar_event ce
+           JOIN calendar_event_local cel ON cel.event_id = ce.id
+           WHERE ce.stream IS NULL AND cel.raw_title IS NOT NULL
+                 AND cel.raw_title <> ''"""
+    ).fetchall()
+    n = 0
+    for r in rows:
+        stream = match_learned(r["title"], cfg)
+        if not stream:                      # None = no rule, or a negative rule
+            continue
+        con.execute("INSERT OR IGNORE INTO stream(key, label, parent_key) VALUES (?, ?, NULL)",
+                    (stream, stream))
+        con.execute("UPDATE calendar_event SET stream = ? WHERE id = ?", (stream, r["id"]))
+        n += 1
+    con.commit()
+    return n
+
+
 def _ask_llm_classify(title: str, streams: dict, cfg: dict) -> tuple[str | None, str]:
     """Ask the LLM which stream a window belongs to, plus a stable anchor phrase.
     Returns (stream_key_or_None, anchor). The prompt is seeded with each stream's

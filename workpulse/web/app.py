@@ -1423,7 +1423,8 @@ async def api_learn(payload: dict):
     stream   — the stream key to assign, or null to mark this pattern as
                permanently untagged.
     """
-    from workpulse.core.learning import normalize_title, _add_rule, retag_sessions
+    from workpulse.core.learning import (
+        normalize_title, _add_rule, retag_sessions, retag_calendar_events)
     from workpulse.core import db as wp_db
     cfg = load_config()
     raw_title = (payload.get("raw_title") or "").strip()
@@ -1442,15 +1443,21 @@ async def api_learn(payload: dict):
     # Never let this raise a 500 — the dashboard can't parse an HTML error page,
     # so on any failure return a JSON error the UI can show.
     retagged = 0
+    meetings_retagged = 0
     try:
         _add_rule(cfg=cfg, pattern=pattern, stream=stream, raw_title=raw_title, source="user")
-        retagged = retag_sessions(wp_db.connect(cfg), cfg)
+        con = wp_db.connect(cfg)
+        retagged = retag_sessions(con, cfg)
+        # One loop for work AND meetings: a rule taught here also files matching
+        # calendar events, so they leave the "Meetings to file" panel.
+        meetings_retagged = retag_calendar_events(con, cfg)
     except Exception as e:  # noqa: BLE001 — the tag action must never 500
         import logging
         logging.getLogger("workpulse.web").warning("learn/retag failed: %r", e)
         return JSONResponse({"ok": False, "error": f"{type(e).__name__}: {e}"},
                             status_code=200)
-    return {"ok": True, "pattern": pattern, "stream": stream, "retagged": retagged}
+    return {"ok": True, "pattern": pattern, "stream": stream,
+            "retagged": retagged, "meetings_retagged": meetings_retagged}
 
 
 @app.post("/api/v2/retag")
@@ -1466,6 +1473,37 @@ async def api_v2_retag(payload: dict):
         res = learning.classify_untagged(con, cfg=cfg)
         return {"ok": True, "retagged": res["retagged"], "ai": res}
     return {"ok": True, "retagged": learning.retag_sessions(con, cfg)}
+
+
+@app.get("/api/meetings/untagged")
+def api_meetings_untagged():
+    """Meetings not yet attributed to a stream — the calendar side of the
+    tag-the-untagged loop, so the calendar becomes signal, not a dump. Grouped
+    by title (a recurring meeting is tagged once); tagging reuses /api/learn,
+    which also retags matching meetings and work windows."""
+    cfg = load_config()
+    from workpulse.core import db as wp_db
+    con = wp_db.connect(cfg)
+    try:
+        rows = con.execute(
+            """SELECT cel.raw_title AS title, COUNT(*) AS n,
+                      MIN(ce.started_at) AS first_at, MAX(ce.started_at) AS last_at
+               FROM calendar_event ce
+               JOIN calendar_event_local cel ON cel.event_id = ce.id
+               WHERE ce.stream IS NULL AND cel.raw_title IS NOT NULL
+                     AND cel.raw_title <> ''
+               GROUP BY cel.raw_title
+               ORDER BY n DESC, last_at DESC
+               LIMIT 20"""
+        ).fetchall()
+    except Exception:  # noqa: BLE001 — no calendar data yet -> empty, never 500
+        rows = []
+    meetings = [
+        {"title": r["title"], "count": r["n"],
+         "first_at": r["first_at"], "last_at": r["last_at"]}
+        for r in rows
+    ]
+    return {"meetings": meetings, "count": len(meetings)}
 
 
 # ── Ask WorkPulse: conversational retrieval over your own work ────────────────
