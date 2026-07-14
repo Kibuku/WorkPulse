@@ -20,6 +20,7 @@ CLI:
 from __future__ import annotations
 
 import argparse
+import os
 import sqlite3
 import sys
 from pathlib import Path
@@ -106,6 +107,66 @@ def prune_lockscreen(con: sqlite3.Connection, *, dry_run: bool = False) -> dict:
     return counts
 
 
+def prune_untracked_file_events(con: sqlite3.Connection, *,
+                                cfg: dict | None = None,
+                                dry_run: bool = False) -> dict:
+    """DELETE file_events whose raw_path is not under any configured
+    watcher.watch_roots. file_event_local cascades via ON DELETE CASCADE; no
+    edges or FTS rows reference file_events.
+
+    This clears the churn a v1 migration drags in: v1 watched all of ~/Library
+    (caches, app state, containers), which v2's watch_roots deliberately exclude.
+    On the pilot Mac that was 2.72M of 2.74M rows. Keeps every event under a
+    root WorkPulse actually watches. Idempotent; --dry-run reports only.
+
+    Refuses to run if watch_roots is empty (would delete everything)."""
+    cfg = cfg or load_config()
+    roots = (cfg.get("watcher") or {}).get("watch_roots") or []
+    prefixes = [os.path.expanduser(r).rstrip("/").lower() + "/" for r in roots if r]
+    counts = {"deleted": 0, "kept": 0, "dry_run": dry_run}
+    if not prefixes:
+        counts["error"] = "no watch_roots configured; refusing to prune everything"
+        return counts
+
+    keep = " OR ".join("LOWER(fel.raw_path) LIKE ?" for _ in prefixes)
+    params = [p + "%" for p in prefixes]
+    doomed = (f"SELECT fe.id FROM file_event fe "
+              f"JOIN file_event_local fel ON fel.file_event_id = fe.id "
+              f"WHERE NOT ({keep})")
+
+    total = con.execute("SELECT COUNT(*) FROM file_event").fetchone()[0]
+    counts["deleted"] = con.execute(
+        f"SELECT COUNT(*) FROM ({doomed})", params).fetchone()[0]
+    counts["kept"] = total - counts["deleted"]
+    if dry_run or not counts["deleted"]:
+        return counts
+
+    con.execute("BEGIN")
+    try:
+        con.execute("CREATE TEMP TABLE IF NOT EXISTS _doomed_fe (id TEXT PRIMARY KEY)")
+        con.execute("DELETE FROM _doomed_fe")
+        con.execute(f"INSERT INTO _doomed_fe(id) {doomed}", params)
+        # Delete local rows explicitly (fast), then the events. CASCADE would
+        # also clear local, but being explicit avoids relying on the pragma.
+        con.execute("DELETE FROM file_event_local "
+                    "WHERE file_event_id IN (SELECT id FROM _doomed_fe)")
+        con.execute("DELETE FROM file_event "
+                    "WHERE id IN (SELECT id FROM _doomed_fe)")
+        con.execute("DROP TABLE _doomed_fe")
+        con.execute("COMMIT")
+    except Exception:
+        _safe_exec(con, "ROLLBACK")
+        raise
+    return counts
+
+
+def _safe_exec(con: sqlite3.Connection, sql: str) -> None:
+    try:
+        con.execute(sql)
+    except Exception:
+        pass
+
+
 def rebuild_search_and_clusters(con: sqlite3.Connection) -> dict:
     """After pruning, the FTS index is consistent but clusters reference
     stale cluster_ids. Re-run search.reindex() (cheap; FTS is small) and
@@ -129,6 +190,18 @@ def _cli_prune(args: argparse.Namespace) -> int:
         if k == "dry_run":
             continue
         print(f"  {k:18s} {v}")
+    return 0
+
+
+def _cli_prune_files(args: argparse.Namespace) -> int:
+    con = db.connect(load_config())
+    counts = prune_untracked_file_events(con, dry_run=args.dry_run)
+    tag = "DRY-RUN " if args.dry_run else ""
+    print(f"{tag}prune-untracked file events:")
+    for k, v in counts.items():
+        if k == "dry_run":
+            continue
+        print(f"  {k:18s} {v:,}" if isinstance(v, int) else f"  {k:18s} {v}")
     return 0
 
 
@@ -159,12 +232,17 @@ def main(argv: list[str]) -> int:
     sub = parser.add_subparsers(dest="cmd")
     p = sub.add_parser("prune-lockscreen")
     p.add_argument("--dry-run", action="store_true")
+    pf = sub.add_parser("prune-untracked",
+                        help="drop file events outside the configured watch_roots")
+    pf.add_argument("--dry-run", action="store_true")
     sub.add_parser("rebuild")
     sub.add_parser("full",
                    help="prune-lockscreen + rebuild search + recluster")
     args = parser.parse_args(argv[1:])
     if args.cmd == "prune-lockscreen":
         return _cli_prune(args)
+    if args.cmd == "prune-untracked":
+        return _cli_prune_files(args)
     if args.cmd == "rebuild":
         return _cli_rebuild()
     if args.cmd == "full" or args.cmd is None:
