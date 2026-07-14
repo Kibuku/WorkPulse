@@ -170,3 +170,47 @@ def test_hot_path_safety_bad_record(fresh_db):
     for t in ("session", "file_event", "ai_call"):
         n = con.execute(f"SELECT COUNT(*) AS n FROM {t}").fetchone()["n"]
         assert n == 0
+
+
+def test_file_event_recovers_from_dangling_transaction(fresh_db):
+    """Regression for the ~31h watcher freeze: a lock left the process-wide
+    connection stuck in an open transaction, so every later BEGIN threw
+    'cannot start a transaction within a transaction' and was swallowed at
+    debug. A dangling transaction must no longer wedge subsequent writes."""
+    rec1 = {"timestamp": "2026-07-14T09:00:00+00:00", "event_type": "created",
+            "path": "/Users/x/Documents/report.docx"}
+    dual_write.dual_write_file_event(rec1, cfg={"paths": {}})   # caches _CON, persists 1
+    con = dual_write._CON
+    assert con is not None
+
+    con.execute("BEGIN")                 # wedge it, exactly like the freeze
+    assert con.in_transaction
+
+    rec2 = {"timestamp": "2026-07-14T10:00:00+00:00", "event_type": "modified",
+            "path": "/Users/x/Documents/report2.docx"}
+    dual_write.dual_write_file_event(rec2, cfg={"paths": {}})   # must still land
+
+    n = _con(fresh_db).execute("SELECT COUNT(*) FROM file_event").fetchone()[0]
+    assert n == 2, f"a dangling transaction froze the write path; got {n} of 2"
+
+
+def test_write_failure_resets_cached_connection(fresh_db):
+    """After a write error, the cached connection is dropped so the next call
+    reopens a fresh one instead of reusing a possibly-wedged handle."""
+    rec = {"timestamp": "2026-07-14T09:00:00+00:00", "event_type": "created",
+           "path": "/Users/x/Documents/a.docx"}
+    dual_write.dual_write_file_event(rec, cfg={"paths": {}})
+    con = dual_write._CON
+    assert con is not None
+    con.close()                          # make the cached handle unusable
+    # Next write hits the dead handle, notes the failure, and resets _CON...
+    dual_write.dual_write_file_event(
+        {"timestamp": "2026-07-14T11:00:00+00:00", "event_type": "created",
+         "path": "/Users/x/Documents/b.docx"}, cfg={"paths": {}})
+    assert dual_write._CON is None       # reset happened -> self-heals next time
+    # ...and the following write succeeds against a fresh connection.
+    dual_write.dual_write_file_event(
+        {"timestamp": "2026-07-14T12:00:00+00:00", "event_type": "created",
+         "path": "/Users/x/Documents/c.docx"}, cfg={"paths": {}})
+    n = _con(fresh_db).execute("SELECT COUNT(*) FROM file_event").fetchone()[0]
+    assert n >= 2                        # first + recovered write both persisted
