@@ -79,6 +79,53 @@ def disable() -> None:
             _CON = None
 
 
+def _safe_rollback(con: sqlite3.Connection) -> None:
+    try:
+        con.rollback()
+    except Exception:
+        pass
+
+
+def _begin(con: sqlite3.Connection) -> None:
+    """Start a transaction, first clearing any left dangling by a prior failed
+    commit/rollback. Without this, one wedged transaction makes every later
+    BEGIN throw 'cannot start a transaction within a transaction'."""
+    if con.in_transaction:
+        _safe_rollback(con)
+    con.execute("BEGIN")
+
+
+_FAILS = 0
+
+
+def _note_failure(what: str, e: Exception) -> None:
+    """Surface write failures instead of swallowing them at debug. Loud on the
+    first and every 100th, so a persistent problem shows up in the sensor log
+    (and gets caught by the doctor) rather than freezing a sensor unnoticed."""
+    global _FAILS
+    _FAILS += 1
+    if _FAILS == 1 or _FAILS % 100 == 0:
+        log.warning("dual_write %s failed (#%d): %r", what, _FAILS, e)
+    else:
+        log.debug("dual_write %s failed: %r", what, e)
+
+
+def _reset_con() -> None:
+    """Drop the cached connection so the next write reopens a fresh one. A single
+    lock during a COMMIT/ROLLBACK could otherwise leave this process-wide
+    connection stuck in an open transaction, wedging every later BEGIN for the
+    life of the process. That silently froze the file watcher's writes for ~31h
+    while it kept detecting events. Reopening next call makes it self-healing."""
+    global _CON
+    with _LOCK:
+        if _CON is not None:
+            try:
+                _CON.close()
+            except Exception:
+                pass
+            _CON = None
+
+
 def _now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
 
@@ -108,7 +155,7 @@ def dual_write_session(rec: dict, cfg: dict | None = None) -> None:
         title_hash = atoms.sha256_short(norm or "__empty__")
 
         with _LOCK:
-            con.execute("BEGIN")
+            _begin(con)
             try:
                 con.execute(
                     "INSERT OR IGNORE INTO app(name, category, first_seen, last_seen) VALUES (?, NULL, ?, ?)",
@@ -145,10 +192,11 @@ def dual_write_session(rec: dict, cfg: dict | None = None) -> None:
                         _edge(con, "session", sid, "in_stream", "stream", stream)
                 con.execute("COMMIT")
             except Exception:
-                con.execute("ROLLBACK")
+                _safe_rollback(con)
                 raise
     except Exception as e:
-        log.debug("dual_write_session failed: %r", e)
+        _note_failure("session", e)
+        _reset_con()
 
 
 # ── file_event (called from watcher.py after JSONL append) ───────────────────
@@ -175,7 +223,7 @@ def dual_write_file_event(rec: dict, cfg: dict | None = None) -> None:
         fid = _stable_id("file_event", ts, kind, path)
         path_hash = atoms.sha256_short(os.path.normpath(path))
         with _LOCK:
-            con.execute("BEGIN")
+            _begin(con)
             try:
                 cur = con.execute(
                     "INSERT OR IGNORE INTO file_event(id, ts, path_hash, kind) VALUES (?, ?, ?, ?)",
@@ -188,10 +236,11 @@ def dual_write_file_event(rec: dict, cfg: dict | None = None) -> None:
                     )
                 con.execute("COMMIT")
             except Exception:
-                con.execute("ROLLBACK")
+                _safe_rollback(con)
                 raise
     except Exception as e:
-        log.debug("dual_write_file_event failed: %r", e)
+        _note_failure("file_event", e)
+        _reset_con()
 
 
 # ── ai_call (called from ai_logger.py after JSONL append) ────────────────────
@@ -225,7 +274,8 @@ def dual_write_ai_call(rec: dict, cfg: dict | None = None) -> None:
                 (cid, ts, provider, model, in_tok, out_tok, cost, slug),
             )
     except Exception as e:
-        log.debug("dual_write_ai_call failed: %r", e)
+        _note_failure("ai_call", e)
+        _reset_con()
 
 
 # ── internal ─────────────────────────────────────────────────────────────────
