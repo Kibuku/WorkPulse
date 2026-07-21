@@ -112,13 +112,15 @@ llm:
   #   ollama    -> local Ollama only (free, private, runs on your machine)
   #   none      -> no AI; deterministic/templated answers only
   backend: "auto"
-  model: "claude-sonnet-4-6"          # hosted (Anthropic)
+  # Haiku is the economical hosted default. Move to Sonnet later only when
+  # a task proves it needs stronger reasoning.
+  model: "claude-haiku-4-5"           # hosted (Anthropic)
   ollama:                              # free local backend (https://ollama.com)
     url: "http://127.0.0.1:11434"
     model: "llama3.2:3b"              # pull once with:  ollama pull llama3.2:3b
   pricing_per_million_tokens:
-    input_usd: 3.00
-    output_usd: 15.00
+    input_usd: 1.00
+    output_usd: 5.00
 
 reports:
   timezone: "UTC"                     # change to your local IANA zone (e.g. America/New_York)
@@ -148,3 +150,12 @@ email:
 # AI session logger — local-only metadata about your own Claude API usage.
 ai_logger:
   store_full_prompts: false
+
+# Storage retention. Raw evidence is useful while WorkPulse is learning, but
+# should not grow forever. After this window, WorkPulse keeps durable meaning
+# (captures, corrections, reports, consolidations, project attribution, and
+# lightweight session/browser markers) while removing bulky reconstructable
+# evidence such as file-event rows, dated JSONL sensor logs, raw titles/URLs,
+# calendar details, and saved skill inputs/outputs.
+retention:
+  raw_days: 100

@@ -517,7 +517,7 @@ def consolidate(con: sqlite3.Connection, *, as_of: date | None = None,
     raw = ""
 
     if not force_fallback:
-        model = ((cfg.get("llm") or {}).get("model")) or "claude-sonnet-4-5-20250929"
+        model = ((cfg.get("llm") or {}).get("model")) or "claude-haiku-4-5"
         result = think._call_anthropic(prompt, model=model, cfg=cfg)
         if result is not None:
             raw, in_tok, out_tok, _ = result

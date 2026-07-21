@@ -55,7 +55,7 @@ _SKILLS = {
     "daily":  PKG / "skills" / "report-daily.md",
     "weekly": PKG / "skills" / "report-weekly.md",
 }
-_DEFAULT_MODEL = "claude-sonnet-4-5-20250929"
+_DEFAULT_MODEL = "claude-haiku-4-5"
 
 
 # ── output paths ────────────────────────────────────────────────────────────

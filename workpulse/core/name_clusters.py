@@ -43,7 +43,7 @@ from workpulse.common import ROOT, load_config, PKG
 
 
 _SKILL_PATH = PKG / "skills" / "name-cluster.md"
-_DEFAULT_MODEL = "claude-sonnet-4-5-20250929"
+_DEFAULT_MODEL = "claude-haiku-4-5"
 
 # Stopwords kept small + focused: English chrome + frequent app suffixes.
 _STOPWORDS = frozenset({

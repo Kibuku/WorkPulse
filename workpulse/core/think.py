@@ -52,7 +52,7 @@ from workpulse.common import ROOT, load_config, PKG
 
 
 _SKILL_PATH = PKG / "skills" / "think.md"
-_DEFAULT_MODEL = "claude-sonnet-4-5-20250929"  # current default; cfg may override
+_DEFAULT_MODEL = "claude-haiku-4-5"  # economical default; cfg may override
 
 
 # ── skill loading ────────────────────────────────────────────────────────────

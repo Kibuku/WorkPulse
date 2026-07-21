@@ -45,7 +45,7 @@ from workpulse.common import ROOT, ensure_dir, load_config, PKG
 
 _SKILL_PATH    = PKG / "skills" / "profile.md"
 _PROFILE_PATH  = ROOT / "brain"  / "profile.md"
-_DEFAULT_MODEL = "claude-sonnet-4-5-20250929"
+_DEFAULT_MODEL = "claude-haiku-4-5"
 
 _DEFAULTS = {
     "window_days":             30,

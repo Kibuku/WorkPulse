@@ -38,7 +38,7 @@ log = logging.getLogger("workpulse.llm")
 
 _DEFAULT_OLLAMA_URL   = "http://127.0.0.1:11434"
 _DEFAULT_LOCAL_MODEL  = "llama3.2:3b"          # ~2GB, fast on CPU, good at JSON
-_DEFAULT_CLOUD_MODEL  = "claude-sonnet-4-5-20250929"
+_DEFAULT_CLOUD_MODEL  = "claude-haiku-4-5"
 _OLLAMA_PROBE_CACHE_S = 60
 _ollama_probe = {"ts": 0.0, "up": False, "models": [], "error": None}
 

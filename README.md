@@ -143,6 +143,35 @@ above).
 than a shell env var) is what lets the scheduled `calendar-sync` agent find it.
 Verify with: `python -m workpulse.signals.calendar_sync diagnose`.
 
+## Affordable AI options
+
+WorkPulse still records and reports without an AI backend. For AI-assisted
+classification and synthesis, start local and upgrade only when the evidence
+shows a need:
+
+1. Install [Ollama](https://ollama.com/download) and run
+   `ollama pull llama3.2:3b`. WorkPulse detects it automatically when no
+   Anthropic key is configured. The model download is about 2 GB and inference
+   stays on the machine.
+2. If local output is too slow or not accurate enough, add an Anthropic API key.
+   The hosted default is Claude Haiku 4.5, the lower-cost Claude tier. Change
+   `llm.model` to a Sonnet model later for selected high-reasoning workflows.
+
+Set `llm.backend` to `ollama`, `anthropic`, `auto`, or `none` in
+`config/config.yaml`. `auto` prefers Anthropic when a key exists, then Ollama.
+
+## Data retention
+
+`retention.raw_days` defaults to 100. The nightly cycle synthesizes memory
+first, then deletes dated raw sensor logs and old file events. It strips old raw
+window titles, URLs, calendar details, and large AI payloads while preserving
+captures, corrections, reports, consolidations, learned rules, project links,
+and lightweight historical markers. Preview the impact without deleting:
+
+```bash
+python -m workpulse.core.cleanup retention --dry-run
+```
+
 ## Develop
 
 ```bash

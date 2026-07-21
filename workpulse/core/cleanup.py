@@ -20,13 +20,16 @@ CLI:
 from __future__ import annotations
 
 import argparse
+import json
 import os
+import re
 import sqlite3
 import sys
+from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 
 from workpulse.core import cluster, db, search
-from workpulse.common import load_config
+from workpulse.common import load_config, resolve
 
 
 # App names treated as "not real work" — matches activity_mac._LOCKSCREEN_APP_NAMES
@@ -37,6 +40,139 @@ _LOCKSCREEN_APPS = (
     "screensaverengine",
     "screensaver",
 )
+
+_DATED_SENSOR_LOG = re.compile(
+    r"^(?:activity|file_events)_(\d{4}-\d{2}-\d{2})\.jsonl$"
+)
+
+
+def _count(con: sqlite3.Connection, sql: str, params: tuple = ()) -> int:
+    return int(con.execute(sql, params).fetchone()[0])
+
+
+def _prune_dated_sensor_logs(logs_dir: Path, cutoff: date, *,
+                             dry_run: bool) -> tuple[int, int]:
+    """Remove only date-named WorkPulse sensor logs older than ``cutoff``.
+
+    Learned rules, health state, scheduler logs, and unknown files are never
+    touched. Returns (files, bytes)."""
+    files = bytes_removed = 0
+    if not logs_dir.exists():
+        return files, bytes_removed
+    for path in logs_dir.iterdir():
+        if not path.is_file():
+            continue
+        match = _DATED_SENSOR_LOG.match(path.name)
+        if not match:
+            continue
+        try:
+            log_date = date.fromisoformat(match.group(1))
+        except ValueError:
+            continue
+        if log_date >= cutoff:
+            continue
+        files += 1
+        try:
+            bytes_removed += path.stat().st_size
+        except OSError:
+            pass
+        if not dry_run:
+            path.unlink(missing_ok=True)
+    return files, bytes_removed
+
+
+def _compact_ai_session_log(log_path: Path, cutoff: date, *,
+                            dry_run: bool) -> tuple[int, int]:
+    """Drop old JSONL AI-session records while retaining recent/unknown rows.
+
+    The rewrite is atomic. Malformed rows are retained because retention must
+    never turn uncertainty into deletion. Returns (rows, bytes saved)."""
+    if not log_path.exists() or not log_path.is_file():
+        return 0, 0
+    original = log_path.read_bytes()
+    kept: list[bytes] = []
+    removed = 0
+    for raw in original.splitlines(keepends=True):
+        try:
+            row = json.loads(raw.decode("utf-8"))
+            stamp = str(row.get("ts") or row.get("timestamp") or "")[:10]
+            old = bool(stamp) and date.fromisoformat(stamp) < cutoff
+        except (UnicodeDecodeError, json.JSONDecodeError, ValueError, TypeError):
+            old = False
+        if old:
+            removed += 1
+        else:
+            kept.append(raw)
+    new = b"".join(kept)
+    saved = max(0, len(original) - len(new))
+    if removed and not dry_run:
+        tmp = log_path.with_suffix(log_path.suffix + ".tmp")
+        tmp.write_bytes(new)
+        tmp.replace(log_path)
+    return removed, saved
+
+
+def apply_retention(con: sqlite3.Connection, *, cfg: dict | None = None,
+                    now: datetime | None = None,
+                    dry_run: bool = False) -> dict:
+    """Apply the bounded raw-evidence policy without deleting durable memory.
+
+    Old file events are discarded entirely. For sessions, browser visits, and
+    calendar events, only the private raw projection is removed; their compact
+    timestamp/app/domain/project markers remain. Old skill runs retain audit
+    metadata and cost but lose potentially large input/output payloads.
+    Captures, corrections, learned rules, reports, consolidations, and profile
+    memory are deliberately outside this function.
+    """
+    cfg = cfg or load_config()
+    days = int((cfg.get("retention") or {}).get("raw_days", 100))
+    if days < 1:
+        return {"error": "retention.raw_days must be at least 1",
+                "raw_days": days, "dry_run": dry_run}
+    now = now or datetime.now(timezone.utc)
+    cutoff = (now.date() - timedelta(days=days)).isoformat()
+    params = (cutoff,)
+    counts = {
+        "raw_days": days,
+        "cutoff": cutoff,
+        "file_events": _count(con, "SELECT COUNT(*) FROM file_event WHERE substr(ts,1,10) < ?", params),
+        "session_details": _count(con, "SELECT COUNT(*) FROM session_local sl JOIN session s ON s.id=sl.session_id WHERE substr(s.started_at,1,10) < ?", params),
+        "browser_details": _count(con, "SELECT COUNT(*) FROM browser_visit_local bl JOIN browser_visit b ON b.id=bl.visit_id WHERE substr(b.ts,1,10) < ?", params),
+        "calendar_details": _count(con, "SELECT COUNT(*) FROM calendar_event_local cl JOIN calendar_event c ON c.id=cl.event_id WHERE substr(c.ended_at,1,10) < ?", params),
+        "skill_payloads": _count(con, "SELECT COUNT(*) FROM skill_run WHERE substr(ts,1,10) < ? AND (input IS NOT NULL OR output IS NOT NULL)", params),
+        "dry_run": dry_run,
+    }
+
+    logs_dir = resolve((cfg.get("paths") or {}).get("logs", "logs"))
+    # Inventory the filesystem first, but do not mutate it until the database
+    # transaction succeeds. This avoids half-applied retention on DB failure.
+    cutoff_date = date.fromisoformat(cutoff)
+    log_files, log_bytes = _prune_dated_sensor_logs(
+        logs_dir, cutoff_date, dry_run=True)
+    ai_rows, ai_bytes = _compact_ai_session_log(
+        logs_dir / "ai_sessions.jsonl", cutoff_date, dry_run=True)
+    counts.update({"log_files": log_files, "log_bytes": log_bytes,
+                   "ai_log_rows": ai_rows, "ai_log_bytes": ai_bytes})
+
+    if dry_run:
+        return counts
+
+    con.execute("BEGIN")
+    try:
+        con.execute("DELETE FROM file_event_local WHERE file_event_id IN (SELECT id FROM file_event WHERE substr(ts,1,10) < ?)", params)
+        con.execute("DELETE FROM file_event WHERE substr(ts,1,10) < ?", params)
+        con.execute("DELETE FROM session_local WHERE session_id IN (SELECT id FROM session WHERE substr(started_at,1,10) < ?)", params)
+        con.execute("DELETE FROM browser_visit_local WHERE visit_id IN (SELECT id FROM browser_visit WHERE substr(ts,1,10) < ?)", params)
+        con.execute("DELETE FROM calendar_event_local WHERE event_id IN (SELECT id FROM calendar_event WHERE substr(ended_at,1,10) < ?)", params)
+        con.execute("UPDATE skill_run SET input=NULL, output=NULL WHERE substr(ts,1,10) < ?", params)
+        con.execute("COMMIT")
+    except Exception:
+        con.execute("ROLLBACK")
+        raise
+    _prune_dated_sensor_logs(logs_dir, cutoff_date, dry_run=False)
+    _compact_ai_session_log(logs_dir / "ai_sessions.jsonl", cutoff_date,
+                            dry_run=False)
+    return counts
 
 
 def prune_lockscreen(con: sqlite3.Connection, *, dry_run: bool = False) -> dict:
@@ -214,6 +350,18 @@ def _cli_rebuild() -> int:
     return 0
 
 
+def _cli_retention(args: argparse.Namespace) -> int:
+    con = db.connect(load_config())
+    counts = apply_retention(con, dry_run=args.dry_run)
+    tag = "DRY-RUN " if args.dry_run else ""
+    print(f"{tag}retention:")
+    for k, v in counts.items():
+        if k == "dry_run":
+            continue
+        print(f"  {k:20s} {v:,}" if isinstance(v, int) else f"  {k:20s} {v}")
+    return 1 if "error" in counts else 0
+
+
 def _cli_full() -> int:
     con = db.connect(load_config())
     prune = prune_lockscreen(con)
@@ -235,6 +383,9 @@ def main(argv: list[str]) -> int:
     pf = sub.add_parser("prune-untracked",
                         help="drop file events outside the configured watch_roots")
     pf.add_argument("--dry-run", action="store_true")
+    pr = sub.add_parser("retention",
+                        help="remove raw evidence older than retention.raw_days")
+    pr.add_argument("--dry-run", action="store_true")
     sub.add_parser("rebuild")
     sub.add_parser("full",
                    help="prune-lockscreen + rebuild search + recluster")
@@ -243,6 +394,8 @@ def main(argv: list[str]) -> int:
         return _cli_prune(args)
     if args.cmd == "prune-untracked":
         return _cli_prune_files(args)
+    if args.cmd == "retention":
+        return _cli_retention(args)
     if args.cmd == "rebuild":
         return _cli_rebuild()
     if args.cmd == "full" or args.cmd is None:

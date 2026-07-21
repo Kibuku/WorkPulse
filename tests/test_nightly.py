@@ -119,7 +119,7 @@ def test_weekly_not_due_midweek(env):
 def test_run_force_runs_daily(env, monkeypatch):
     con = _con()
     calls = {"consolidate": 0, "daily": 0, "profile": 0}
-    from workpulse.core import consolidate, report, profile
+    from workpulse.core import cleanup, consolidate, report, profile
     monkeypatch.setattr(consolidate, "consolidate",
                         lambda con, **kw: calls.__setitem__("consolidate", calls["consolidate"] + 1))
     monkeypatch.setattr(report, "daily",
@@ -127,6 +127,8 @@ def test_run_force_runs_daily(env, monkeypatch):
     monkeypatch.setattr(report, "weekly", lambda con, **kw: None)
     monkeypatch.setattr(profile, "update_profile",
                         lambda con, **kw: calls.__setitem__("profile", calls["profile"] + 1))
+    monkeypatch.setattr(cleanup, "apply_retention",
+                        lambda con, **kw: {"raw_days": 100})
     result = nightly.run(force=True, cfg={"paths": {}})
     assert result["daily"] is True
     assert calls == {"consolidate": 1, "daily": 1, "profile": 1}
