@@ -151,6 +151,18 @@ def test_launchd_plist_includes_module_and_args():
     assert "<string>--quiet</string>" in xml
 
 
+def test_frozen_launchd_uses_desktop_agent_protocol(monkeypatch):
+    """A packaged WorkPulse binary is not Python and cannot accept ``-m``.
+    This regression left every macOS agent running the menu bar while the
+    dashboard port stayed closed on the first external install."""
+    monkeypatch.setattr(scheduler.sys, "frozen", True, raising=False)
+    job = next(j for j in scheduler.jobs() if j["slug"] == "dashboard")
+    xml = scheduler.render_launchd_plist(job)
+    assert "<string>--agent</string>" in xml
+    assert "<string>workpulse.cli</string>" in xml
+    assert "<string>-m</string>" not in xml
+
+
 # A synthetic calendar job — no real job uses calendar scheduling anymore,
 # but the renderer still supports it, so we test that path directly.
 _CAL_DAILY = {"slug": "cal-daily", "label": "com.workpulse.cal-daily",
@@ -224,6 +236,14 @@ def test_windows_xml_uses_python_path():
     fake_py = Path("C:/fake/pythonw.exe")
     xml = scheduler.render_windows_task_xml(j, python=fake_py)
     assert str(fake_py) in xml
+
+
+def test_frozen_windows_task_uses_desktop_agent_protocol(monkeypatch):
+    monkeypatch.setattr(scheduler.sys, "frozen", True, raising=False)
+    job = next(j for j in scheduler.jobs() if j["slug"] == "activity")
+    xml = scheduler.render_windows_task_xml(job)
+    assert '"--agent" "workpulse.signals.activity"' in xml
+    assert '"-m"' not in xml
 
 
 # ── platform dispatch ──────────────────────────────────────────────────────

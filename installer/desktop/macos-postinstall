@@ -14,4 +14,22 @@ launchctl asuser "$USER_ID" sudo -u "$CONSOLE_USER" \
   env HOME="$USER_HOME" "$BIN" --cli install >>"$LOG" 2>&1
 launchctl asuser "$USER_ID" sudo -u "$CONSOLE_USER" \
   env HOME="$USER_HOME" open -a WorkPulse || true
+
+# Never open a dead localhost page. Give launchd's dashboard agent up to 30
+# seconds to bind the port, then open it in the user's browser only when ready.
+DASHBOARD="http://127.0.0.1:5700"
+READY=0
+for _ in $(seq 1 60); do
+  if curl -fsS --max-time 1 "$DASHBOARD" >/dev/null 2>&1; then
+    READY=1
+    break
+  fi
+  sleep 0.5
+done
+if [ "$READY" -eq 1 ]; then
+  launchctl asuser "$USER_ID" sudo -u "$CONSOLE_USER" \
+    env HOME="$USER_HOME" open "$DASHBOARD" || true
+else
+  echo "dashboard did not become ready within 30 seconds" >>"$LOG"
+fi
 exit 0

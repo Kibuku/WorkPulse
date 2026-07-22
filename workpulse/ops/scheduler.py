@@ -191,9 +191,9 @@ def render_launchd_plist(job: dict, *, python: Path | None = None,
                     for the dream-refresh job that needs to keep the live
                     dashboard fresh through the day.
     """
+    frozen = getattr(sys, "frozen", False) and python is None
     python = python or _python_path()
     root = root or ROOT
-    frozen = getattr(sys, "frozen", False) and python is None
     command_args = (["--agent", job["module"], *job["args"]] if frozen
                     else ["-m", job["module"], *job["args"]])
     args_xml = "\n        ".join(f"<string>{a}</string>" for a in command_args)
@@ -331,9 +331,9 @@ def _macos_status() -> list[dict]:
 def render_windows_task_xml(job: dict, *, python: Path | None = None,
                             root: Path | None = None) -> str:
     """Render a Task Scheduler task XML for one job. Pure function."""
+    frozen = getattr(sys, "frozen", False) and python is None
     python = python or _python_path()
     root = root or ROOT
-    frozen = getattr(sys, "frozen", False) and python is None
     prefix = ["--agent", job["module"]] if frozen else ["-m", job["module"]]
     args = " ".join(f'"{a}"' for a in [*prefix, *job["args"]])
     # Trigger: <CalendarTrigger> with <ScheduleByDay> or <ScheduleByWeek>
