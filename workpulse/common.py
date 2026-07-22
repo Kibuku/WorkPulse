@@ -17,9 +17,13 @@ from pathlib import Path
 
 import yaml
 
-# Project root is the parent of the workpulse/ package directory
-ROOT = Path(__file__).resolve().parent.parent   # repo/data root
-PKG = Path(__file__).resolve().parent            # the workpulse/ package (bundled skills, migrations)
+# In a source checkout, code/resources and user data share the repo root. In a
+# frozen desktop build they must separate: bundled resources are read-only,
+# while config, the DB, logs and memory live in a per-user writable directory.
+BUNDLE_ROOT = (Path(getattr(sys, "_MEIPASS")) if getattr(sys, "frozen", False)
+               else Path(__file__).resolve().parent.parent)
+ROOT = Path(os.environ.get("WORKPULSE_HOME", str(BUNDLE_ROOT))).expanduser().resolve()
+PKG = Path(__file__).resolve().parent            # bundled skills + migrations
 
 
 def load_config() -> dict:
@@ -30,7 +34,7 @@ def load_config() -> dict:
     cfg_dir = ROOT / "config"
     cfg_path = cfg_dir / "config.yaml"
     if not cfg_path.exists():
-        cfg_path = cfg_dir / "config.example.yaml"
+        cfg_path = BUNDLE_ROOT / "config" / "config.example.yaml"
     with cfg_path.open(encoding="utf-8") as f:
         return yaml.safe_load(f) or {}
 

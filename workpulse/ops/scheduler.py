@@ -168,6 +168,8 @@ def jobs() -> list[dict]:
 
 def _python_path() -> Path:
     """Prefer the venv python; fall back to whatever's running this code."""
+    if getattr(sys, "frozen", False):
+        return Path(sys.executable)
     venv = ROOT / ".venv" / "bin" / "python"
     return venv if venv.exists() else Path(sys.executable)
 
@@ -191,9 +193,10 @@ def render_launchd_plist(job: dict, *, python: Path | None = None,
     """
     python = python or _python_path()
     root = root or ROOT
-    args_xml = "\n        ".join(
-        f"<string>{a}</string>" for a in ["-m", job["module"], *job["args"]]
-    )
+    frozen = getattr(sys, "frozen", False) and python is None
+    command_args = (["--agent", job["module"], *job["args"]] if frozen
+                    else ["-m", job["module"], *job["args"]])
+    args_xml = "\n        ".join(f"<string>{a}</string>" for a in command_args)
 
     interval_secs = job.get("interval_seconds")
     if job.get("daemon"):
@@ -330,7 +333,9 @@ def render_windows_task_xml(job: dict, *, python: Path | None = None,
     """Render a Task Scheduler task XML for one job. Pure function."""
     python = python or _python_path()
     root = root or ROOT
-    args = " ".join(['"-m"', f'"{job["module"]}"', *[f'"{a}"' for a in job["args"]]])
+    frozen = getattr(sys, "frozen", False) and python is None
+    prefix = ["--agent", job["module"]] if frozen else ["-m", job["module"]]
+    args = " ".join(f'"{a}"' for a in [*prefix, *job["args"]])
     # Trigger: <CalendarTrigger> with <ScheduleByDay> or <ScheduleByWeek>
     # or interval-based <Repetition><Interval>PT30M</Interval>
     interval_secs = job.get("interval_seconds")

@@ -24,7 +24,7 @@ import sys
 from pathlib import Path
 
 from workpulse import __version__
-from workpulse.common import ROOT, enable_utf8_console
+from workpulse.common import BUNDLE_ROOT, ROOT, enable_utf8_console
 
 
 def _deep_merge_defaults(user: dict, template: dict, prefix: str = "") -> list[str]:
@@ -46,7 +46,8 @@ def _deep_merge_defaults(user: dict, template: dict, prefix: str = "") -> list[s
 def _ensure_config() -> Path:
     import yaml
     cfg_path = ROOT / "config" / "config.yaml"
-    example  = ROOT / "config" / "config.example.yaml"
+    resource_root = BUNDLE_ROOT if getattr(sys, "frozen", False) else ROOT
+    example  = resource_root / "config" / "config.example.yaml"
 
     if not cfg_path.exists():
         if example.exists():

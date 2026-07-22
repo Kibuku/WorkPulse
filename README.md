@@ -49,6 +49,12 @@ access first. To add a pilot user:
 
 ## First-time install (one command)
 
+For non-technical users, use the native installer from the Njiani download
+page: `WorkPulseSetup-<version>-Windows.exe` on Windows or
+`WorkPulse-<version>-macOS.pkg` on macOS. Each carries its own Python runtime;
+the user does not install Python or run a terminal command. The source-based
+steps below remain available for developers.
+
 This is the entry point for a machine that does **not** have WorkPulse yet. Clone
 the repo, then run the setup script from inside the folder:
 

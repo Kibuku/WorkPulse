@@ -1,0 +1,62 @@
+name: Build desktop installers
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - "workpulse/**"
+      - "config/config.example.yaml"
+      - "pyproject.toml"
+      - "installer/desktop/**"
+      - ".github/workflows/desktop-installers.yml"
+
+permissions:
+  contents: write
+
+jobs:
+  windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: choco install innosetup -y --no-progress
+      - shell: powershell
+        run: .\installer\desktop\build-windows.ps1
+      - uses: actions/upload-artifact@v4
+        with:
+          name: windows-installer
+          path: release-artifacts/*Windows.exe
+
+  macos:
+    runs-on: macos-14
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: chmod +x installer/desktop/build-macos.sh installer/desktop/macos-postinstall
+      - run: ./installer/desktop/build-macos.sh
+      - uses: actions/upload-artifact@v4
+        with:
+          name: macos-installer
+          path: release-artifacts/*macOS.pkg
+
+  publish-to-repo:
+    needs: [windows, macos]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          path: release-artifacts
+          merge-multiple: true
+      - run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -f release-artifacts/
+          git diff --cached --quiet && exit 0
+          git commit -m "Build desktop installer artifacts"
+          git push

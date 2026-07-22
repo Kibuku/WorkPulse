@@ -1,0 +1,17 @@
+#!/bin/bash
+set -eu
+
+CONSOLE_USER="$(stat -f '%Su' /dev/console)"
+if [ -z "$CONSOLE_USER" ] || [ "$CONSOLE_USER" = "root" ]; then
+  exit 0
+fi
+USER_ID="$(id -u "$CONSOLE_USER")"
+USER_HOME="$(dscl . -read "/Users/$CONSOLE_USER" NFSHomeDirectory | awk '{print $2}')"
+BIN="/Applications/WorkPulse.app/Contents/MacOS/WorkPulse"
+LOG="/tmp/workpulse-install.log"
+
+launchctl asuser "$USER_ID" sudo -u "$CONSOLE_USER" \
+  env HOME="$USER_HOME" "$BIN" --cli install >>"$LOG" 2>&1
+launchctl asuser "$USER_ID" sudo -u "$CONSOLE_USER" \
+  env HOME="$USER_HOME" open -a WorkPulse || true
+exit 0
