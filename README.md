@@ -11,6 +11,8 @@ The dashboard explains every tracking mechanism in plain language. It also
 includes an employee-controlled organization-update preview that excludes raw
 activity, plus consent-based product feedback. In v2.0.3, organization sharing
 is preview-and-copy only: no manager is silently connected to local evidence.
+Feedback is sent only after the user presses Send, through Njiani's HTTPS
+receiver; failed deliveries remain saved locally rather than being discarded.
 
 > **This is WorkPulse v2 — the current version.** macOS is fully working; Windows
 > is in validation. Install it with the one command below and keep it current with

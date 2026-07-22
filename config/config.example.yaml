@@ -163,4 +163,4 @@ retention:
 # Product feedback is local-first and only transmits after the user presses
 # Send. Leave blank until your own HTTPS feedback receiver is configured.
 feedback:
-  endpoint_url: ""
+  endpoint_url: "https://njiani-flame.vercel.app/api/feedback"
