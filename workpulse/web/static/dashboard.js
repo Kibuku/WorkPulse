@@ -1600,6 +1600,117 @@ async function saveSettings() {
   }
 }
 
+// ── Trust, organization preview, and product feedback ─────────────────────
+function openTrustModal() { document.getElementById('trust-modal').classList.add('open'); }
+function closeTrustModal() { document.getElementById('trust-modal').classList.remove('open'); }
+
+let organizationSnapshot = null;
+function closeOrganizationModal() { document.getElementById('organization-modal').classList.remove('open'); }
+async function openOrganizationModal() {
+  document.getElementById('organization-modal').classList.add('open');
+  const panel = document.getElementById('organization-preview');
+  panel.innerHTML = '<div class="empty">Loading...</div>';
+  try {
+    const date = activeDate() ? `?date=${encodeURIComponent(activeDate())}` : '';
+    const [preview, context] = await Promise.all([
+      fetch('/api/v2/organization/preview' + date).then(r => r.json()),
+      fetch('/api/v2/organization/context').then(r => r.json()),
+    ]);
+    organizationSnapshot = preview;
+    const rows = (preview.projects || []).map(p =>
+      `<div class="org-row"><span>${escapeHtml(TITLE_CASE(p.label))}</span><b>${Number(p.hours || 0).toFixed(1)}h</b></div>`
+    ).join('');
+    panel.innerHTML = rows || '<div class="empty">No attributed project work yet.</div>';
+    panel.innerHTML += `<div class="org-row org-total"><span>Total shareable work</span><b>${Number(preview.total_hours || 0).toFixed(1)}h</b></div>`;
+    document.getElementById('manager-priorities').value = context.priorities || '';
+    document.getElementById('manager-outcomes').value = context.expected_outcomes || '';
+    document.getElementById('manager-feedback').value = context.feedback || '';
+  } catch (e) {
+    panel.innerHTML = '<div class="empty">Could not build the update preview.</div>';
+  }
+}
+
+async function saveManagerContext() {
+  const payload = {
+    priorities: document.getElementById('manager-priorities').value,
+    expected_outcomes: document.getElementById('manager-outcomes').value,
+    feedback: document.getElementById('manager-feedback').value,
+  };
+  const r = await fetch('/api/v2/organization/context', {method:'POST',
+    headers:{'Content-Type':'application/json'}, body:JSON.stringify(payload)});
+  showToast(r.ok ? 'Manager context saved locally.' : 'Could not save context.');
+}
+
+function organizationUpdateText() {
+  const d = organizationSnapshot || {projects:[], total_hours:0, date:activeDate()};
+  const lines = [`Work update - ${d.date || ''}`, ''];
+  (d.projects || []).forEach(p => lines.push(`- ${TITLE_CASE(p.label)}: ${Number(p.hours || 0).toFixed(1)}h`));
+  lines.push('', `Total: ${Number(d.total_hours || 0).toFixed(1)}h`);
+  const note = document.getElementById('org-update').value.trim();
+  if (note) lines.push('', 'Update:', note);
+  lines.push('', 'Shared by the user from WorkPulse. Raw activity and personal data excluded.');
+  return lines.join('\n');
+}
+
+async function copyOrganizationUpdate() {
+  try {
+    await navigator.clipboard.writeText(organizationUpdateText());
+    showToast('Update copied. Nothing was sent automatically.');
+  } catch (e) {
+    showToast('Clipboard unavailable. Select and copy the preview manually.');
+  }
+}
+
+let feedbackRating = 0;
+let feedbackStatusChecked = false;
+function openFeedbackModal() { document.getElementById('feedback-modal').classList.add('open'); }
+function closeFeedbackModal() {
+  document.getElementById('feedback-modal').classList.remove('open');
+  localStorage.setItem('wp.feedback.snoozeUntil', String(Date.now() + 86400000));
+}
+function setFeedbackRating(n) {
+  feedbackRating = n;
+  document.querySelectorAll('#feedback-rating button').forEach((b, i) => b.classList.toggle('selected', i < n));
+}
+async function maybePromptFeedback() {
+  if (feedbackStatusChecked || window.__wpTourActive) return;
+  feedbackStatusChecked = true;
+  const snooze = Number(localStorage.getItem('wp.feedback.snoozeUntil') || 0);
+  if (Date.now() < snooze) return;
+  try {
+    const d = await (await fetch('/api/v2/feedback/status')).json();
+    if (d.due) openFeedbackModal();
+  } catch (e) { /* feedback must never disturb the dashboard */ }
+}
+async function dismissFeedbackForever() {
+  await fetch('/api/v2/feedback', {method:'POST', headers:{'Content-Type':'application/json'},
+    body:JSON.stringify({opt_out:true})});
+  document.getElementById('feedback-modal').classList.remove('open');
+  showToast('Feedback prompts turned off.');
+}
+async function sendFeedback() {
+  const answers = {
+    rating: feedbackRating,
+    useful: document.getElementById('feedback-useful').value.trim(),
+    missing: document.getElementById('feedback-missing').value.trim(),
+    expected: document.getElementById('feedback-expected').value.trim(),
+    contact_email: document.getElementById('feedback-email').value.trim(),
+    contact_ok: document.getElementById('feedback-contact-ok').checked,
+  };
+  const status = document.getElementById('feedback-send-status');
+  status.textContent = 'Saving your feedback...';
+  try {
+    const r = await fetch('/api/v2/feedback', {method:'POST', headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({answers})});
+    const d = await r.json();
+    if (!r.ok) throw new Error(d.error || 'could not save');
+    status.textContent = d.delivered
+      ? 'Thank you. Your feedback was sent.'
+      : 'Thank you. Your feedback is saved privately on this machine; developer delivery is not configured yet.';
+    setTimeout(() => document.getElementById('feedback-modal').classList.remove('open'), 1800);
+  } catch (e) { status.textContent = 'Could not save feedback: ' + e.message; }
+}
+
 // ── Meetings to file (calendar side of the tag-the-untagged loop) ───────────
 // Surfaces meetings the calendar knows about that aren't tied to a project yet.
 // Tagging one reuses learn(), which now also files matching meetings + windows.
@@ -1674,6 +1785,7 @@ async function refresh() {
   await refreshDayPanels();
   document.getElementById('refresh-label').textContent =
     'Updated ' + new Date().toLocaleTimeString();
+  await maybePromptFeedback();
 }
 
 refresh();

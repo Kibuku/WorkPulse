@@ -159,3 +159,8 @@ ai_logger:
 # calendar details, and saved skill inputs/outputs.
 retention:
   raw_days: 100
+
+# Product feedback is local-first and only transmits after the user presses
+# Send. Leave blank until your own HTTPS feedback receiver is configured.
+feedback:
+  endpoint_url: ""

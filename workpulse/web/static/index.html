@@ -20,6 +20,8 @@
       <span id="health-dot">●</span>
     </button>
     <button class="icon-btn" onclick="openViewMenu(event)" title="Show / hide cards" style="margin-right:6px;">View</button>
+    <button class="icon-btn" onclick="openTrustModal()" title="How WorkPulse tracks and protects you">How it works</button>
+    <button class="icon-btn" onclick="openOrganizationModal()" title="Preview an organization update">Share update</button>
     <button class="icon-btn" onclick="startTour()" title="Guided tour">Tour</button>
     <button class="icon-btn" id="wp-settings-btn" onclick="openSettings()" title="Settings">Settings</button>
   </div>
@@ -251,8 +253,72 @@
     <span id="foot-status">Checking watcher…</span>
     <button class="btn-link" id="toggle-btn" onclick="toggleWatcher()">…</button>
   </div>
-  <div id="refresh-label"></div>
+  <div><button class="btn-link" onclick="openFeedbackModal()">Feedback</button><span id="refresh-label"></span></div>
 </footer>
+
+<!-- Tracking and privacy: written as a user-facing contract, not marketing. -->
+<div class="modal-bg" id="trust-modal" onclick="if(event.target===this)closeTrustModal()">
+  <div class="modal wide-modal" role="dialog" aria-labelledby="trust-title">
+    <h2 id="trust-title">How WorkPulse understands your work</h2>
+    <div class="sub">WorkPulse combines small signals. It does not record keystrokes or continuously take screenshots.</div>
+    <div class="trust-grid">
+      <div class="trust-item"><b>Active app and window</b><span>Samples the foreground window every five seconds and groups continuous activity into sessions.</span></div>
+      <div class="trust-item"><b>Idle time</b><span>Stops treating time as active after 60 seconds without keyboard or mouse input.</span></div>
+      <div class="trust-item"><b>File changes</b><span>Notices files created, changed, moved, or deleted in selected work folders. It records metadata, not every document's contents.</span></div>
+      <div class="trust-item"><b>Browser and calendar context</b><span>Reads supported active browser tabs when permission allows and uses an optional calendar feed to understand meetings.</span></div>
+    </div>
+    <div class="privacy-contract">
+      <b>Your personal layer stays yours.</b>
+      <p>Raw titles, URLs, file paths, personal activity, captures, and detailed history remain on this machine. Organization updates contain only the summary you preview and choose to copy or send.</p>
+    </div>
+    <div class="modal-actions"><button class="btn-primary" onclick="closeTrustModal()">I understand</button></div>
+  </div>
+</div>
+
+<!-- Employee-controlled organizational summary. Nothing is sent from here. -->
+<div class="modal-bg" id="organization-modal" onclick="if(event.target===this)closeOrganizationModal()">
+  <div class="modal wide-modal" role="dialog" aria-labelledby="organization-title">
+    <h2 id="organization-title">Organization update preview</h2>
+    <div class="sub">This is the exact outcome-level information you may choose to share. Raw activity is excluded.</div>
+    <div id="organization-preview" class="org-preview"><div class="empty">Loading...</div></div>
+    <div class="modal-row"><label>Your update</label><textarea id="org-update" rows="3" placeholder="What moved forward, what needs attention, or what should your manager know?"></textarea></div>
+    <details class="manager-context"><summary>Manager context (local prototype)</summary>
+      <p>Shows how priorities and feedback could guide your local WorkPulse. No manager is connected yet.</p>
+      <label>Priorities</label><textarea id="manager-priorities" rows="2"></textarea>
+      <label>Expected outcomes</label><textarea id="manager-outcomes" rows="2"></textarea>
+      <label>Feedback</label><textarea id="manager-feedback" rows="2"></textarea>
+      <button class="btn-ghost" onclick="saveManagerContext()">Save locally</button>
+    </details>
+    <div class="privacy-note">Never included: window titles, URLs, file paths, personal activity, screenshots, or keystrokes.</div>
+    <div class="modal-actions">
+      <button class="btn-ghost" onclick="closeOrganizationModal()">Close</button>
+      <button class="btn-primary" onclick="copyOrganizationUpdate()">Copy update</button>
+    </div>
+  </div>
+</div>
+
+<!-- Consent-based product feedback. -->
+<div class="modal-bg" id="feedback-modal" onclick="if(event.target===this)closeFeedbackModal()">
+  <div class="modal wide-modal" role="dialog" aria-labelledby="feedback-title">
+    <h2 id="feedback-title">How is WorkPulse working for you?</h2>
+    <div class="sub">Your answers help improve the product. Work history, URLs, filenames, and project names are not attached.</div>
+    <div class="rating-row" id="feedback-rating">
+      <button type="button" onclick="setFeedbackRating(1)">1</button><button type="button" onclick="setFeedbackRating(2)">2</button><button type="button" onclick="setFeedbackRating(3)">3</button><button type="button" onclick="setFeedbackRating(4)">4</button><button type="button" onclick="setFeedbackRating(5)">5</button>
+      <span>Not useful to very useful</span>
+    </div>
+    <div class="modal-row"><label>What has been useful?</label><textarea id="feedback-useful" rows="2"></textarea></div>
+    <div class="modal-row"><label>What has been confusing or missing?</label><textarea id="feedback-missing" rows="3"></textarea></div>
+    <div class="modal-row"><label>What did you expect it to do that it did not?</label><textarea id="feedback-expected" rows="2"></textarea></div>
+    <div class="modal-row"><label>Contact email (optional)</label><input id="feedback-email" type="email" autocomplete="email" /></div>
+    <label class="consent-check"><input id="feedback-contact-ok" type="checkbox" /> You may contact me about this feedback.</label>
+    <div id="feedback-send-status" class="privacy-note"></div>
+    <div class="modal-actions">
+      <button class="btn-ghost" onclick="dismissFeedbackForever()">Don't ask again</button>
+      <button class="btn-ghost" onclick="closeFeedbackModal()">Not now</button>
+      <button class="btn-primary" onclick="sendFeedback()">Send feedback</button>
+    </div>
+  </div>
+</div>
 
 <!-- Settings modal (hidden until openSettings()) -->
 <div class="modal-bg" id="settings-modal" onclick="if(event.target===this)closeSettings()">

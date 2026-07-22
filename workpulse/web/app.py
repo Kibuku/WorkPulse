@@ -1539,6 +1539,79 @@ def api_meetings_untagged():
     return {"meetings": meetings, "count": len(meetings)}
 
 
+# ── Trust, organization preview, and product feedback ───────────────────────
+
+@app.get("/api/v2/organization/preview")
+def api_organization_preview(request: Request, date: Optional[str] = None):  # noqa: A002
+    """Return only the outcome-level fields a user may choose to share.
+
+    Raw app/window sessions, file paths, browser history, captures, and private
+    streams are deliberately absent.  This is a preview, not an upload.
+    """
+    today = api_v2_today(request, date=date)
+    if isinstance(today, Response):
+        return today
+    projects = [
+        {"key": item.get("stream"), "label": item.get("label") or item.get("stream"),
+         "hours": item.get("hours", 0)}
+        for item in today.get("by_stream", [])
+        if item.get("stream") and item.get("stream") != "<untagged>"
+    ]
+    return {"date": today["date"],
+            "total_hours": round(sum(float(p["hours"] or 0) for p in projects), 1),
+            "projects": projects,
+            "excluded": ["raw window titles", "URLs", "file paths", "personal activity",
+                         "screenshots", "keystrokes"]}
+
+
+def _manager_context_path() -> Path:
+    return resolve("config/manager_context.json")
+
+
+@app.get("/api/v2/organization/context")
+def api_organization_context():
+    p = _manager_context_path()
+    if not p.exists():
+        return {"priorities": "", "expected_outcomes": "", "feedback": "",
+                "updated_at": None, "local_only": True}
+    try:
+        data = json.loads(p.read_text(encoding="utf-8"))
+    except Exception:
+        data = {}
+    return {k: data.get(k, "") for k in ("priorities", "expected_outcomes", "feedback")} | {
+        "updated_at": data.get("updated_at"), "local_only": True}
+
+
+@app.post("/api/v2/organization/context")
+async def api_set_organization_context(payload: dict):
+    """Demo the manager-to-user context channel locally; no manager link yet."""
+    data = {k: str(payload.get(k) or "").strip()[:4000]
+            for k in ("priorities", "expected_outcomes", "feedback")}
+    data["updated_at"] = datetime.now(timezone.utc).isoformat()
+    p = _manager_context_path()
+    p.parent.mkdir(parents=True, exist_ok=True)
+    p.write_text(json.dumps(data, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    return {"ok": True, "local_only": True, **data}
+
+
+@app.get("/api/v2/feedback/status")
+def api_feedback_status():
+    from workpulse.core import db as wp_db, feedback as wp_feedback
+    return wp_feedback.prompt_status(wp_db.connect(load_config()))
+
+
+@app.post("/api/v2/feedback")
+async def api_feedback(payload: dict):
+    from workpulse.core import feedback as wp_feedback
+    if payload.get("opt_out"):
+        wp_feedback.opt_out()
+        return {"ok": True, "opted_out": True}
+    answers = payload.get("answers") or {}
+    if not isinstance(answers, dict) or not any(str(v or "").strip() for v in answers.values()):
+        return JSONResponse({"error": "feedback is empty"}, status_code=400)
+    return {"ok": True, **wp_feedback.submit(answers, cfg=load_config())}
+
+
 # ── Ask WorkPulse: conversational retrieval over your own work ────────────────
 
 _ASK_RETRO_RE = re.compile(
