@@ -713,14 +713,18 @@ footer { margin-top: 64px; padding-top: 24px; border-top: 1px solid var(--border
    Inspired by the clarity of dedicated desktop productivity tools: stable
    navigation, one primary question per view, and details on demand. */
 :root {
-  --shell: #0c1424;
-  --shell-soft: #151f33;
-  --shell-text: #dce7f7;
-  --shell-muted: #8290a7;
-  --signal-blue: #5b8cff;
-  --signal-blue-soft: #e8efff;
-  --signal-mint: #56c7a5;
-  --signal-mint-soft: #e2f7f0;
+  --shell: #eef1f7;
+  --shell-soft: #ffffff;
+  --shell-text: #1c273a;
+  --shell-muted: #78869a;
+  --signal-blue: #5277ed;
+  --signal-blue-soft: #e9efff;
+  --signal-mint: #4fb28c;
+  --signal-mint-soft: #e3f5ee;
+  --signal-amber: #e8aa48;
+  --signal-amber-soft: #fff3dc;
+  --signal-lavender: #8070dc;
+  --signal-lavender-soft: #efecff;
 }
 body {
   max-width: none;
@@ -738,6 +742,8 @@ body {
   color: var(--shell-text);
   display: flex;
   flex-direction: column;
+  border-right: 1px solid #dde3ee;
+  box-shadow: 10px 0 34px rgba(40,55,84,.035);
 }
 .sidebar-brand {
   display: flex;
@@ -754,14 +760,14 @@ body {
   width: 32px;
   height: 32px;
   border-radius: 10px;
-  background: linear-gradient(145deg, var(--signal-blue), #7868ee);
+  background: linear-gradient(145deg, var(--signal-blue), var(--signal-lavender));
   color: white;
   font-size: 15px;
   box-shadow: 0 8px 26px rgba(91,140,255,.28);
 }
 .sidebar-label {
   padding: 0 12px 10px;
-  color: var(--shell-muted);
+  color: #8a95a6;
   font-size: 10px;
   font-weight: 700;
   letter-spacing: 1.45px;
@@ -777,18 +783,20 @@ body {
   border: 0;
   border-radius: 11px;
   background: transparent;
-  color: #aab7cb;
+  color: #647287;
   font: inherit;
   font-size: 14px;
   text-align: left;
   cursor: pointer;
   transition: background .16s ease, color .16s ease, transform .16s ease;
 }
-.workspace-nav-item:hover { background: rgba(255,255,255,.055); color: white; }
+.workspace-nav-item:hover { background: rgba(255,255,255,.7); color: #1c273a; }
 .workspace-nav-item.active {
   background: var(--shell-soft);
-  color: white;
+  color: #1c273a;
   box-shadow: inset 3px 0 0 var(--signal-blue);
+  border: 1px solid #dce3ef;
+  padding: 10px 12px;
 }
 .workspace-nav-item .nav-icon {
   width: 20px;
@@ -803,10 +811,10 @@ body {
   display: flex;
   align-items: center;
   gap: 10px;
-  border: 1px solid rgba(255,255,255,.08);
+  border: 1px solid #d9e0eb;
   border-radius: 12px;
   padding: 12px;
-  background: rgba(255,255,255,.035);
+  background: rgba(255,255,255,.68);
   color: var(--shell-text);
   text-align: left;
   cursor: pointer;
@@ -824,7 +832,7 @@ body {
 }
 .sidebar-promise {
   padding: 18px 12px 0;
-  color: #6f7d93;
+  color: #8a95a6;
   font-size: 11px;
   line-height: 1.55;
 }
@@ -997,7 +1005,7 @@ body {
   margin: 20px 0 14px;
 }
 .privacy-tier { min-height: 270px; border-radius: 13px; padding: 22px; }
-.private-tier { background: var(--shell); color: white; }
+.private-tier { background: #172236; color: white; }
 .private-tier .showcase-label { color: #779fee; }
 .shared-tier { background: var(--signal-blue-soft); color: #183b73; }
 .privacy-tier ul { margin: 22px 0 0 19px; }
