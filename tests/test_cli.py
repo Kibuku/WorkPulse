@@ -103,6 +103,20 @@ def test_version_command(capsys):
     assert __version__ in capsys.readouterr().out
 
 
+def test_package_version_has_one_source_of_truth():
+    import tomllib
+    from pathlib import Path
+
+    data = tomllib.loads(
+        (Path(__file__).parents[1] / "pyproject.toml").read_text(encoding="utf-8")
+    )
+    assert "version" not in data["project"]
+    assert "version" in data["project"]["dynamic"]
+    assert data["tool"]["setuptools"]["dynamic"]["version"] == {
+        "attr": "workpulse.__version__"
+    }
+
+
 def test_update_outside_git_returns_1(tmp_path, monkeypatch, capsys):
     monkeypatch.setattr(cli, "ROOT", tmp_path)                 # no .git here
     assert cli.main(["update"]) == 1
