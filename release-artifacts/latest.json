@@ -1,17 +1,17 @@
 {
   "version": "2.0.7",
-  "published_at": "2026-07-23T21:15:05.458966+00:00",
+  "published_at": "2026-07-23T21:23:27.603008+00:00",
   "notes": "Reliability, tracking and experience improvements.",
   "platforms": {
     "macos": {
       "filename": "WorkPulse-2.0.7-macOS.pkg",
-      "url": "https://raw.githubusercontent.com/Kibuku/WorkPulse/main/release-artifacts/WorkPulse-2.0.7-macOS.pkg",
-      "sha256": "47335328b0ae0189abe72bcea506109a5ac049f80e67ad7c85de49c3c8b293d0"
+      "url": "https://njiani-flame.vercel.app/downloads/WorkPulse-2.0.7-macOS.pkg",
+      "sha256": "71b86df353431c6be20b9d889cf1b658cc4a6827bdc878d11914e6fb8ee1de7f"
     },
     "windows": {
       "filename": "WorkPulseSetup-2.0.7-Windows.exe",
-      "url": "https://raw.githubusercontent.com/Kibuku/WorkPulse/main/release-artifacts/WorkPulseSetup-2.0.7-Windows.exe",
-      "sha256": "ffc7910490dc345741eb83ec367926d563daa69cc347948758d3b81462872714"
+      "url": "https://njiani-flame.vercel.app/downloads/WorkPulseSetup-2.0.7-Windows.exe",
+      "sha256": "e6c3d216ad009f5ee617e7d1220c77051fc916566a7e7f85e7ccaef257a233db"
     }
   }
 }
