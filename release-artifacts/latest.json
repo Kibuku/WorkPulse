@@ -1,0 +1,17 @@
+{
+  "version": "2.0.7",
+  "published_at": "2026-07-23T21:15:05.458966+00:00",
+  "notes": "Reliability, tracking and experience improvements.",
+  "platforms": {
+    "macos": {
+      "filename": "WorkPulse-2.0.7-macOS.pkg",
+      "url": "https://raw.githubusercontent.com/Kibuku/WorkPulse/main/release-artifacts/WorkPulse-2.0.7-macOS.pkg",
+      "sha256": "47335328b0ae0189abe72bcea506109a5ac049f80e67ad7c85de49c3c8b293d0"
+    },
+    "windows": {
+      "filename": "WorkPulseSetup-2.0.7-Windows.exe",
+      "url": "https://raw.githubusercontent.com/Kibuku/WorkPulse/main/release-artifacts/WorkPulseSetup-2.0.7-Windows.exe",
+      "sha256": "ffc7910490dc345741eb83ec367926d563daa69cc347948758d3b81462872714"
+    }
+  }
+}
