@@ -2017,3 +2017,137 @@ async function submitAsk(event) {
   }
   return false;
 }
+
+// ── Product workspace navigation ───────────────────────────────────────────
+// The existing cards remain the data-rendering primitives. This layer gives
+// them a product-shaped information architecture without duplicating APIs.
+const WORKSPACE_COPY = {
+  today: {
+    kicker: 'PERSONAL WORKPULSE',
+    badge: 'Live',
+    badgeClass: 'live',
+    title: 'Today',
+    description: 'What moved forward, what needs attention, and what WorkPulse still does not know.',
+    action: 'Add context',
+  },
+  timeline: {
+    kicker: 'EVIDENCE',
+    badge: 'Live',
+    badgeClass: 'live',
+    title: 'Timeline',
+    description: 'Calendar, work blocks, meetings and app-switch evidence in one chronology.',
+    action: 'Review gaps',
+  },
+  brain: {
+    kicker: 'PERSONAL MEMORY',
+    badge: 'Live',
+    badgeClass: 'live',
+    title: 'Brain',
+    description: 'Ask about previous work, inspect reusable methods, and correct what WorkPulse has learned.',
+    action: 'Ask WorkPulse',
+  },
+  organization: {
+    kicker: 'ORGANISATIONAL WORKPULSE',
+    badge: 'Local demo',
+    badgeClass: 'demo',
+    title: 'Organisation',
+    description: 'Output coordination and aggregate insight without exposing raw personal activity.',
+    action: 'Preview update',
+  },
+  privacy: {
+    kicker: 'DATA BOUNDARY',
+    badge: 'Live policy',
+    badgeClass: 'live',
+    title: 'Privacy',
+    description: 'See what remains personal, what may be shared, and how retention limits the memory.',
+    action: 'Open vault',
+  },
+};
+
+const WORKSPACE_SELECTORS = {
+  today: ['#capture-bar', '#today-card', '[data-card="donut"]', '[data-card="last-active"]'],
+  timeline: ['[data-card="heatmap"]', '[data-card="timeline"]', '[data-card="apps"]',
+             '[data-card="meetings"]', '#raw-sessions-card'],
+  brain: ['#ask-card', '#profile-card', '[data-card="attention"]', '[data-card="ai"]'],
+  organization: ['#organization-workspace'],
+  privacy: ['#privacy-workspace'],
+};
+
+let activeWorkspace = 'today';
+
+function allWorkspaceElements() {
+  const selectors = Object.values(WORKSPACE_SELECTORS).flat();
+  return Array.from(new Set(selectors.flatMap(sel => Array.from(document.querySelectorAll(sel)))));
+}
+
+function showWorkspace(name, options) {
+  const next = WORKSPACE_COPY[name] ? name : 'today';
+  activeWorkspace = next;
+  const opts = options || {};
+  allWorkspaceElements().forEach(el => el.classList.add('workspace-hidden'));
+  (WORKSPACE_SELECTORS[next] || []).forEach(sel => {
+    document.querySelectorAll(sel).forEach(el => el.classList.remove('workspace-hidden'));
+  });
+
+  document.querySelectorAll('[data-workspace-target]').forEach(btn => {
+    btn.classList.toggle('active', btn.dataset.workspaceTarget === next);
+  });
+
+  const copy = WORKSPACE_COPY[next];
+  document.getElementById('workspace-kicker').innerHTML =
+    escapeHtml(copy.kicker) + ' <span class="capability-badge ' +
+    copy.badgeClass + '">' + escapeHtml(copy.badge) + '</span>';
+  document.getElementById('workspace-title').textContent = copy.title;
+  document.getElementById('workspace-description').textContent = copy.description;
+  document.getElementById('workspace-primary-action').textContent = copy.action;
+
+  const isPersonalDay = next === 'today' || next === 'timeline';
+  document.querySelectorAll('.datebar').forEach(el => el.classList.toggle('workspace-hidden', !isPersonalDay));
+  const aiBanner = document.getElementById('ai-banner');
+  if (aiBanner) aiBanner.classList.toggle('workspace-hidden', next === 'organization' || next === 'privacy');
+  const streamsBanner = document.getElementById('streams-banner');
+  if (streamsBanner) streamsBanner.classList.toggle('workspace-hidden', next !== 'today');
+  const hero = document.querySelector('.hero');
+  if (hero) hero.classList.toggle('workspace-hidden', next !== 'today');
+  const untagged = document.getElementById('untagged-alert');
+  if (untagged && next !== 'today') untagged.classList.add('workspace-hidden');
+  else if (untagged) untagged.classList.remove('workspace-hidden');
+
+  if (!opts.skipPersist) localStorage.setItem('wp_active_workspace', next);
+  window.scrollTo({ top: 0, behavior: opts.instant ? 'auto' : 'smooth' });
+}
+
+function focusPrimaryAction() {
+  if (activeWorkspace === 'today') {
+    const input = document.getElementById('capture-input');
+    if (input) input.focus();
+  } else if (activeWorkspace === 'timeline') {
+    showWorkspace('brain');
+    const attn = document.querySelector('[data-card="attention"]');
+    if (attn) attn.scrollIntoView({ behavior: 'smooth', block: 'start' });
+  } else if (activeWorkspace === 'brain') {
+    const input = document.getElementById('ask-input');
+    if (input) input.focus();
+  } else if (activeWorkspace === 'organization') {
+    openOrganizationModal();
+  } else if (activeWorkspace === 'privacy') {
+    openPersonalModal();
+  }
+}
+
+function syncSidebarHealth() {
+  const source = document.getElementById('health-dot');
+  const target = document.getElementById('sidebar-health-dot');
+  const label = document.getElementById('sidebar-health-label');
+  if (!source || !target || !label) return;
+  const text = (source.textContent || '').trim();
+  const color = getComputedStyle(source).color;
+  target.style.background = color;
+  label.textContent = text === '●' ? 'Signals available' : 'Needs attention';
+}
+
+document.addEventListener('DOMContentLoaded', function () {
+  const saved = localStorage.getItem('wp_active_workspace') || 'today';
+  showWorkspace(saved, { skipPersist: true, instant: true });
+  setInterval(syncSidebarHealth, 2500);
+});

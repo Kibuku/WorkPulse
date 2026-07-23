@@ -4,9 +4,41 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>WorkPulse</title>
-<link rel="stylesheet" href="/static/dashboard.css">
+<link rel="stylesheet" href="/static/dashboard.css?v=20260723b">
 </head>
 <body>
+
+<aside class="app-sidebar" aria-label="WorkPulse navigation">
+  <div class="sidebar-brand">
+    <span class="sidebar-mark">W</span>
+    <span>WorkPulse</span>
+  </div>
+  <div class="sidebar-label">Your workspace</div>
+  <nav class="workspace-nav">
+    <button class="workspace-nav-item active" data-workspace-target="today" onclick="showWorkspace('today')">
+      <span class="nav-icon">◉</span><span>Today</span>
+    </button>
+    <button class="workspace-nav-item" data-workspace-target="timeline" onclick="showWorkspace('timeline')">
+      <span class="nav-icon">▥</span><span>Timeline</span>
+    </button>
+    <button class="workspace-nav-item" data-workspace-target="brain" onclick="showWorkspace('brain')">
+      <span class="nav-icon">✦</span><span>Brain</span>
+    </button>
+    <button class="workspace-nav-item" data-workspace-target="organization" onclick="showWorkspace('organization')">
+      <span class="nav-icon">◇</span><span>Organisation</span>
+    </button>
+    <button class="workspace-nav-item" data-workspace-target="privacy" onclick="showWorkspace('privacy')">
+      <span class="nav-icon">⌾</span><span>Privacy</span>
+    </button>
+  </nav>
+  <div class="sidebar-bottom">
+    <button class="sidebar-health" onclick="openHealthModal(event)">
+      <span id="sidebar-health-dot" class="sidebar-health-dot"></span>
+      <span><b>Tracking health</b><small id="sidebar-health-label">Checking signals</small></span>
+    </button>
+    <div class="sidebar-promise">Private by default.<br>Useful by permission.</div>
+  </div>
+</aside>
 
 <div class="topbar">
   <div class="brand" style="display:flex; align-items:center; gap:8px;">
@@ -25,6 +57,15 @@
     <button class="icon-btn" onclick="startTour()" title="Guided tour">Tour</button>
     <button class="icon-btn" id="wp-settings-btn" onclick="openSettings()" title="Settings">Settings</button>
   </div>
+</div>
+
+<div class="workspace-heading">
+  <div>
+    <div class="workspace-kicker" id="workspace-kicker">PERSONAL WORKPULSE <span class="capability-badge live">Live</span></div>
+    <h2 id="workspace-title">Today</h2>
+    <p id="workspace-description">What moved forward, what needs attention, and what WorkPulse still does not know.</p>
+  </div>
+  <button class="workspace-primary-action" id="workspace-primary-action" onclick="focusPrimaryAction()">Add context</button>
 </div>
 
 <!-- Health modal: opens on the health indicator click -->
@@ -237,7 +278,7 @@
     </div>
   </div>
 
-  <div class="span-12">
+  <div class="span-12" id="raw-sessions-card">
     <details>
       <summary style="cursor:pointer; color:var(--text-soft); font-size:13px; padding:8px 4px;">Show every window visit today</summary>
       <div class="card" style="margin-top: 8px">
@@ -245,6 +286,86 @@
       </div>
     </details>
   </div>
+
+  <section id="organization-workspace" class="span-12 workspace-surface workspace-hidden" data-workspace="organization">
+    <div class="section-intro">
+      <div>
+        <span class="capability-badge demo">Local demo</span>
+        <h3>Coordinate outputs without opening someone’s screen</h3>
+        <p>Manager context is stored on this device. The organisational projection excludes raw titles, URLs, paths and private activity.</p>
+      </div>
+      <button class="btn-primary" onclick="openOrganizationModal()">Preview exact update</button>
+    </div>
+    <div class="showcase-grid">
+      <article class="showcase-card">
+        <div class="showcase-label">OUTPUT BRIEF</div>
+        <h4>Complete the safeguarding review</h4>
+        <p>Expected outcome: review-ready draft with evidence gaps clearly marked.</p>
+        <div class="showcase-meta"><span>Due Friday</span><span>Manager context</span></div>
+      </article>
+      <article class="showcase-card">
+        <div class="showcase-label">APPROVED UPDATE</div>
+        <h4>What the organisation can receive</h4>
+        <p>Confirmed status, approved evidence, a concise blocker and the user’s own update.</p>
+        <button class="text-action" onclick="openOrganizationModal()">Inspect fields →</button>
+      </article>
+      <article class="showcase-card">
+        <div class="showcase-label">SOP ENGINE</div>
+        <h4>School campaign workflow</h4>
+        <p>Audience → policy check → approval → launch → learn.</p>
+        <div class="sop-progress"><span class="done"></span><span class="done"></span><span class="current"></span><span></span><span></span></div>
+        <small>Next nudge: confirm approval evidence before launch.</small>
+      </article>
+      <article class="showcase-card">
+        <div class="showcase-label">AI USE · SAFE METADATA</div>
+        <h4>Where AI is supporting work</h4>
+        <div class="metric-row"><span>Research and synthesis</span><b>42%</b></div>
+        <div class="metric-row"><span>Drafting and review</span><b>33%</b></div>
+        <div class="metric-row"><span>Administration</span><b>25%</b></div>
+        <small>Prompt content is not included.</small>
+      </article>
+    </div>
+  </section>
+
+  <section id="privacy-workspace" class="span-12 workspace-surface workspace-hidden" data-workspace="privacy">
+    <div class="section-intro">
+      <div>
+        <span class="capability-badge live">Live policy</span>
+        <h3>Your device is the boundary</h3>
+        <p>Personal raw signals remain local. Any organisational view is created as a separate, purpose-bound projection.</p>
+      </div>
+      <button class="btn-primary" onclick="openPersonalModal()">Open personal vault</button>
+    </div>
+    <div class="privacy-columns">
+      <article class="privacy-tier private-tier">
+        <div class="showcase-label">PRIVATE ON THIS DEVICE</div>
+        <h4>Raw personal context</h4>
+        <ul>
+          <li>Window titles, URLs and file paths</li>
+          <li>Captures, prompt content and detailed history</li>
+          <li>Personal projects and inferred work memory</li>
+          <li>Sensitive categories behind an additional lock</li>
+        </ul>
+      </article>
+      <article class="privacy-tier shared-tier">
+        <div class="showcase-label">SHARED ONLY BY POLICY</div>
+        <h4>Approved organisational projection</h4>
+        <ul>
+          <li>Assigned output and confirmed status</li>
+          <li>User-approved evidence and blockers</li>
+          <li>Aggregated AI-use categories</li>
+          <li>SOP stage and permitted process updates</li>
+        </ul>
+      </article>
+    </div>
+    <article class="retention-strip">
+      <div><span class="capability-badge demo">Local demo</span><h4>Meeting memory expires by design</h4></div>
+      <div class="retention-step"><b>0–24 hours</b><span>Optional raw transcript stays local with visible consent.</span></div>
+      <div class="retention-arrow">→</div>
+      <div class="retention-step"><b>After 24 hours</b><span>Only approved decisions, actions, owners and lessons remain.</span></div>
+    </article>
+    <button class="text-action" onclick="openTrustModal()">Read the complete tracking and privacy contract →</button>
+  </section>
 
 </div>
 
@@ -420,6 +541,6 @@
 
 <div class="toast" id="toast"></div>
 
-<script src="/static/dashboard.js"></script>
+<script src="/static/dashboard.js?v=20260723b"></script>
 </body>
 </html>
