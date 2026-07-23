@@ -16,8 +16,7 @@ from workpulse import __version__
 from workpulse.common import ROOT
 
 DEFAULT_MANIFEST_URL = (
-    "https://raw.githubusercontent.com/Kibuku/WorkPulse/main/"
-    "release-artifacts/latest.json"
+    "https://njiani-flame.vercel.app/update.json"
 )
 
 
