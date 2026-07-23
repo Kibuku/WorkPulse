@@ -69,6 +69,7 @@ function setHeaderDate() {
 
 // ── System + identity ──────────────────────────────────────────────────────
 let systemSnapshot = null;  // stash for openSettings()
+let availableUpdate = null;
 
 async function fetchSystem() {
   const r = await fetch('/api/system');
@@ -115,6 +116,59 @@ async function fetchSystem() {
 
   // First-run guided tour (falls back to the taxonomy nudge once seen).
   maybeStartTour();
+  checkForUpdate();
+}
+
+async function checkForUpdate() {
+  try {
+    const r = await fetch('/api/update');
+    const d = await r.json();
+    availableUpdate = d.update_available ? d : null;
+    const btn = document.getElementById('update-available-btn');
+    if (btn) btn.style.display = availableUpdate ? 'inline-flex' : 'none';
+  } catch (_) {
+    // Updating is optional and must never make the local dashboard unhealthy.
+  }
+}
+
+function openUpdateModal() {
+  if (!availableUpdate) return;
+  document.getElementById('update-title').textContent =
+    `WorkPulse ${availableUpdate.latest_version} is available`;
+  document.getElementById('update-description').textContent =
+    `You have ${availableUpdate.current_version}. Your work history, private memory and settings stay on this device.`;
+  document.getElementById('update-notes').textContent =
+    availableUpdate.notes || 'This update includes reliability and experience improvements.';
+  document.getElementById('update-modal').style.display = 'flex';
+}
+
+function closeUpdateModal() {
+  document.getElementById('update-modal').style.display = 'none';
+}
+
+async function installUpdate() {
+  const btn = document.getElementById('install-update-btn');
+  btn.disabled = true;
+  btn.textContent = 'Downloading and verifying...';
+  try {
+    const r = await fetch('/api/update/install', {
+      method: 'POST',
+      headers: {'X-WorkPulse-Action': 'install-update'}
+    });
+    const d = await r.json();
+    if (!r.ok) throw new Error(d.error || 'The update could not be prepared.');
+    if (d.launched) {
+      btn.textContent = 'Installer opened';
+      showToast('Approve the WorkPulse installer to finish updating.');
+      setTimeout(closeUpdateModal, 1600);
+    } else {
+      btn.textContent = 'Already up to date';
+    }
+  } catch (err) {
+    btn.disabled = false;
+    btn.textContent = 'Try again';
+    showToast(err.message || 'Update failed. Try again.');
+  }
 }
 
 async function toggleWatcher() {

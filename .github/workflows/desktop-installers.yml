@@ -53,6 +53,32 @@ jobs:
         with:
           path: release-artifacts
           merge-multiple: true
+      - name: Write verified update manifest
+        shell: python
+        run: |
+          import hashlib, json, re
+          from datetime import datetime, timezone
+          from pathlib import Path
+          version = re.search(
+              r'__version__\s*=\s*"([^"]+)"',
+              Path("workpulse/__init__.py").read_text()).group(1)
+          mac = Path(f"release-artifacts/WorkPulse-{version}-macOS.pkg")
+          win = Path(f"release-artifacts/WorkPulseSetup-{version}-Windows.exe")
+          base = "https://raw.githubusercontent.com/Kibuku/WorkPulse/main/release-artifacts"
+          def item(path):
+              return {
+                  "filename": path.name,
+                  "url": f"{base}/{path.name}",
+                  "sha256": hashlib.sha256(path.read_bytes()).hexdigest(),
+              }
+          manifest = {
+              "version": version,
+              "published_at": datetime.now(timezone.utc).isoformat(),
+              "notes": "Reliability, tracking and experience improvements.",
+              "platforms": {"macos": item(mac), "windows": item(win)},
+          }
+          Path("release-artifacts/latest.json").write_text(
+              json.dumps(manifest, indent=2) + "\n")
       - run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"

@@ -158,14 +158,34 @@ def _norm_title(raw: str | None) -> str:
 
 
 def _resolve_stream(query: str | None, cfg: dict | None) -> str | None:
-    streams = (cfg or {}).get("streams") or {}
-    if not query or not streams:
+    if not query:
         return None
-    q = query.lower()
+    streams = (cfg or {}).get("streams") or {}
+    q = query.casefold()
+    candidates = []
     for key, val in streams.items():
         label = (val.get("label") if isinstance(val, dict) else str(val)) or key
-        if key.replace("-", " ").lower() in q or str(label).lower() in q:
-            return key
+        names = {key.replace("-", " ").replace("_", " "), str(label)}
+        for name in names:
+            words = re.escape(name.casefold()).replace(r"\ ", r"\s+")
+            if re.search(rf"(?<!\w){words}(?!\w)", q):
+                candidates.append((len(name), key))
+                break
+    if candidates:
+        # Specific names win if more than one appears in the question.
+        _, key = max(candidates)
+        return key
+    # The project taxonomy contains richer aliases than config. Consult it
+    # after exact configured names, so a fallback keyword such as "client"
+    # cannot steal an explicitly named "Client work" stream.
+    try:
+        from workpulse.core import projects as wp_projects
+        match = wp_projects.resolve_match(
+            query, wp_projects.load_projects(), kind="text")
+        if match:
+            return match["stream"]
+    except Exception:
+        pass
     return None
 
 
@@ -261,17 +281,23 @@ def summarize(con: sqlite3.Connection, *, stream: str | None = None,
                     con, cluster_id=cluster_id, repos=[], cfg=cfg)
                 inferred = cluster_context.infer_output(
                     ctx, _stream_label(key, cfg))
-                if (inferred["specific"]
-                        and inferred["title"] not in outputs):
-                    outputs.append(inferred["title"])
+                if inferred["specific"]:
                     match = wp_projects.resolve_match(
                         inferred["title"], taxonomy, kind="text")
-                    if match and key and match["key"] != key:
+                    if match and key and match["stream"] != key:
                         conflicts.append({
                             "output": inferred["title"],
                             "filed_as": key,
-                            "suggested": match["key"],
+                            "suggested": match["stream"],
                         })
+                        continue
+                    # For a project-scoped question, only promote an output
+                    # whose own title supports that project. Ambiguous titles
+                    # remain evidence but do not become headline claims.
+                    if stream and (not match or match["stream"] != stream):
+                        continue
+                    if inferred["title"] not in outputs:
+                        outputs.append(inferred["title"])
                 if len(outputs) >= 5:
                     break
         except Exception:
@@ -297,7 +323,26 @@ def summarize(con: sqlite3.Connection, *, stream: str | None = None,
            GROUP BY fl.raw_path
            ORDER BY n DESC, last_ts DESC LIMIT 40""", [since, until]).fetchall()
     from workpulse.core.files import _is_noise as _noise_path
-    files = [r for r in files if not _noise_path(r["path"])][:20]
+    files = [r for r in files if not _noise_path(r["path"])]
+    if stream:
+        # File events do not carry a stream column. Resolve each path through
+        # the same taxonomy and include only evidence attributable to the
+        # requested project. Returning no file is more honest than mixing in
+        # unrelated projects merely because they occurred in the same week.
+        try:
+            from workpulse.core import projects as wp_projects
+            taxonomy = wp_projects.load_projects()
+            files = [
+                r for r in files
+                if (
+                    (m := wp_projects.resolve_match(
+                        r["path"], taxonomy, kind="path"))
+                    and m["stream"] == stream
+                )
+            ]
+        except Exception:
+            files = []
+    files = files[:20]
 
     return {
         "stream":        stream,
@@ -326,22 +371,33 @@ def _load_skill() -> str:
                 "evaluative. End with a Gap section on what the data cannot show.")
 
 
-def _deterministic(rollup: dict) -> str:
+def _deterministic(rollup: dict, *, cfg: dict | None = None) -> str:
     stream = rollup.get("stream")
     w = rollup["window"]
-    scope = _stream_label(stream, None) if stream else "your work"
-    lines = [f"# What you worked on ({scope}): {w['since']} to {w['until']}", "",
-             f"{_fmt_dur(rollup['total_seconds'])} across "
-             f"{rollup['session_count']} sessions and "
-             f"{rollup['active_days']} active day"
-             f"{'s' if rollup['active_days'] != 1 else ''}."]
+    scope = _stream_label(stream, cfg) if stream else "your work"
+    title = (
+        f"# {scope}: recent work"
+        if stream else "# What you worked on"
+    )
+    lines = [
+        title,
+        "",
+        f"{w['since']} to {w['until']}: "
+        f"{_fmt_dur(rollup['total_seconds'])} across "
+        f"{rollup['active_days']} active day"
+        f"{'s' if rollup['active_days'] != 1 else ''}.",
+    ]
 
     tagged = [a for a in rollup["areas"] if a["tagged"] and a["seconds"] >= 60]
     if tagged:
-        lines += ["", "## What you worked on"]
+        lines += ["", "## Main work observed"]
         for a in tagged:
             pct = round(a["share"] * 100)
-            lines += ["", f"### {a['label']}: {_fmt_dur(a['seconds'])} ({pct}%)"]
+            area_time = (
+                _fmt_dur(a["seconds"])
+                if stream else f"{_fmt_dur(a['seconds'])} ({pct}%)"
+            )
+            lines += ["", f"### {a['label']}: {area_time}"]
             if a.get("outputs"):
                 lines.append("Outputs and work observed: " +
                              "; ".join(a["outputs"]) + ".")
@@ -352,7 +408,10 @@ def _deterministic(rollup: dict) -> str:
                 lines.append("Mostly in " +
                              ", ".join(x["label"] for x in a["apps"][:3]) + ".")
 
-    untagged = next((a for a in rollup["areas"] if not a["tagged"]), None)
+    untagged = (
+        next((a for a in rollup["areas"] if not a["tagged"]), None)
+        if not stream else None
+    )
     if untagged and untagged["seconds"] >= 60:
         pct = round(untagged["share"] * 100)
         lines += ["", f"## Unclassified time: {_fmt_dur(untagged['seconds'])} ({pct}%)",
@@ -366,7 +425,10 @@ def _deterministic(rollup: dict) -> str:
                          "; ".join(h["title"] for h in untagged["highlights"]) + ".")
         lines.append("Tag a few of these in the dashboard and it stops being a mystery.")
 
-    conflicts = [c for a in rollup["areas"] for c in a.get("conflicts", [])]
+    conflicts = (
+        [c for a in rollup["areas"] for c in a.get("conflicts", [])]
+        if not stream else []
+    )
     if conflicts:
         lines += ["", "## Needs review"]
         for c in conflicts[:5]:
@@ -374,16 +436,10 @@ def _deterministic(rollup: dict) -> str:
                 f"- {c['output']} is filed as {_stream_label(c['filed_as'], cfg)}, "
                 f"but its title matches {_stream_label(c['suggested'], cfg)}.")
 
-    if rollup["files"]:
-        lines += ["", "## Files touched"]
-        for f in rollup["files"][:10]:
-            when = (f["last_touched"] or "")[:10]
-            lines.append(f"- {f['basename']} ({f['count']}x, last {when})")
-
     lines += ["", "## Gap",
               "This is what the sensors saw, not what you were thinking. It shows "
               "which projects and windows the time went to, but not the decisions "
-              "behind them. Tagging the unclassified time sharpens every answer."]
+              "behind them. The supporting files remain available under evidence."]
     return "\n".join(lines)
 
 
@@ -393,17 +449,36 @@ def to_sop_markdown(rollup: dict, *, cfg: dict | None = None,
     """A thoughtful analysis of the rollup. Deterministic without a backend;
     a richer narrative (with probabilistic inference for untagged time) when
     Anthropic or Ollama is available."""
-    deterministic = _deterministic(rollup)
+    deterministic = _deterministic(rollup, cfg=cfg)
     try:
         if not use_backend:
             raise RuntimeError("backend intentionally skipped")
         from workpulse.core import llm
         skill = _load_skill()
-        prompt = (f"{skill}\n\n---\n\nWORK DATA (JSON):\n"
+        scope_instruction = (
+            "\nThis is a project-scoped question. Discuss only the requested "
+            "project. Omit unclassified or unrelated time. Address the user as "
+            "'you'. Do not invent explanations for activity.\n"
+            if rollup.get("stream") else
+            "\nAddress the user as 'you'. Do not invent explanations for "
+            "unclassified activity.\n"
+        )
+        prompt = (f"{skill}\n{scope_instruction}\n---\n\nWORK DATA (JSON):\n"
                   f"{json.dumps(rollup, default=str)}\n\n"
                   f"A plain reference rendering you can improve on:\n{deterministic}")
         text, meta = llm.ask_text(prompt, max_tokens=140, cfg=cfg)
-        if text and meta.get("backend") != "none":
+        lowered = (text or "").lower()
+        leaked_file = any(
+            f.get("basename") and f["basename"].lower() in lowered
+            for f in rollup.get("files", [])
+        )
+        scoped_violation = bool(
+            rollup.get("stream")
+            and ("unclassified time" in lowered or leaked_file)
+        )
+        voice_violation = "the person" in lowered
+        if (text and meta.get("backend") != "none"
+                and not scoped_violation and not voice_violation):
             return (text, meta) if with_meta else text
     except Exception:
         pass

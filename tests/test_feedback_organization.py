@@ -39,7 +39,11 @@ def test_feedback_due_after_five_hours_and_saved_without_work_data(tmp_path, mon
 def test_organization_preview_excludes_untagged_and_raw_activity(tmp_path, monkeypatch):
     client, cfg = _client(tmp_path, monkeypatch)
     con = db.connect(cfg)
-    now = datetime.now(timezone.utc).replace(hour=9, minute=0, second=0, microsecond=0)
+    # The dashboard's "today" is the user's local date. Around local midnight,
+    # UTC may still be yesterday, so construct 09:00 on the local day and then
+    # store it as UTC like the sensors do.
+    now = datetime.now().astimezone().replace(
+        hour=9, minute=0, second=0, microsecond=0).astimezone(timezone.utc)
     for stream, title in (("school", "Confidential assessment"), (None, "Personal browsing")):
         sid = atoms.write_session(con, app="Word", title=title, stream=stream,
                                   started_at=now.isoformat())

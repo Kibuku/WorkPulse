@@ -77,7 +77,7 @@ def test_ask_retrospective(client):
     assert r.status_code == 200, r.text
     body = r.json()
     assert body["kind"] == "retrospective"
-    assert "What you worked on" in body["answer"]
+    assert "Client work: recent work" in body["answer"]
     assert "Client work" in body["answer"]
 
 

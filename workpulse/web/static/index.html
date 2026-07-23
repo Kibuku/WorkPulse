@@ -4,7 +4,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>WorkPulse</title>
-  <link rel="stylesheet" href="/static/dashboard.css?v=20260723n">
+  <link rel="stylesheet" href="/static/dashboard.css?v=20260724a">
 </head>
 <body>
 
@@ -52,6 +52,8 @@
     <span class="pulse" id="pulse"></span>WorkPulse <span id="actor-suffix" style="color:var(--text-soft);font-weight:400;margin-left:6px"></span></div>
   <div class="topbar-right">
     <span class="date" id="date"></span>
+    <button id="update-available-btn" class="update-available-btn"
+            onclick="openUpdateModal()" style="display:none">Update available</button>
     <button id="health-indicator" onclick="openHealthModal(event)" title="System health"
             style="background:transparent; border:0; cursor:pointer; padding:2px 6px; font-size:15px; line-height:1; display:inline-flex; align-items:center; gap:4px;">
       <span id="health-dot">●</span>
@@ -61,6 +63,31 @@
     <button class="icon-btn" onclick="openOrganizationModal()" title="Preview an organization update">Share update</button>
     <button class="icon-btn" onclick="startTour()" title="Guided tour">Tour</button>
     <button class="icon-btn" id="wp-settings-btn" onclick="openSettings()" title="Settings">Settings</button>
+  </div>
+</div>
+
+<div id="update-modal" class="modal-shell" style="display:none">
+  <div class="update-dialog">
+    <div class="update-dialog-head">
+      <div>
+        <div class="workspace-kicker">WORKPULSE UPDATE</div>
+        <h2 id="update-title">A newer version is available</h2>
+      </div>
+      <button class="modal-close" onclick="closeUpdateModal()">×</button>
+    </div>
+    <p id="update-description">
+      Your work history, private memory and settings stay on this device.
+    </p>
+    <div id="update-notes" class="update-notes"></div>
+    <div class="update-safety">
+      WorkPulse verifies the installer before opening it. macOS or Windows will
+      ask you to approve the installation.
+    </div>
+    <div class="update-actions">
+      <button class="icon-btn" onclick="closeUpdateModal()">Later</button>
+      <button id="install-update-btn" class="workspace-primary-action"
+              onclick="installUpdate()">Download and install</button>
+    </div>
   </div>
 </div>
 
@@ -611,6 +638,6 @@
 
 <div class="toast" id="toast"></div>
 
-  <script src="/static/dashboard.js?v=20260723s"></script>
+  <script src="/static/dashboard.js?v=20260724a"></script>
 </body>
 </html>

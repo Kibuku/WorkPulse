@@ -81,6 +81,36 @@ def test_resolves_stream_from_query(env):
     assert roll["session_count"] == 1
 
 
+def test_project_name_beats_generic_work_and_scopes_files(env):
+    con = _con()
+    now = datetime.now(timezone.utc)
+    cfg = {
+        "streams": {
+            "work": {"label": "Work"},
+            "dev": {"label": "WorkPulse build"},
+        }
+    }
+    _session(con, app="Code", title="WorkPulse workflow learner",
+             stream="dev", start=now - timedelta(days=1), dur_minutes=60)
+    _session(con, app="Word", title="Unrelated client TOR",
+             stream="work", start=now - timedelta(days=1, hours=2),
+             dur_minutes=90)
+    atoms.write_file_event(
+        con, raw_path="/Projects/WorkPulse/dashboard.js",
+        kind="modified", ts=(now - timedelta(days=1)).isoformat())
+    atoms.write_file_event(
+        con, raw_path="/Projects/Client/TOR.docx",
+        kind="modified", ts=(now - timedelta(days=1)).isoformat())
+
+    roll = rmod.summarize(
+        con, query="How have I worked on WorkPulse recently?", cfg=cfg)
+
+    assert roll["stream"] == "dev"
+    assert roll["total_seconds"] == 60 * 60
+    assert roll["session_count"] == 1
+    assert [f["basename"] for f in roll["files"]] == ["dashboard.js"]
+
+
 def test_window_excludes_out_of_range(env):
     con = _con()
     now = datetime.now(timezone.utc)
@@ -111,10 +141,72 @@ def test_sop_markdown_deterministic_without_backend(env):
              start=now - timedelta(days=1), dur_minutes=90)
     roll = rmod.summarize(con, stream="client-work", cfg=CFG)
     md = rmod.to_sop_markdown(roll, cfg=CFG)  # no API key in tests -> deterministic
-    assert "What you worked on" in md
+    assert "Client work: recent work" in md
     assert "Client work" in md               # the stream label, not the raw key
     assert "## Gap" in md
     assert "→" not in md and "—" not in md  # house voice: no arrows / em dashes
+
+
+def test_deterministic_renderer_handles_assignment_conflict():
+    rollup = {
+        "stream": "workpulse",
+        "window": {"since": "2026-07-16", "until": "2026-07-23"},
+        "total_seconds": 3600,
+        "session_count": 1,
+        "active_days": 1,
+        "areas": [{
+            "stream": "workpulse", "label": "WorkPulse", "tagged": True,
+            "seconds": 3600, "share": 1.0, "apps": [], "highlights": [],
+            "outputs": ["Client proposal"],
+            "conflicts": [{
+                "output": "Client proposal",
+                "filed_as": "workpulse",
+                "suggested": "client-work",
+            }],
+        }],
+        "files": [],
+    }
+    cfg = {"streams": {
+        "workpulse": {"label": "WorkPulse"},
+        "client-work": {"label": "Client work"},
+    }}
+
+    md = rmod.to_sop_markdown(rollup, cfg=cfg, use_backend=False)
+
+    assert "Needs review" not in md
+    assert "filed as WorkPulse" not in md
+    assert "matches Client work" not in md
+
+
+def test_scoped_summary_does_not_promote_conflicting_output(monkeypatch, env):
+    con = _con()
+    now = datetime.now(timezone.utc)
+    sid = _session(
+        con, app="Word", title="Uganda MEMD",
+        stream="workpulse", start=now - timedelta(days=1), dur_minutes=30)
+    con.execute("UPDATE session SET cluster_id='cluster-1' WHERE id=?", (sid,))
+
+    from workpulse.core import cluster_context
+    monkeypatch.setattr(
+        cluster_context, "cluster_context",
+        lambda *args, **kwargs: {"titles": [], "files": []})
+    monkeypatch.setattr(
+        cluster_context, "infer_output",
+        lambda *args, **kwargs: {"specific": True, "title": "Uganda MEMD"})
+
+    roll = rmod.summarize(
+        con, stream="workpulse",
+        cfg={"streams": {"workpulse": {"label": "WorkPulse build"}}})
+
+    area = roll["areas"][0]
+    assert area["outputs"] == []
+    assert area["conflicts"][0]["suggested"] == "uganda"
+    md = rmod.to_sop_markdown(
+        roll,
+        cfg={"streams": {"workpulse": {"label": "WorkPulse build"}}},
+        use_backend=False,
+    )
+    assert "WorkPulse build: recent work" in md
 
 
 # ── Natural-language date windows ────────────────────────────────────────────
