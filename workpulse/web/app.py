@@ -1515,6 +1515,35 @@ def api_system():
     }
 
 
+@app.get("/api/update")
+def api_update_check():
+    """Check for a newer installer. This never downloads or installs it."""
+    from workpulse.core import updater
+    try:
+        return updater.check()
+    except Exception as exc:
+        return JSONResponse(
+            {"error": str(exc), "current_version": updater.__version__,
+             "update_available": False},
+            status_code=503,
+        )
+
+
+@app.post("/api/update/install")
+def api_update_install(request: Request):
+    """Download, verify, then open the native installer after a user click."""
+    from workpulse.core import updater
+    # A custom header cannot be submitted by a cross-origin HTML form. This
+    # prevents an arbitrary website from making localhost open an installer.
+    if request.headers.get("x-workpulse-action") != "install-update":
+        return JSONResponse({"error": "Explicit update confirmation required"},
+                            status_code=403)
+    try:
+        return updater.download_and_launch()
+    except Exception as exc:
+        return JSONResponse({"error": str(exc)}, status_code=502)
+
+
 def _taxonomy_is_trivial(cfg: dict) -> bool:
     from workpulse.core.tree import normalise
     tree = normalise(cfg)
