@@ -16,15 +16,20 @@ WorkPulse's own interface principle is:
 
 > Outputs first. Evidence second. Private by default. Useful by permission.
 
+The entry model is also fixed: download and install first, with no account
+required for the complete personal product. Sign-in belongs only to optional
+remote capabilities such as encrypted sync, backup, or organisation enrolment.
+See `docs/PRODUCT_DECISIONS_AND_ROADMAP.md`.
+
 ## Demo navigation
 
 1. **Today** — meaningful outputs, priorities, next action and confidence.
 2. **Timeline** — calendar, work blocks, meetings and app-switch evidence.
 3. **Brain** — ask, search, reusable methods, skills and remembered context.
-4. **Organisation** — output briefs, approved updates, AI-use aggregates and
-   SOP progress.
-5. **Privacy** — local data, permissions, retention, access history and
+4. **Privacy** — local data, permissions, retention, access history and
    personal lock.
+5. **Optional connections** — an explicitly opted-in organisation layer,
+   separated from the complete personal product.
 
 ## Day 1 — Product contract and information architecture
 
@@ -50,6 +55,8 @@ Acceptance:
 - Add confidence, correction and attribution interactions.
 - Integrate Ask WorkPulse and the personal profile into Brain.
 - Make the private lock and sensitive-category treatment coherent.
+- Complete the consent-based product-feedback loop: prompt only after meaningful
+  use, disclose the exact payload, and send only when the user presses Send.
 
 Acceptance:
 
@@ -57,10 +64,19 @@ Acceptance:
 - A user can inspect why WorkPulse made an attribution.
 - A user can correct an attribution.
 - Ask WorkPulse returns evidence and a stated gap.
+- A user can send experience feedback, defer it, or opt out permanently without
+  attaching work history, titles, URLs, paths, captures, or project names.
 
-## Day 3 — Organisational and workflow layer
+## Day 3 — Optional organisational and workflow layer
 
-- Turn the existing organisation preview into its own view.
+- Keep personal WorkPulse complete without an organisation connection.
+- Demonstrate the personal Workflow Learner with a candidate method mined from
+  George's real local proposal-production journeys:
+  - anonymized output journeys and evidence counts;
+  - one candidate proposal-production workflow;
+  - local user confirmation or correction;
+  - one workflow-aware nudge tested against a held-out journey.
+- Present organisation as a disconnected, explicitly opted-in layer.
 - Add local-demo output briefs, expected outcomes and manager feedback.
 - Show exactly which fields would be shared and which are excluded.
 - Add AI-use aggregate reporting without prompt content.
@@ -70,14 +86,21 @@ Acceptance:
 Acceptance:
 
 - The organisation view never exposes raw titles, URLs, paths or private work.
+- Workflow evidence states how many local journeys support each step, exposes
+  uncertainty, and cannot be promoted to a personal method without confirmation.
+- A candidate method can be inspected and confirmed locally.
+- The contextual nudge names the missing evidence rather than scoring the user.
 - Inferred and user-confirmed statuses are visibly different.
 - The SOP demonstrates stages, evidence and a next nudge.
 - Meeting raw material and retained markers are visibly separated.
+- Disconnecting an organisation does not remove or damage personal memory.
 
 ## Day 4 — Demo journey, reliability and package
 
 - Add seeded school demonstration data that is clearly labelled demo data.
 - Validate live-data and demo-data modes independently.
+- Validate feedback delivery to the developer receiver, local fallback when
+  offline, 30-day cooldown, defer, and permanent opt-out.
 - Test the complete story on macOS.
 - Test responsive states and empty/error states.
 - Run the full automated test suite.
@@ -102,8 +125,11 @@ Acceptance:
 | Daily timeline | Working | Live |
 | Ask and search personal work | Working with deterministic fallback | Live |
 | Personal profile and reusable methods | Working | Live |
+| Workflow Learner | One evidence-backed proposal-production slice | Local preview |
 | Private/sensitive personal area | Working | Live |
-| Organisation share preview | Working and raw-data excluding | Live |
+| Consent-based product feedback | Local-first, explicit Send, no work telemetry | Live |
+| Organisation connection | Disconnected and opt-in by default | Local demo |
+| Organisation share preview | Working and raw-data excluding | Local demo |
 | Manager output briefs and feedback | Stored only on this device | Local demo |
 | AI-use aggregate dashboard | Derived from safe metadata or seeded demo data | Local demo |
 | SOP engine | One school workflow | Local demo |
@@ -121,6 +147,10 @@ Acceptance:
 - No more than one dominant question per view.
 - Every inference carries confidence or an uncertainty state.
 - Every organisational share surface lists excluded fields.
+- Product feedback never silently attaches usage history or work telemetry.
+- Feedback prompts never block work and always offer Not now and Don't ask again.
 - Operational health is visible but visually quiet when healthy.
 - Detailed tracker data remains available through progressive disclosure.
-
+- Installation and personal use never require sign-in.
+- Sign-in names the optional remote capability it enables.
+- Signing out or disconnecting an organisation never deletes personal memory.

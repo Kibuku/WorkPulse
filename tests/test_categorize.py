@@ -177,6 +177,59 @@ def test_assign_falls_back_to_misc_with_no_signal(env):
     assert res["source"] == "fallback"
 
 
+def test_assign_uses_ai_for_ambiguous_cluster_when_confident(env, monkeypatch):
+    con = _con()
+    cid = _seed_cluster_in_stream(
+        con, stream=None, title="methodology review", app="Microsoft Word",
+        start=datetime.now(timezone.utc) - timedelta(hours=1),
+    )
+    monkeypatch.setattr(cat.llm, "active_backend",
+                        lambda cfg=None: "ollama")
+    monkeypatch.setattr(
+        cat.llm, "ask_json",
+        lambda *args, **kwargs: (
+            {"stream": "uganda", "confidence": 0.91,
+             "reason": "Methodology work matches this project."},
+            {"backend": "ollama", "model": "llama3.2:3b"},
+        ),
+    )
+    cfg = {"llm": {"auto_tagging": {
+        "enabled": True,
+        "ambiguity_threshold": 0.75,
+        "auto_assign_threshold": 0.85,
+    }}}
+    res = cat.assign_cluster(con, cid, cfg=cfg)
+    assert res["stream"] == "uganda"
+    assert res["source"] == "agent"
+    assert res["confidence"] == 0.91
+    assert res["evidence"][0]["backend"] == "ollama"
+
+
+def test_assign_rejects_low_confidence_ai_suggestion(env, monkeypatch):
+    con = _con()
+    cid = _seed_cluster_in_stream(
+        con, stream=None, title="generic chrome", app="App",
+        start=datetime.now(timezone.utc) - timedelta(hours=1),
+    )
+    monkeypatch.setattr(cat.llm, "active_backend",
+                        lambda cfg=None: "ollama")
+    monkeypatch.setattr(
+        cat.llm, "ask_json",
+        lambda *args, **kwargs: (
+            {"stream": "uganda", "confidence": 0.61,
+             "reason": "Weak match."},
+            {"backend": "ollama", "model": "llama3.2:3b"},
+        ),
+    )
+    cfg = {"llm": {"auto_tagging": {
+        "enabled": True,
+        "auto_assign_threshold": 0.85,
+    }}}
+    res = cat.assign_cluster(con, cid, cfg=cfg)
+    assert res["stream"] == "misc"
+    assert res["source"] == "fallback"
+
+
 def test_assign_respects_user_override(env):
     con = _con()
     cid = _seed_cluster_in_stream(con, stream=None)

@@ -226,6 +226,58 @@ def test_summary_includes_file_extensions_when_many_events():
     assert "py" in line
 
 
+def test_infer_output_prefers_commit_over_app_title():
+    out = cc.infer_output({
+        "git_commits": [{"subject": "Build feedback onboarding"}],
+        "captures": [],
+        "calendar_events": [],
+        "session_titles": [
+            {"app": "Code", "title": "feedback.py", "count": 20},
+            {"app": "ChatGPT", "title": "ChatGPT", "count": 20},
+        ],
+    }, "WorkPulse")
+    assert out["title"] == "Build feedback onboarding"
+    assert out["evidence_kind"] == "commit"
+
+
+def test_infer_output_does_not_let_parallel_commit_mask_document_work():
+    out = cc.infer_output({
+        "git_commits": [{"subject": "Agent changed dashboard colors"}],
+        "captures": [], "calendar_events": [],
+        "session_titles": [
+            {"app": "Microsoft PowerPoint",
+             "title": "WorkPulse_School_Demo_2026-07-24", "count": 40},
+            {"app": "ChatGPT", "title": "ChatGPT", "count": 30},
+        ],
+    }, "WorkPulse")
+    assert out["title"] == "WorkPulse School Demo 2026-07-24"
+    assert out["evidence_kind"] == "foreground_title"
+
+
+def test_infer_output_uses_specific_document_not_generic_app():
+    out = cc.infer_output({
+        "git_commits": [], "captures": [], "calendar_events": [],
+        "session_titles": [
+            {"app": "ChatGPT", "title": "ChatGPT", "count": 50},
+            {"app": "Microsoft PowerPoint",
+             "title": "WorkPulse_School_Demo_2026-07-24", "count": 20},
+        ],
+    }, "WorkPulse")
+    assert out["title"] == "WorkPulse School Demo 2026-07-24"
+    assert out["evidence_kind"] == "foreground_title"
+
+
+def test_infer_output_does_not_pretend_generic_app_is_output():
+    out = cc.infer_output({
+        "git_commits": [], "captures": [], "calendar_events": [],
+        "session_titles": [
+            {"app": "ChatGPT", "title": "ChatGPT", "count": 50},
+        ],
+    }, "WorkPulse")
+    assert out["title"] == "WorkPulse work block"
+    assert out["specific"] is False
+
+
 # ── end-to-end ──────────────────────────────────────────────────────────────
 
 def test_end_to_end_enrichment(env, monkeypatch):

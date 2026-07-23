@@ -7,6 +7,12 @@ brain still doesn't know.
 
 Everything runs on your machine. Nothing leaves it unless you choose to sync.
 
+Personal WorkPulse is **download-first and account-free**. Installation creates
+a local profile and data store; sign-in is reserved for optional capabilities
+that genuinely need a remote identity, such as encrypted device sync, backup,
+or joining an organisation. See
+[`docs/PRODUCT_DECISIONS_AND_ROADMAP.md`](docs/PRODUCT_DECISIONS_AND_ROADMAP.md).
+
 The dashboard explains every tracking mechanism in plain language. It also
 includes an employee-controlled organization-update preview that excludes raw
 activity, plus consent-based product feedback. In v2.0.3, organization sharing

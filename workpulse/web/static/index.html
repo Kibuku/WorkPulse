@@ -4,7 +4,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>WorkPulse</title>
-  <link rel="stylesheet" href="/static/dashboard.css?v=20260723d">
+  <link rel="stylesheet" href="/static/dashboard.css?v=20260723n">
 </head>
 <body>
 
@@ -24,11 +24,16 @@
     <button class="workspace-nav-item" data-workspace-target="brain" onclick="showWorkspace('brain')">
       <span class="nav-icon">✦</span><span>Brain</span>
     </button>
-    <button class="workspace-nav-item" data-workspace-target="organization" onclick="showWorkspace('organization')">
-      <span class="nav-icon">◇</span><span>Organisation</span>
-    </button>
     <button class="workspace-nav-item" data-workspace-target="privacy" onclick="showWorkspace('privacy')">
       <span class="nav-icon">⌾</span><span>Privacy</span>
+    </button>
+  </nav>
+  <div class="sidebar-label optional-label">Optional connections</div>
+  <nav class="workspace-nav optional-nav">
+    <button class="workspace-nav-item optional-connection" data-workspace-target="organization" onclick="showWorkspace('organization')">
+      <span class="nav-icon">◇</span>
+      <span class="optional-connection-copy"><span>Organisation</span><small>Not connected</small></span>
+      <span class="opt-in-pill">Opt in</span>
     </button>
   </nav>
   <div class="sidebar-bottom">
@@ -150,15 +155,33 @@
 
   <!-- Ask WorkPulse: conversational retrieval over your own work -->
   <div class="card span-12" id="ask-card" style="border-left: 3px solid var(--accent, #d97757);">
+    <div class="brain-ask-intro">
+      <div><span class="showcase-label">ASK YOUR WORK</span><h3>What would you like to know about your work?</h3></div>
+      <span class="brain-local-note">Answers stay on this device</span>
+    </div>
     <form id="ask-form" onsubmit="return submitAsk(event)" class="ask-form">
       <input type="text" id="ask-input" class="ask-input" autocomplete="off"
-             placeholder="Ask about your work — e.g. where is my client Z proposal? how did I work on the report last week?" />
+             placeholder="For example: What moved today? Where did I leave the proposal? How did I approach last week's report?" />
       <button type="submit" class="ask-btn">Ask</button>
       <span id="ask-backend" class="ask-badge" title="Which brain answered"></span>
     </form>
+    <label class="brain-ai-choice">
+      <input type="checkbox" id="ask-use-ai" />
+      <span>Use local AI for deeper interpretation</span>
+      <small>Slower · still stays on this device</small>
+    </label>
+    <div class="brain-suggestions">
+      <button onclick="askSuggestion('What did I work on today?')">What moved today?</button>
+      <button onclick="askSuggestion('What did I work on yesterday?')">Recap yesterday</button>
+      <button onclick="askSuggestion('How have I worked on WorkPulse recently?')">How did I approach WorkPulse?</button>
+    </div>
     <div id="ask-result" class="ask-result" style="display:none;">
       <div id="ask-answer" class="ask-answer"></div>
-      <div id="ask-evidence" class="ask-evidence"></div>
+      <div id="ask-gap" class="ask-gap" style="display:none;"></div>
+      <details id="ask-evidence-wrap" class="ask-evidence-wrap" style="display:none;">
+        <summary id="ask-evidence-summary">Evidence used</summary>
+        <div id="ask-evidence" class="ask-evidence"></div>
+      </details>
     </div>
   </div>
 
@@ -178,11 +201,11 @@
   </div>
 
   <!-- v2 brain layer: the living profile -->
-  <div class="card span-12 collapsible" id="profile-card" data-card="profile" data-card-label="Who you are" style="border-left: 3px solid #8b5cf6;">
+  <div class="card span-12 collapsible" id="profile-card" data-card="profile" data-card-label="What WorkPulse knows" style="border-left: 3px solid #8b5cf6;">
     <div class="eyebrow card-header" onclick="toggleCard('profile')">
       <span class="card-toggle">▾</span>
       <div class="card-header-text">
-        <span>Who you are</span>
+        <span>What WorkPulse knows</span>
         <span id="profile-meta" class="card-header-meta"></span>
       </div>
     </div>
@@ -192,6 +215,9 @@
     </div>
   </div>
 
+  <div class="card span-12" id="workflow-card" style="display:none; border-left:3px solid #0f766e;">
+    <div id="workflow-panel"><div class="empty">Loading method…</div></div>
+  </div>
 
   <!-- Weekly heatmap -->
   <div class="card span-12 collapsible" data-card="heatmap" data-card-label="Last 14 days">
@@ -226,20 +252,24 @@
   <div class="card span-12 collapsible" data-card="timeline" data-card-label="Today's flow">
     <div class="eyebrow card-header" onclick="toggleCard('timeline')">
       <span class="card-toggle">▾</span>
-      <div class="card-header-text"><span>Today's flow</span></div>
+      <div class="card-header-text">
+        <span>Day chronology</span>
+        <span id="timeline-meta" class="card-header-meta"></span>
+      </div>
     </div>
     <div class="card-body">
-      <div class="tl-wrap">
-        <div class="tl" id="timeline"></div>
-        <div class="tl-axis" id="tl-axis"></div>
-      </div>
+      <div id="timeline-summary" class="timeline-summary"></div>
+      <div id="timeline" class="day-timeline"><div class="empty">Loading chronology…</div></div>
     </div>
   </div>
 
   <div class="card span-8 collapsible" data-card="attention" data-card-label="Needs your attention">
     <div class="eyebrow card-header" onclick="toggleCard('attention')">
       <span class="card-toggle">▾</span>
-      <div class="card-header-text"><span>Needs your attention</span></div>
+      <div class="card-header-text">
+        <span>Needs your attention</span>
+        <span id="review-meta" class="card-header-meta"></span>
+      </div>
     </div>
     <div class="card-body">
       <div id="attn-panel"><div class="empty">Nothing untagged today.</div></div>
@@ -288,14 +318,21 @@
   </div>
 
   <section id="organization-workspace" class="span-12 workspace-surface workspace-hidden" data-workspace="organization">
-    <div class="section-intro">
+    <div class="section-intro organization-consent-intro">
       <div>
-        <span class="capability-badge demo">Local demo</span>
-        <h3>Coordinate outputs without opening someone’s screen</h3>
-        <p>Manager context is stored on this device. The organisational projection excludes raw titles, URLs, paths and private activity.</p>
+        <span class="capability-badge consent">Optional layer</span>
+        <h3>Your WorkPulse remains yours</h3>
+        <p>Personal WorkPulse works fully on its own. Connecting to an organisation is a separate choice with explicit permissions, visible boundaries and a reversible disconnect.</p>
       </div>
-      <button class="btn-primary" onclick="openOrganizationModal()">Preview exact update</button>
+      <button class="btn-primary" onclick="openOrganizationModal()">Explore consent setup</button>
     </div>
+    <div class="consent-principles" aria-label="Organisation connection principles">
+      <div><b>1</b><span><strong>Choose</strong><small>No organisation is connected by default.</small></span></div>
+      <div><b>2</b><span><strong>Review</strong><small>See every field requested before sharing.</small></span></div>
+      <div><b>3</b><span><strong>Approve</strong><small>Share outputs, never raw personal activity.</small></span></div>
+      <div><b>4</b><span><strong>Disconnect</strong><small>Withdraw access without losing your memory.</small></span></div>
+    </div>
+    <div class="optional-preview-label"><span>What an approved organisation layer could add</span><small>Preview only · currently disconnected</small></div>
     <div class="showcase-grid">
       <article class="showcase-card">
         <div class="showcase-label">OUTPUT BRIEF</div>
@@ -369,6 +406,15 @@
 
 </div>
 
+<aside id="feedback-invite" class="feedback-invite" aria-live="polite">
+  <div>
+    <strong>Help shape WorkPulse</strong>
+    <span>When you have a moment, tell us what worked and what got in your way.</span>
+  </div>
+  <button class="text-action" onclick="dismissFeedbackInvite()">Later</button>
+  <button class="btn-primary" onclick="openFeedbackFromInvite()">Share feedback</button>
+</aside>
+
 <footer>
   <div class="foot-status">
     <span id="foot-status">Checking watcher…</span>
@@ -381,7 +427,7 @@
 <div class="modal-bg" id="trust-modal" onclick="if(event.target===this)closeTrustModal()">
   <div class="modal wide-modal" role="dialog" aria-labelledby="trust-title">
     <h2 id="trust-title">How WorkPulse understands your work</h2>
-    <div class="sub">WorkPulse combines small signals. It does not record keystrokes or continuously take screenshots.</div>
+    <div class="sub">WorkPulse combines small local signals into a proposed work story. A signal is evidence, not certainty.</div>
     <div class="trust-grid">
       <div class="trust-item"><b>Active app and window</b><span>Samples the foreground window every five seconds and groups continuous activity into sessions.</span></div>
       <div class="trust-item"><b>Idle time</b><span>Stops treating time as active after 60 seconds without keyboard or mouse input.</span></div>
@@ -390,9 +436,33 @@
     </div>
     <div class="privacy-contract">
       <b>Your personal layer stays yours.</b>
-      <p>Raw titles, URLs, file paths, personal activity, captures, and detailed history remain on this machine. Organization updates contain only the summary you preview and choose to copy or send.</p>
+      <p>Raw titles, URLs, file paths, personal activity, captures, corrections, and detailed history remain on this machine.</p>
     </div>
+    <div class="permission-layers">
+      <div><span class="permission-state local">Always local</span><b>Personal WorkPulse</b><p>Today, Timeline, Brain, raw evidence, private categories, and your correction history.</p></div>
+      <div><span class="permission-state optional">Optional</span><b>Browser and calendar context</b><p>Used only when you grant the operating-system or browser permission. WorkPulse continues with less context if you do not.</p></div>
+      <div><span class="permission-state disconnected">Disconnected</span><b>Organisation layer</b><p>No manager can inspect this device. A future connection receives only purpose-bound output fields you have reviewed and allowed.</p></div>
+    </div>
+    <details class="trust-boundary-details">
+      <summary>What WorkPulse does not collect</summary>
+      <ul>
+        <li>No keystroke logging.</li>
+        <li>No continuous screenshots or screen video.</li>
+        <li>No silent upload of raw personal evidence.</li>
+        <li>No organisation access simply because WorkPulse is installed.</li>
+      </ul>
+    </details>
     <div class="modal-actions"><button class="btn-primary" onclick="closeTrustModal()">I understand</button></div>
+  </div>
+</div>
+
+<div class="modal-bg" id="workflow-modal" onclick="if(event.target===this)closeWorkflowModal()">
+  <div class="modal wide-modal" role="dialog" aria-labelledby="workflow-modal-title">
+    <div id="workflow-modal-body"></div>
+    <div class="modal-actions">
+      <button class="btn-ghost" onclick="closeWorkflowModal()">Close</button>
+      <button class="btn-primary" id="workflow-confirm-btn" onclick="confirmLearnedWorkflow()">Confirm this method</button>
+    </div>
   </div>
 </div>
 
@@ -541,6 +611,6 @@
 
 <div class="toast" id="toast"></div>
 
-  <script src="/static/dashboard.js?v=20260723d"></script>
+  <script src="/static/dashboard.js?v=20260723s"></script>
 </body>
 </html>

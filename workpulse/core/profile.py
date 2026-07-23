@@ -48,7 +48,9 @@ _PROFILE_PATH  = ROOT / "brain"  / "profile.md"
 _DEFAULT_MODEL = "claude-haiku-4-5"
 
 _DEFAULTS = {
-    "window_days":             30,
+    # Recent reliable behaviour informs identity. Older sensor evidence stays
+    # searchable but is not promoted into the living profile by default.
+    "window_days":             7,
     "include_unpinned":        True,
     "min_stream_hours_floor":  0.5,
     "goal_phrase_min_length":  20,
@@ -94,17 +96,36 @@ def _load_skill() -> str:
 # ── deterministic findings ──────────────────────────────────────────────────
 
 def _totals(con: sqlite3.Connection, start: str, end: str) -> dict:
-    row = con.execute(
+    rows = con.execute(
         """
-        SELECT
-          COUNT(*) AS sessions,
-          COALESCE(SUM((julianday(ended_at) - julianday(started_at)) * 86400.0), 0) AS secs
+        SELECT started_at, ended_at
         FROM session
         WHERE substr(started_at,1,10) BETWEEN ? AND ?
           AND ended_at IS NOT NULL
+        ORDER BY started_at
         """,
         (start, end),
-    ).fetchone()
+    ).fetchall()
+    # Different sensors can observe the same foreground interval. Summing every
+    # row makes a 30-day profile claim more hours than a person could work.
+    # Merge overlaps first so "tracked hours" means elapsed attention time.
+    intervals: list[tuple[datetime, datetime]] = []
+    for row in rows:
+        try:
+            started = datetime.fromisoformat(row["started_at"])
+            ended = datetime.fromisoformat(row["ended_at"])
+        except (TypeError, ValueError):
+            continue
+        if ended > started:
+            intervals.append((started, ended))
+    merged: list[list[datetime]] = []
+    for started, ended in intervals:
+        if not merged or started > merged[-1][1]:
+            merged.append([started, ended])
+        elif ended > merged[-1][1]:
+            merged[-1][1] = ended
+    elapsed_secs = sum((ended - started).total_seconds()
+                       for started, ended in merged)
     caps = con.execute(
         "SELECT COUNT(*) AS n FROM capture WHERE substr(ts,1,10) BETWEEN ? AND ?",
         (start, end),
@@ -124,8 +145,8 @@ def _totals(con: sqlite3.Connection, start: str, end: str) -> dict:
         (start, end),
     ).fetchone()["n"]
     return {
-        "tracked_hours":      round(row["secs"] / 3600.0, 1),
-        "session_count":      int(row["sessions"] or 0),
+        "tracked_hours":      round(elapsed_secs / 3600.0, 1),
+        "session_count":      len(rows),
         "capture_count":      int(caps),
         "human_capture_count": int(human_caps),
         "cluster_count":      int(cluster_n),
@@ -136,28 +157,39 @@ def _streams(con: sqlite3.Connection, start: str, end: str,
              min_hours: float) -> list[dict]:
     rows = con.execute(
         """
-        SELECT COALESCE(stream, '<untagged>') AS s,
+        SELECT CASE
+                 WHEN ca.source = 'fallback' THEN '<untagged>'
+                 ELSE COALESCE(ca.stream, session.stream, '<untagged>')
+               END AS s,
                COUNT(*) AS sessions,
                COALESCE(SUM((julianday(ended_at) - julianday(started_at)) * 86400), 0) AS secs,
                COUNT(DISTINCT substr(started_at,1,10)) AS active_days
         FROM session
+        LEFT JOIN cluster_assignment ca ON ca.cluster_id = session.cluster_id
         WHERE substr(started_at,1,10) BETWEEN ? AND ?
           AND ended_at IS NOT NULL
-        GROUP BY stream
+        GROUP BY s
         """,
         (start, end),
     ).fetchall()
+    raw_total = sum(float(r["secs"] or 0) for r in rows)
+    elapsed_hours = _totals(con, start, end)["tracked_hours"]
+    scale = (elapsed_hours * 3600.0 / raw_total) if raw_total else 0.0
     out: list[dict] = []
     for r in rows:
-        hours = r["secs"] / 3600.0
+        hours = r["secs"] * scale / 3600.0
         if hours < min_hours:
             continue
         # Dominant apps in this stream during window
         apps = con.execute(
             """
             SELECT app, COUNT(*) AS n FROM session
+            LEFT JOIN cluster_assignment ca ON ca.cluster_id = session.cluster_id
             WHERE substr(started_at,1,10) BETWEEN ? AND ?
-              AND COALESCE(stream, '<untagged>') = ?
+              AND CASE
+                    WHEN ca.source = 'fallback' THEN '<untagged>'
+                    ELSE COALESCE(ca.stream, session.stream, '<untagged>')
+                  END = ?
               AND ended_at IS NOT NULL
             GROUP BY app ORDER BY n DESC LIMIT 4
             """,
@@ -170,7 +202,11 @@ def _streams(con: sqlite3.Connection, start: str, end: str,
                    COALESCE(cn.name, NULL) AS name
             FROM job_view jv
             LEFT JOIN cluster_name cn ON cn.cluster_id = jv.cluster_id
-            WHERE COALESCE(jv.stream, '<untagged>') = ?
+            LEFT JOIN cluster_assignment ca ON ca.cluster_id = jv.cluster_id
+            WHERE CASE
+                    WHEN ca.source = 'fallback' THEN '<untagged>'
+                    ELSE COALESCE(ca.stream, jv.stream, '<untagged>')
+                  END = ?
               AND substr(jv.started_at,1,10) <= ?
               AND substr(jv.ended_at,1,10)   >= ?
             ORDER BY jv.total_seconds DESC LIMIT 5
@@ -183,8 +219,12 @@ def _streams(con: sqlite3.Connection, start: str, end: str,
             SELECT CAST(substr(started_at, 12, 2) AS INTEGER) AS hr,
                    COUNT(*) AS n
             FROM session
+            LEFT JOIN cluster_assignment ca ON ca.cluster_id = session.cluster_id
             WHERE substr(started_at,1,10) BETWEEN ? AND ?
-              AND COALESCE(stream, '<untagged>') = ?
+              AND CASE
+                    WHEN ca.source = 'fallback' THEN '<untagged>'
+                    ELSE COALESCE(ca.stream, session.stream, '<untagged>')
+                  END = ?
               AND ended_at IS NOT NULL
             GROUP BY hr
             """,
@@ -634,12 +674,18 @@ def update_profile(con: sqlite3.Connection, *,
     status = "fallback"
     raw = ""
 
+    provider = "none"
     if not force_fallback:
-        model = ((cfg.get("llm") or {}).get("model")) or _DEFAULT_MODEL
-        result = think._call_anthropic(prompt, model=model, cfg=cfg)
-        if result is not None:
-            raw, in_tok, out_tok, _ = result
-            used_model = model
+        from workpulse.core import llm
+        raw_result, meta = llm.ask_text(
+            prompt, max_tokens=1800, cfg=cfg,
+            model=((cfg.get("llm") or {}).get("model")) or _DEFAULT_MODEL)
+        if raw_result:
+            raw = raw_result
+            in_tok = int(meta.get("input_tokens") or 0)
+            out_tok = int(meta.get("output_tokens") or 0)
+            used_model = meta.get("model")
+            provider = meta.get("backend") or "none"
             fallback = False
             status = "ok"
 
@@ -660,7 +706,7 @@ def update_profile(con: sqlite3.Connection, *,
          packet[:4000], raw[:16000], status),
     )
     if used_model:
-        atoms.write_ai_call(con, provider="anthropic", model=used_model,
+        atoms.write_ai_call(con, provider=provider, model=used_model,
                             in_tokens=in_tok, out_tokens=out_tok,
                             cost_usd=think._cost(in_tok, out_tok, cfg),
                             prompt_slug="skill:profile", ts=ts)

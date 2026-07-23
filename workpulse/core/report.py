@@ -82,20 +82,27 @@ def _time_breakdown(con: sqlite3.Connection, *, start: date, end: date) -> dict:
     (start==end) and weekly."""
     rows = con.execute(
         """
-        SELECT COALESCE(stream, '<untagged>') AS s,
+        SELECT CASE
+                 WHEN ca.source = 'fallback' THEN '<untagged>'
+                 ELSE COALESCE(ca.stream, s.stream, '<untagged>')
+               END AS s,
                COALESCE(SUM(
-                 (julianday(ended_at) - julianday(started_at)) * 86400.0
+                 (julianday(s.ended_at) - julianday(s.started_at)) * 86400.0
                ), 0) AS secs
-        FROM session
-        WHERE substr(started_at, 1, 10) BETWEEN ? AND ?
-          AND ended_at IS NOT NULL
-        GROUP BY stream
+        FROM session s
+        LEFT JOIN cluster_assignment ca ON ca.cluster_id = s.cluster_id
+        WHERE substr(s.started_at, 1, 10) BETWEEN ? AND ?
+          AND s.ended_at IS NOT NULL
+        GROUP BY 1
         ORDER BY secs DESC
         """,
         (start.isoformat(), end.isoformat()),
     ).fetchall()
-    by_stream = [{"stream": r["s"], "hours": round(r["secs"] / 3600.0, 1)}
-                 for r in rows]
+    by_stream = [
+        {"stream": r["s"], "hours": round(r["secs"] / 3600.0, 1)}
+        for r in rows
+        if round(r["secs"] / 3600.0, 1) > 0
+    ]
     return {
         "by_stream":   by_stream,
         "total_hours": round(sum(s["hours"] for s in by_stream), 1),
@@ -107,13 +114,23 @@ def _top_clusters(con: sqlite3.Connection, *, start: date, end: date,
     """Top clusters whose time-range overlaps the window, by total_seconds."""
     rows = con.execute(
         """
-        SELECT jv.cluster_id, jv.stream, jv.total_seconds,
+        SELECT jv.cluster_id,
+               CASE
+                 WHEN ca.source = 'fallback' THEN NULL
+                 ELSE COALESCE(ca.stream, jv.stream)
+               END AS stream,
+               jv.stream AS raw_stream,
+               ca.stream AS assigned_stream,
+               ca.confidence AS assignment_confidence,
+               ca.source AS assignment_source,
+               jv.total_seconds,
                jv.started_at, jv.ended_at,
                COALESCE(cn.name, NULL) AS name,
                COALESCE(cn.one_liner, NULL) AS one_liner,
                COALESCE(cn.source, NULL) AS name_source
         FROM job_view jv
         LEFT JOIN cluster_name cn ON cn.cluster_id = jv.cluster_id
+        LEFT JOIN cluster_assignment ca ON ca.cluster_id = jv.cluster_id
         WHERE substr(jv.started_at, 1, 10) <= ?
           AND substr(jv.ended_at,   1, 10) >= ?
         ORDER BY jv.total_seconds DESC

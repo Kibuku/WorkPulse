@@ -97,6 +97,28 @@ def _build_prompt(question: str, atoms_list: list[dict], skill: str) -> str:
     )
 
 
+def _diverse(results: list[dict], limit: int) -> list[dict]:
+    """Collapse repeated foreground samples before asking the model.
+
+    Five-second sensing can produce hundreds of identical "WorkPulse" atoms.
+    They are useful for duration, but ten copies leave no room for distinct
+    documents, captures, or output titles in an interactive evidence packet.
+    """
+    out = []
+    seen = set()
+    for item in results:
+        content_key = re.sub(
+            r"\s+", " ", (item.get("content") or "").strip().casefold())
+        key = (item.get("atom_kind"), content_key)
+        if not content_key or key in seen:
+            continue
+        seen.add(key)
+        out.append(item)
+        if len(out) >= limit:
+            break
+    return out
+
+
 # ── Anthropic call ──────────────────────────────────────────────────────────
 
 def _api_key(cfg: dict | None) -> str | None:
@@ -148,7 +170,9 @@ def _call_ollama(prompt: str, *, cfg: dict | None
     from workpulse.core import llm
     if llm.active_backend(cfg) != "ollama":
         return None
-    text, meta = llm.ask_text(prompt, max_tokens=1024, cfg=cfg)
+    # Keep interactive local answers short. A 1,024-token generation can take
+    # minutes on a laptop and looks like a frozen interface.
+    text, meta = llm.ask_text(prompt, max_tokens=160, cfg=cfg)
     if not text or meta.get("backend") != "ollama":
         return None
     return (text, int(meta.get("input_tokens", 0)),
@@ -233,13 +257,26 @@ def think(con: sqlite3.Connection, question: str, *,
           limit: int = 10, since: str | None = None,
           stream: str | None = None, with_vector: bool = False,
           model: str | None = None, force_fallback: bool = False,
-          cfg: dict | None = None) -> dict:
+          cfg: dict | None = None,
+          retrieval_query: str | None = None) -> dict:
     cfg = cfg or {}
     model = model or (cfg.get("llm", {}) or {}).get("model") or _DEFAULT_MODEL
     skill = _load_skill()
 
-    retrieved = search.search(con, question, limit=limit, since=since,
-                              stream=stream, with_vector=with_vector)
+    search_query = retrieval_query or question
+    retrieved = _diverse(search.search(
+        con, search_query, limit=limit * 10, since=since,
+        stream=stream, with_vector=with_vector), limit)
+    # Fresh installs and copied demo snapshots can contain atoms before the FTS
+    # index has ever been built. Heal that state on the first Brain question
+    # instead of returning "nothing found" until a terminal command is run.
+    if not retrieved:
+        indexed = con.execute("SELECT COUNT(*) FROM search_fts").fetchone()[0]
+        if indexed == 0:
+            search.reindex(con, since=None)
+            retrieved = _diverse(search.search(
+                con, search_query, limit=limit * 10, since=since,
+                stream=stream, with_vector=with_vector), limit)
     prompt = _build_prompt(question, retrieved, skill)
 
     raw = ""

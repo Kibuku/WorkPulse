@@ -118,6 +118,13 @@ llm:
   ollama:                              # free local backend (https://ollama.com)
     url: "http://127.0.0.1:11434"
     model: "llama3.2:3b"              # pull once with:  ollama pull llama3.2:3b
+    timeout_s: 35                     # then return the fast deterministic answer
+  auto_tagging:
+    enabled: true                     # AI is only asked when rules are ambiguous
+    ambiguity_threshold: 0.75         # below this, ask the selected backend
+    auto_assign_threshold: 0.85       # below this, keep deterministic/fallback result
+    max_age_days: 2                   # do not reclassify old history through AI
+    max_calls_per_refresh: 4          # keep the 30-minute refresh bounded
   pricing_per_million_tokens:
     input_usd: 1.00
     output_usd: 5.00

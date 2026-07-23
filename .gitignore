@@ -27,6 +27,7 @@ consolidation/
 reports/
 brain/
 vault/
+preview-data/
 
 # OS / IDE
 .DS_Store

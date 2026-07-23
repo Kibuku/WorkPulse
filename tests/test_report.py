@@ -16,7 +16,7 @@ from pathlib import Path
 
 import pytest
 
-from workpulse.core import atoms, capture as capmod, cluster, consolidate, db, name_clusters as nc, report as rmod, think
+from workpulse.core import atoms, capture as capmod, categorize, cluster, consolidate, db, name_clusters as nc, report as rmod, think
 
 
 @pytest.fixture()
@@ -92,6 +92,34 @@ def test_time_breakdown_by_stream(env):
     assert streams.get("work", 0) >= 0.9
     assert "<untagged>" in streams
     assert tb["total_hours"] >= 1.4
+
+
+def test_time_breakdown_prefers_cluster_assignment_over_session_stream(env):
+    con = _con()
+    d = date(2026, 6, 9)
+    _seed_today(con, d)
+    row = con.execute(
+        "SELECT cluster_id FROM job_view WHERE stream = 'dev' LIMIT 1"
+    ).fetchone()
+    categorize.correct_assignment(con, row["cluster_id"], "work")
+    tb = rmod._time_breakdown(con, start=d, end=d)
+    streams = {s["stream"]: s["hours"] for s in tb["by_stream"]}
+    assert streams.get("dev", 0) == 0
+    assert streams.get("work", 0) >= 1.4
+
+
+def test_time_breakdown_treats_fallback_as_untagged(env):
+    con = _con()
+    d = date(2026, 6, 9)
+    _seed_today(con, d)
+    row = con.execute(
+        "SELECT cluster_id FROM job_view WHERE stream IS NULL LIMIT 1"
+    ).fetchone()
+    categorize.assign_cluster(con, row["cluster_id"])
+    tb = rmod._time_breakdown(con, start=d, end=d)
+    streams = {s["stream"]: s["hours"] for s in tb["by_stream"]}
+    assert streams.get("<untagged>", 0) > 0
+    assert "misc" not in streams
 
 
 def test_top_clusters_overlap(env):

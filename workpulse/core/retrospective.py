@@ -57,7 +57,10 @@ _SYSTEM_APPS = {
     "", "unknown", "(unknown)",
 }
 _SKIP_TITLES = {"", "(no window)", "program manager", "task switching",
-                "windows shell experience host", "settings", "search"}
+                "windows shell experience host", "settings", "search",
+                "chatgpt", "claude", "whatsapp", "safari", "google chrome",
+                "microsoft teams", "microsoft outlook", "dashboard",
+                "getting started", "computer use controls", "activities"}
 
 
 # ── helpers ───────────────────────────────────────────────────────────────────
@@ -146,7 +149,7 @@ _PERSONAL_SUFFIX = re.compile(r"\s*[-–—]\s*personal.*$", re.I)
 
 
 def _norm_title(raw: str | None) -> str:
-    t = (raw or "").strip()
+    t = (raw or "").replace("\u200e", "").replace("\u200f", "").strip()
     t = re.sub(r"^\s*\(\d+\)\s*", "", t)                  # leading "(66)" count
     t = re.sub(r"\s*and \d+ more pages?\s*", " ", t, flags=re.I)
     t = _BROWSER_SUFFIX.sub("", t)
@@ -195,18 +198,24 @@ def summarize(con: sqlite3.Connection, *, stream: str | None = None,
     if stream is None:
         stream = _resolve_stream(query, cfg)
 
+    effective_stream = (
+        "CASE WHEN ca.source = 'fallback' THEN NULL "
+        "ELSE COALESCE(ca.stream, s.stream) END"
+    )
     where = ("WHERE substr(s.started_at,1,10) BETWEEN ? AND ? "
              "AND s.ended_at IS NOT NULL")
     params: list = [since, until]
     if stream:
-        where += " AND s.stream = ?"
+        where += f" AND ({effective_stream}) = ?"
         params.append(stream)
     rows = con.execute(
-        f"""SELECT s.stream AS stream, s.app AS app, sl.raw_title AS title,
+        f"""SELECT ({effective_stream}) AS stream, s.cluster_id,
+                   s.app AS app, sl.raw_title AS title,
                    substr(s.started_at,1,10) AS day,
                    (julianday(s.ended_at) - julianday(s.started_at)) * 86400.0 AS secs
             FROM session s
             LEFT JOIN session_local sl ON sl.session_id = s.id
+            LEFT JOIN cluster_assignment ca ON ca.cluster_id = s.cluster_id
             {where}""", params).fetchall()
 
     total = 0.0
@@ -215,6 +224,7 @@ def summarize(con: sqlite3.Connection, *, stream: str | None = None,
     area_secs: dict = defaultdict(float)
     area_apps: dict = defaultdict(lambda: defaultdict(float))
     area_titles: dict = defaultdict(lambda: defaultdict(lambda: [0.0, ""]))
+    area_clusters: dict = defaultdict(set)
     for r in rows:
         secs = float(r["secs"] or 0)
         if secs <= 0:
@@ -222,6 +232,8 @@ def summarize(con: sqlite3.Connection, *, stream: str | None = None,
         total += secs
         days[r["day"]] += secs
         key = r["stream"]
+        if r["cluster_id"]:
+            area_clusters[key].add(r["cluster_id"])
         area_secs[key] += secs
         area_apps[key][(r["app"] or "").lower()] += secs
         nt = _norm_title(r["title"])
@@ -238,6 +250,33 @@ def summarize(con: sqlite3.Connection, *, stream: str | None = None,
         titles = sorted(area_titles[key].values(), key=lambda x: -x[0])
         highlights = [{"title": raw, "seconds": round(sec)}
                       for sec, raw in titles if raw][:4]
+        outputs = []
+        conflicts = []
+        try:
+            from workpulse.core import cluster_context
+            from workpulse.core import projects as wp_projects
+            taxonomy = wp_projects.load_projects()
+            for cluster_id in list(area_clusters[key])[:12]:
+                ctx = cluster_context.cluster_context(
+                    con, cluster_id=cluster_id, repos=[], cfg=cfg)
+                inferred = cluster_context.infer_output(
+                    ctx, _stream_label(key, cfg))
+                if (inferred["specific"]
+                        and inferred["title"] not in outputs):
+                    outputs.append(inferred["title"])
+                    match = wp_projects.resolve_match(
+                        inferred["title"], taxonomy, kind="text")
+                    if match and key and match["key"] != key:
+                        conflicts.append({
+                            "output": inferred["title"],
+                            "filed_as": key,
+                            "suggested": match["key"],
+                        })
+                if len(outputs) >= 5:
+                    break
+        except Exception:
+            outputs = []
+            conflicts = []
         areas.append({
             "stream":     key,
             "label":      _stream_label(key, cfg),
@@ -246,6 +285,8 @@ def summarize(con: sqlite3.Connection, *, stream: str | None = None,
             "share":      round(secs / total, 3) if total else 0.0,
             "apps":       app_list,
             "highlights": highlights,
+            "outputs":    outputs,
+            "conflicts":  conflicts,
         })
 
     files = con.execute(
@@ -301,7 +342,10 @@ def _deterministic(rollup: dict) -> str:
         for a in tagged:
             pct = round(a["share"] * 100)
             lines += ["", f"### {a['label']}: {_fmt_dur(a['seconds'])} ({pct}%)"]
-            if a["highlights"]:
+            if a.get("outputs"):
+                lines.append("Outputs and work observed: " +
+                             "; ".join(a["outputs"]) + ".")
+            elif a["highlights"]:
                 lines.append("You were on: " +
                              "; ".join(h["title"] for h in a["highlights"]) + ".")
             if a["apps"]:
@@ -316,11 +360,19 @@ def _deterministic(rollup: dict) -> str:
         if untagged["apps"]:
             lines.append("It was mostly " +
                          ", ".join(x["label"] for x in untagged["apps"][:3]) +
-                         ", so it likely relates to those.")
+                         ". The apps alone do not establish its purpose.")
         if untagged["highlights"]:
             lines.append("Windows seen: " +
                          "; ".join(h["title"] for h in untagged["highlights"]) + ".")
         lines.append("Tag a few of these in the dashboard and it stops being a mystery.")
+
+    conflicts = [c for a in rollup["areas"] for c in a.get("conflicts", [])]
+    if conflicts:
+        lines += ["", "## Needs review"]
+        for c in conflicts[:5]:
+            lines.append(
+                f"- {c['output']} is filed as {_stream_label(c['filed_as'], cfg)}, "
+                f"but its title matches {_stream_label(c['suggested'], cfg)}.")
 
     if rollup["files"]:
         lines += ["", "## Files touched"]
@@ -335,23 +387,28 @@ def _deterministic(rollup: dict) -> str:
     return "\n".join(lines)
 
 
-def to_sop_markdown(rollup: dict, *, cfg: dict | None = None) -> str:
+def to_sop_markdown(rollup: dict, *, cfg: dict | None = None,
+                    with_meta: bool = False,
+                    use_backend: bool = True) -> str | tuple[str, dict]:
     """A thoughtful analysis of the rollup. Deterministic without a backend;
     a richer narrative (with probabilistic inference for untagged time) when
     Anthropic or Ollama is available."""
     deterministic = _deterministic(rollup)
     try:
+        if not use_backend:
+            raise RuntimeError("backend intentionally skipped")
         from workpulse.core import llm
         skill = _load_skill()
         prompt = (f"{skill}\n\n---\n\nWORK DATA (JSON):\n"
                   f"{json.dumps(rollup, default=str)}\n\n"
                   f"A plain reference rendering you can improve on:\n{deterministic}")
-        text, meta = llm.ask_text(prompt, max_tokens=1100, cfg=cfg)
+        text, meta = llm.ask_text(prompt, max_tokens=140, cfg=cfg)
         if text and meta.get("backend") != "none":
-            return text
+            return (text, meta) if with_meta else text
     except Exception:
         pass
-    return deterministic
+    meta = {"backend": "none", "model": None, "fallback": True}
+    return (deterministic, meta) if with_meta else deterministic
 
 
 # ── CLI ───────────────────────────────────────────────────────────────────────

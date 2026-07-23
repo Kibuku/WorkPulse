@@ -168,6 +168,10 @@ async function fetchRealWork() {
 
   // Empty-state hero
   if (d.no_data || !d.total_active_minutes) {
+    if (todayState && todayState.total_hours >= 0.05) {
+      renderHeroFromToday(todayState);
+      return;
+    }
     document.getElementById('hero-headline').textContent =
       isViewingToday() ? 'Quiet day so far.' : `No tracked activity on ${relativeDateLabel(d.date)}.`;
     document.getElementById('hero-sub').textContent =
@@ -177,7 +181,6 @@ async function fetchRealWork() {
     document.getElementById('attn-panel').innerHTML = '<div class="empty">Nothing to review.</div>';
     document.getElementById('apps-panel').innerHTML = '<div class="empty">No apps tracked.</div>';
     document.getElementById('sessions-panel').innerHTML = '<div class="empty">No sessions.</div>';
-    renderTimeline([]);
     return;
   }
 
@@ -328,47 +331,132 @@ async function fetchRealWork() {
       </table>`;
   }
 
-  // ── Timeline (24-hour strip) ──────────────────────────────────────────
-  renderTimeline(sessions);
 }
 
-function renderTimeline(sessions) {
-  // Bucket by hour-of-day. Color each hour by its dominant stream.
-  const buckets = Array.from({length:24}, () => ({total:0, byStream:{}, color:null}));
-  sessions.forEach(s => {
-    if (!s.start || !s.duration_s) return;
-    const hh = parseInt(s.start.slice(0,2), 10);
-    if (isNaN(hh) || hh < 0 || hh > 23) return;
-    const m = s.duration_s / 60;
-    buckets[hh].total += m;
-    if (s.stream) {
-      const cur = buckets[hh].byStream[s.stream] || {min:0, color:s.color};
-      cur.min += m;
-      buckets[hh].byStream[s.stream] = cur;
+function renderHeroFromToday(d) {
+  const total = `${d.total_hours.toFixed(1)}h`;
+  const known = (d.by_stream || []).filter(s => s.stream !== '<untagged>');
+  const unknown = (d.by_stream || []).find(s => s.stream === '<untagged>');
+  const top = known[0];
+  const labelFor = key => todayStreamLabel(key);
+
+  let headline = `WorkPulse found <span class="strong">${total}</span> of activity today`;
+  if (top) headline += `, mostly connected to <span class="strong">${escapeHtml(labelFor(top.stream))}</span>.`;
+  else headline += '.';
+  document.getElementById('hero-headline').innerHTML = headline;
+
+  const sub = [];
+  if (known.length) sub.push(`${known.length} output area${known.length === 1 ? '' : 's'} recognised`);
+  if (unknown && unknown.hours > 0) sub.push(`${unknown.hours.toFixed(1)}h needs your review`);
+  else sub.push('all substantial activity attributed');
+  document.getElementById('hero-sub').textContent = sub.join(' · ');
+
+  const streams = (d.by_stream || []).filter(s => s.hours > 0);
+  let cumulative = 0;
+  const slices = streams.map((s, i) => {
+    const pct = (s.hours / d.total_hours) * 100;
+    const from = cumulative;
+    cumulative += pct;
+    const color = s.stream === '<untagged>' ? '#d7dee9' : todayStreamColor(s.stream, i);
+    return `${color} ${from}% ${cumulative}%`;
+  }).join(', ');
+  const legend = streams.map((s, i) => {
+    const color = s.stream === '<untagged>' ? '#d7dee9' : todayStreamColor(s.stream, i);
+    const label = s.stream === '<untagged>' ? 'Needs review' : labelFor(s.stream);
+    return `<div class="lg-row">
+      <span class="lg-dot" style="background:${color}"></span>
+      <span class="lg-name">${escapeHtml(label)}</span>
+      <span class="lg-min">${s.hours.toFixed(1)}h</span>
+    </div>`;
+  }).join('');
+  document.getElementById('donut-panel').innerHTML = `
+    <div class="donut-wrap">
+      <div class="donut" style="background:conic-gradient(${slices || '#d7dee9 0% 100%'})">
+        <div class="donut-c"><div class="num">${total}</div><div class="lbl">understood</div></div>
+      </div>
+      <div class="legend">${legend}</div>
+    </div>`;
+}
+
+function timelineClock(iso) {
+  if (!iso) return '';
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return iso.slice(11, 16);
+  return d.toLocaleTimeString([], {hour: '2-digit', minute: '2-digit'});
+}
+
+function renderV2Timeline(d) {
+  const panel = document.getElementById('timeline');
+  const summary = document.getElementById('timeline-summary');
+  const meta = document.getElementById('timeline-meta');
+  if (!panel || !summary) return;
+  if (meta) meta.textContent = `${d.date} · ${Number(d.tracked_hours || 0).toFixed(1)} h`;
+  summary.innerHTML = `
+    <div><strong>${d.work_blocks || 0}</strong><span>work blocks</span></div>
+    <div><strong>${d.meetings || 0}</strong><span>calendar commitments</span></div>
+    <div><strong>${d.app_switches || 0}</strong><span>app transitions</span></div>`;
+  const events = d.events || [];
+  if (!events.length) {
+    panel.innerHTML = '<div class="empty">No work blocks or calendar commitments for this day.</div>';
+    return;
+  }
+  panel.innerHTML = events.map(ev => {
+    const start = timelineClock(ev.started_at);
+    const end = timelineClock(ev.ended_at);
+    if (ev.kind === 'meeting') {
+      const project = ev.project_label || 'Needs review';
+      return `<article class="timeline-event meeting">
+        <div class="timeline-time">${escapeHtml(start)}<small>${escapeHtml(end)}</small></div>
+        <div class="timeline-rail"><span></span></div>
+        <div class="timeline-event-body">
+          <div class="timeline-kind">Calendar</div>
+          <h3>${escapeHtml(ev.title || 'Calendar commitment')}</h3>
+          <div class="timeline-event-meta"><span>${escapeHtml(project)}</span>${ev.location ? `<span>${escapeHtml(ev.location)}</span>` : ''}</div>
+        </div>
+      </article>`;
     }
-  });
-  buckets.forEach(b => {
-    const top = Object.values(b.byStream).sort((a,b)=>b.min-a.min)[0];
-    b.color = top ? top.color : '#c8c5bb';
-  });
-  const maxMin = Math.max(1, ...buckets.map(b => b.total));
-  const tl = document.getElementById('timeline');
-  const ax = document.getElementById('tl-axis');
-  tl.innerHTML = ''; ax.innerHTML = '';
-  buckets.forEach((b, h) => {
-    const hStr = h.toString().padStart(2,'0');
-    if (b.total > 0) {
-      const heightPct = Math.max(8, Math.round(b.total / maxMin * 100));
-      const tip = `${hStr}:00 · ${fmtMins(b.total)}`;
-      tl.insertAdjacentHTML('beforeend',
-        `<div class="tl-h" title="${tip}"><div class="tl-bar" style="background:${b.color};height:${heightPct}%"></div></div>`);
-    } else {
-      tl.insertAdjacentHTML('beforeend',
-        `<div class="tl-h" title="${hStr}:00"><div class="tl-empty"></div></div>`);
-    }
-    ax.insertAdjacentHTML('beforeend',
-      `<div class="tl-tick">${h % 3 === 0 ? hStr : ''}</div>`);
-  });
+    const apps = (ev.apps || []).slice(0, 3)
+      .map(a => `${escapeHtml(a.app)} ${fmtMins(a.minutes)}`).join(' · ');
+    const domains = (ev.browser_domains || []).slice(0, 3)
+      .map(x => escapeHtml(x.domain)).join(' · ');
+    const confidence = ev.assignment_source === 'user' ? 'Confirmed'
+      : (ev.assignment_source === 'fallback' ? 'Needs review'
+      : (ev.confidence == null ? 'Unassigned' : `${Math.round(ev.confidence * 100)}% confidence`));
+    const project = ev.project_label || 'Needs review';
+    return `<article class="timeline-event work">
+      <div class="timeline-time">${escapeHtml(start)}<small>${escapeHtml(end)}</small></div>
+      <div class="timeline-rail"><span></span></div>
+      <div class="timeline-event-body">
+        <div class="timeline-event-top">
+          <div><div class="timeline-kind">Work block · ${fmtMins(ev.minutes || 0)}</div><h3>${escapeHtml(ev.title || 'Unclear work block')}</h3></div>
+          <button class="timeline-project" onclick="openCorrection('${escapeHtml(ev.id)}', '${escapeHtml(ev.project || '')}', this)" title="${escapeHtml(ev.attribution_method || '')}: ${escapeHtml(ev.attribution_reason || '')}">${escapeHtml(project)} · ${escapeHtml(confidence)}</button>
+        </div>
+        <div class="timeline-evidence">${escapeHtml(ev.title_evidence || 'Observed activity')}</div>
+        <details class="timeline-details">
+          <summary>Evidence and transitions</summary>
+          <div class="timeline-detail-grid">
+            <div><b>Apps</b><span>${apps || 'No app detail'}</span></div>
+            <div><b>Transitions</b><span>${ev.app_switches || 0} within this block</span></div>
+            <div><b>Browser</b><span>${domains || 'No browser evidence'}</span></div>
+            <div><b>Other signals</b><span>${ev.file_events || 0} file changes · ${ev.captures || 0} notes</span></div>
+          </div>
+        </details>
+      </div>
+    </article>`;
+  }).join('');
+}
+
+async function fetchV2Timeline() {
+  const url = '/api/v2/timeline' + (currentDate ? '?date=' + currentDate : '');
+  try {
+    const r = await fetch(url);
+    const d = await r.json();
+    if (!r.ok) throw new Error(d.error || `HTTP ${r.status}`);
+    renderV2Timeline(d);
+  } catch (e) {
+    const panel = document.getElementById('timeline');
+    if (panel) panel.innerHTML = '<div class="empty">Could not build the chronology.</div>';
+  }
 }
 
 async function fetchLastActive() {
@@ -678,6 +766,9 @@ function updateHealthDot(d) {
   if (v === 'ok') {
     dot.textContent = '●'; dot.style.color = '#16a34a';
     btn.title = 'All systems healthy';
+  } else if (v === 'snapshot') {
+    dot.textContent = '◉'; dot.style.color = '#6366f1';
+    btn.title = 'Snapshot preview, live tracker unchanged';
   } else if (v === 'fail') {
     dot.textContent = '▲'; dot.style.color = '#dc2626';
     btn.title = "Something's wrong, click for details";
@@ -703,12 +794,16 @@ function renderHealthModal() {
   const body = document.getElementById('health-modal-body');
   const title = document.getElementById('health-modal-title');
   const d = healthState || {verdict: 'unknown', checks: []};
-  const verdictLabel = {ok: 'All systems healthy', warn: 'Needs a look',
+  const verdictLabel = {ok: 'All systems healthy', snapshot: 'Snapshot mode', warn: 'Needs a look',
                         fail: "Something's wrong", unknown: 'Status unknown'}[d.verdict] || 'Status unknown';
-  const verdictColor = {ok: '#16a34a', warn: '#d97706', fail: '#dc2626',
+  const verdictColor = {ok: '#16a34a', snapshot: '#6366f1', warn: '#d97706', fail: '#dc2626',
                         unknown: 'var(--text-soft)'}[d.verdict] || 'var(--text-soft)';
   if (title) title.innerHTML = `System health <span style="color:${verdictColor}; font-weight:500;">· ${verdictLabel}</span>`;
 
+  if (d.verdict === 'snapshot') {
+    body.innerHTML = `<div class="empty">${escapeHtml(d.summary || 'This is an isolated preview snapshot.')}</div>`;
+    return;
+  }
   if (!d.checks || !d.checks.length) {
     body.innerHTML = '<div class="empty">No health check has run yet. The doctor runs every 3 hours.</div>';
     return;
@@ -764,7 +859,7 @@ const CARD_DEFAULTS = {
   heatmap:     { collapsed: true,  visible: true },
   donut:       { collapsed: true,  visible: true },
   'last-active': { collapsed: true, visible: true },
-  timeline:    { collapsed: true,  visible: false },  // hidden by default
+  timeline:    { collapsed: false, visible: true },
   attention:   { collapsed: true,  visible: true },
   apps:        { collapsed: true,  visible: false },
   ai:          { collapsed: true,  visible: false },
@@ -1114,10 +1209,17 @@ function renderProfile(d) {
   const meta  = document.getElementById('profile-meta');
   const summary = document.getElementById('profile-summary');
   if (!d || !d.exists) {
+    const memory = (d && d.memory) || {};
     panel.innerHTML =
-      `<div class="empty">No profile yet. Run <code>python -m workpulse.core.profile update</code>, or wait for tonight&rsquo;s dream cycle.</div>`;
+      `<div class="brain-memory-empty">
+        <div><strong>${memory.active_days || 0}</strong><span>active days observed</span></div>
+        <div><strong>${memory.projects_observed || 0}</strong><span>project areas recognised</span></div>
+        <div><strong>${memory.corrections || 0}</strong><span>things you have taught it</span></div>
+      </div>
+      <p class="brain-memory-note">WorkPulse has evidence, but it has not yet consolidated it into a living profile.</p>
+      <button class="ask-btn" onclick="refreshProfile()">Build my memory snapshot</button>`;
     meta.textContent = '';
-    if (summary) summary.textContent = 'No profile yet.';
+    if (summary) summary.textContent = `${memory.active_days || 0} active days observed · profile not consolidated`;
     return;
   }
   const fm = d.frontmatter || {};
@@ -1150,7 +1252,156 @@ function renderProfile(d) {
   // bullet lists. Avoid pulling in a markdown library; the profile shape is
   // controlled and predictable.
   const body = d.body || '';
-  panel.innerHTML = renderProfileMarkdown(body);
+  panel.innerHTML = renderProfileMarkdown(body) +
+    '<div class="brain-memory-actions"><button class="quiet-btn" onclick="refreshProfile()">Refresh from recent evidence</button></div>';
+}
+
+async function refreshProfile() {
+  const panel = document.getElementById('profile-panel');
+  panel.innerHTML = '<div class="empty">Consolidating your local work evidence…</div>';
+  try {
+    const r = await fetch('/api/v2/profile/refresh', {method: 'POST'});
+    if (!r.ok) throw new Error(`HTTP ${r.status}`);
+    await fetchProfile();
+    showToast('Memory snapshot refreshed.');
+  } catch (e) {
+    panel.innerHTML = '<div class="empty">Could not refresh the memory snapshot.</div>';
+  }
+}
+
+// ── Correction inbox: only uncertain or contradictory project decisions ───
+
+async function fetchReview() {
+  const panel = document.getElementById('attn-panel');
+  const meta = document.getElementById('review-meta');
+  try {
+    const r = await fetch('/api/v2/review?days=7');
+    if (!r.ok) throw new Error(`HTTP ${r.status}`);
+    const d = await r.json();
+    if (meta) meta.textContent = d.count ? `${d.count} decisions` : 'All clear';
+    if (!d.items || !d.items.length) {
+      panel.innerHTML =
+        '<div class="review-clear"><strong>Nothing needs teaching.</strong><span>WorkPulse has enough evidence for the recent work it filed.</span></div>';
+      return;
+    }
+    panel.innerHTML = `<div class="review-intro">Correct only what matters. Each answer becomes a teaching example for future work.</div>` +
+      d.items.map(item => {
+        const isConflict = item.kind === 'contradiction';
+        const kindLabel = isConflict ? 'Conflicting signals'
+          : item.kind === 'unassigned' ? 'Not filed' : 'Low confidence';
+        const current = item.assigned_label || 'Not filed';
+        const suggested = item.suggested_label || '';
+        let actions = '';
+        const clusterIds = (item.cluster_ids || [item.cluster_id]).join(',');
+        if (isConflict && item.suggested_stream) {
+          actions += `<button class="review-primary" onclick="correctReview('${jsAttr(clusterIds)}','${jsAttr(item.suggested_stream)}')">${escapeHtml(suggested)} looks right</button>`;
+        }
+        if (item.assigned_stream) {
+          actions += `<button class="review-secondary" onclick="correctReview('${jsAttr(clusterIds)}','${jsAttr(item.assigned_stream)}')">Keep ${escapeHtml(current)}</button>`;
+        }
+        actions += `<button class="review-link" onclick="openCorrection('${jsAttr(item.cluster_id)}','${jsAttr(item.assigned_stream || '')}',this)">Choose another</button>`;
+        return `<article class="review-item review-${escapeHtml(item.kind)}">
+          <div class="review-topline"><span class="review-kind">${kindLabel}</span><span>${fmtMins(item.minutes)} · ${item.instances > 1 ? `${item.instances} similar blocks` : escapeHtml((item.started_at || '').slice(0,10))}</span></div>
+          <h4>${escapeHtml(item.title)}</h4>
+          <p>${escapeHtml(item.reason)}</p>
+          <div class="review-filing"><span>Filed as <strong>${escapeHtml(current)}</strong></span>${suggested ? `<span>Title suggests <strong>${escapeHtml(suggested)}</strong></span>` : ''}</div>
+          <div class="review-actions">${actions}</div>
+        </article>`;
+      }).join('');
+  } catch (e) {
+    if (meta) meta.textContent = '';
+    panel.innerHTML = '<div class="empty">Could not load decisions for review.</div>';
+  }
+}
+
+let workflowLearningState = null;
+
+async function fetchWorkflowLearning() {
+  const card = document.getElementById('workflow-card');
+  const panel = document.getElementById('workflow-panel');
+  try {
+    const r = await fetch('/api/v2/workflows/proposal');
+    const d = await r.json();
+    if (!d.enabled) {
+      card.style.display = 'none';
+      return;
+    }
+    workflowLearningState = d;
+    card.style.display = '';
+    const heldOutStages = d.held_out?.stages || [];
+    panel.innerHTML = `
+      <div class="workflow-demo-head">
+        <div><span class="permission-state local">Learned locally</span><span class="workflow-status">${escapeHtml(d.status)}</span></div>
+        <span>${d.examples.length} example journeys</span>
+      </div>
+      <div class="workflow-demo-grid">
+        <div>
+          <span class="showcase-label">CANDIDATE PERSONAL METHOD</span>
+          <h3>${escapeHtml(d.name)}</h3>
+          <p>${escapeHtml(d.basis)}</p>
+          <div class="workflow-mini-steps">${d.steps.map((step, i) =>
+            `<span class="${heldOutStages.includes(step.action_type) ? 'seen' : ''}" title="${escapeHtml(step.name)}">${i + 1}</span>`
+          ).join('')}</div>
+        </div>
+        <div class="workflow-nudge">
+          <span class="showcase-label">CONTEXTUAL NUDGE</span>
+          <strong>${escapeHtml(d.held_out?.label || 'Held-out proposal journey')}</strong>
+          <p>${escapeHtml(d.nudge || d.gap)}</p>
+        </div>
+      </div>
+      <button class="text-action" onclick="openWorkflowModal()">Inspect evidence and method →</button>`;
+  } catch (e) {
+    card.style.display = 'none';
+  }
+}
+
+function openWorkflowModal() {
+  if (!workflowLearningState) return;
+  const d = workflowLearningState;
+  const body = document.getElementById('workflow-modal-body');
+  body.innerHTML = `
+    <span class="permission-state local">Learned from real local evidence</span>
+    <h2 id="workflow-modal-title">${escapeHtml(d.name)}</h2>
+    <div class="sub">${escapeHtml(d.privacy)} Client names and filenames are not shown in this demonstration.</div>
+    <div class="workflow-evidence-grid">
+      <div><span class="showcase-label">OBSERVED EXAMPLES</span>${d.examples.map(ex =>
+        `<article><strong>${escapeHtml(ex.label)}</strong><small>${escapeHtml(ex.period)} · ${ex.evidence_markers} distinct evidence markers</small><small>${ex.stages.map(s => escapeHtml(s.replace(/_/g,' '))).join(' → ')}</small></article>`
+      ).join('')}</div>
+      <div><span class="showcase-label">PROPOSED METHOD</span><ol>${d.steps.map(step =>
+        `<li><strong>${escapeHtml(step.name)}${step.optional ? ' (optional)' : ''}</strong><small>Expected marker: ${escapeHtml(step.expected_evidence)}</small><small>Observed in ${step.journeys_observed} journey${step.journeys_observed === 1 ? '' : 's'} · ${Math.round(step.confidence * 100)}% evidence coverage</small></li>`
+      ).join('')}</ol></div>
+    </div>
+    <div class="workflow-observations"><span class="showcase-label">WHAT THE EVIDENCE TAUGHT WORKPULSE</span>${(d.observations || []).map(item =>
+      `<article><strong>${escapeHtml(item.finding)}</strong><small>${escapeHtml(item.evidence)}</small></article>`
+    ).join('')}<p>${escapeHtml(d.ordering_note || '')}</p></div>
+    <div class="workflow-nudge modal-nudge"><span class="showcase-label">HELD-OUT JOURNEY TEST</span><strong>${escapeHtml(d.held_out?.label || 'Most recent observed journey')}</strong><p>${escapeHtml(d.nudge || d.gap)}</p></div>
+    <p class="workflow-gap"><strong>What WorkPulse still cannot know:</strong> ${escapeHtml(d.gap)}</p>`;
+  const btn = document.getElementById('workflow-confirm-btn');
+  btn.textContent = d.status === 'confirmed' ? 'Method confirmed' : 'Confirm this method';
+  btn.disabled = d.status === 'confirmed';
+  document.getElementById('workflow-modal').classList.add('open');
+}
+
+function closeWorkflowModal() {
+  document.getElementById('workflow-modal').classList.remove('open');
+}
+
+async function confirmLearnedWorkflow() {
+  const btn = document.getElementById('workflow-confirm-btn');
+  btn.disabled = true;
+  btn.textContent = 'Confirming locally…';
+  try {
+    const r = await fetch('/api/v2/workflows/proposal/confirm', {method: 'POST'});
+    if (!r.ok) throw new Error('confirmation failed');
+    const d = await r.json();
+    workflowLearningState = d.workflow;
+    btn.textContent = 'Method confirmed';
+    showToast('Observed proposal method confirmed locally.');
+    await fetchWorkflowLearning();
+  } catch (e) {
+    btn.disabled = false;
+    btn.textContent = 'Try again';
+  }
 }
 
 function renderProfileMarkdown(md) {
@@ -1173,9 +1424,16 @@ function renderProfileMarkdown(md) {
   let html = '<div style="display:flex; flex-direction:column; gap:14px;">';
   sections.forEach(s => {
     if (!s.heading && !s.lines.some(l => l.trim())) return;
-    html += '<div>';
+    const isIdentity = s.heading === 'Identity';
+    if (s.heading && !isIdentity) {
+      html += `<details class="brain-memory-section"><summary>${escapeHtml(s.heading)}</summary><div class="brain-memory-section-body">`;
+    } else {
+      html += '<div class="brain-memory-identity">';
+    }
     if (s.heading) {
-      html += `<div style="font-size:13px; color:var(--text-soft); font-weight:600; margin-bottom:6px;">${escapeHtml(s.heading)}</div>`;
+      if (isIdentity) {
+        html += `<div style="font-size:13px; color:var(--text-soft); font-weight:600; margin-bottom:6px;">${escapeHtml(s.heading)}</div>`;
+      }
     }
     // Inline render: bullets → ul; ### → bold; blank → paragraph
     let inUl = false;
@@ -1201,7 +1459,7 @@ function renderProfileMarkdown(md) {
     });
     flushUl();
     html += out.filter(s => s !== undefined).join('\n');
-    html += '</div>';
+    html += s.heading && !isIdentity ? '</div></details>' : '</div>';
   });
   html += '</div>';
   return html;
@@ -1218,6 +1476,13 @@ function renderInline(text) {
 // ── v2 brain view: "What you worked on today" card ──────────────────────────
 
 let todayState = null;  // last response from GET /api/v2/today
+
+function todayStreamLabel(key) {
+  if (key === '<untagged>') return 'Needs review';
+  if (key === 'workpulse') return 'WorkPulse';
+  const found = availableStreams.find(s => s.key === key);
+  return found ? found.label : TITLE_CASE((key || '').replace(/-/g, ' '));
+}
 
 async function fetchToday() {
   try {
@@ -1244,7 +1509,7 @@ function renderToday(d) {
       summary.textContent = `Nothing tracked yet today.`;
     } else {
       const top = (d.by_stream || []).slice(0, 3)
-        .map(s => `${s.stream} ${s.hours.toFixed(1)}h`)
+        .map(s => `${todayStreamLabel(s.stream)} ${s.hours.toFixed(1)}h`)
         .join(' · ');
       summary.textContent = top ? `${d.total_hours.toFixed(1)}h · ${top}` :
                                   `${d.total_hours.toFixed(1)}h tracked`;
@@ -1267,28 +1532,28 @@ function renderToday(d) {
     d.by_stream.forEach((s, i) => {
       const pct = Math.max(2, Math.round((s.hours / total) * 100));
       const color = todayStreamColor(s.stream, i);
-      html += `<div title="${escapeHtml(s.stream)}: ${s.hours.toFixed(1)} h" style="width:${pct}%; background:${color};"></div>`;
+      html += `<div title="${escapeHtml(todayStreamLabel(s.stream))}: ${s.hours.toFixed(1)} h" style="width:${pct}%; background:${color};"></div>`;
     });
     html += '</div>';
     html += '<div style="display:flex; flex-wrap:wrap; gap:14px; margin-top:8px; font-size:12px;">';
     d.by_stream.forEach((s, i) => {
       const color = todayStreamColor(s.stream, i);
-      html += `<span style="display:inline-flex; align-items:center; gap:6px;"><span style="display:inline-block; width:10px; height:10px; background:${color}; border-radius:2px;"></span><strong>${escapeHtml(s.stream)}</strong> ${s.hours.toFixed(1)} h</span>`;
+      html += `<span style="display:inline-flex; align-items:center; gap:6px;"><span style="display:inline-block; width:10px; height:10px; background:${color}; border-radius:2px;"></span><strong>${escapeHtml(todayStreamLabel(s.stream))}</strong> ${s.hours.toFixed(1)} h</span>`;
     });
     html += '</div></div>';
   }
 
   // Top named clusters — each with a side-channel context line (git + captures + skill runs)
   if (d.top_clusters && d.top_clusters.length) {
-    html += '<div style="font-size:13px; color:var(--text-soft); margin-bottom:6px;">Top clusters today</div>';
+    html += '<div style="font-size:13px; color:var(--text-soft); margin-bottom:6px;">Work blocks today</div>';
     html += '<div style="display:flex; flex-direction:column; gap:8px; margin-bottom:14px;">';
     d.top_clusters.slice(0, 5).forEach(c => {
-      const name = c.name ? escapeHtml(c.name) : '<em style="color:var(--text-faint);">(unnamed cluster)</em>';
-      const oneliner = c.one_liner ? ` — ${escapeHtml(c.one_liner)}` : '';
+      const name = escapeHtml(c.output_title || c.name || 'Unclear work block');
+      const evidence = escapeHtml(c.evidence_label || 'Observed activity');
 
       // Fix 1.7: project assignment + confidence badge + correction dropdown
       let assignBadge = '';
-      const label = c.assigned_label || c.assigned_stream || '—';
+      const label = c.assigned_label || c.assigned_stream || 'Needs review';
       const conf = c.assignment_confidence;
       const src = c.assignment_source;
       let badgeBg = '#e5e7eb';
@@ -1296,26 +1561,32 @@ function renderToday(d) {
       let confText = '';
       if (src === 'user') {
         badgeBg = '#dcfce7'; badgeFg = '#166534';
-        confText = '· user';
+        confText = '· confirmed';
       } else if (src === 'agent') {
         badgeBg = conf >= 0.7 ? '#dbeafe' : (conf >= 0.4 ? '#fef3c7' : '#fee2e2');
         badgeFg = conf >= 0.7 ? '#1e40af' : (conf >= 0.4 ? '#92400e' : '#991b1b');
         confText = '· ' + (conf * 100).toFixed(0) + '%';
       } else if (src === 'fallback') {
-        confText = '· fallback';
+        confText = '· review';
       } else {
         confText = '· not assigned';
       }
-      assignBadge = `<span style="display:inline-block; padding:2px 8px; background:${badgeBg}; color:${badgeFg}; border-radius:10px; font-size:11px; font-weight:600; cursor:pointer;" onclick="openCorrection('${escapeHtml(c.cluster_id)}', '${escapeHtml(c.assigned_stream || '')}', this)" title="Click to correct">${escapeHtml(label)} ${escapeHtml(confText)}</span>`;
+      const method = c.attribution_method || 'WorkPulse rules';
+      const reason = c.attribution_reason || 'Click to review or correct';
+      assignBadge = `<span style="display:inline-block; padding:2px 8px; background:${badgeBg}; color:${badgeFg}; border-radius:10px; font-size:11px; font-weight:600; cursor:pointer;" onclick="openCorrection('${escapeHtml(c.cluster_id)}', '${escapeHtml(c.assigned_stream || '')}', this)" title="${escapeHtml(method)}: ${escapeHtml(reason)}. Click to correct.">${escapeHtml(label)} ${escapeHtml(confText)}</span>`;
 
       // Context line: "what was actually happening" — git + captures + brain calls
       let ctxLine = '';
-      if (c.summary) {
+      if (c.evidence_kind === 'commit' && c.summary) {
         ctxLine = `<div style="margin-top:4px; font-size:12px; color:var(--text-soft);">↳ ${escapeHtml(c.summary)}</div>`;
+      } else if (c.captures_count) {
+        ctxLine = `<div style="margin-top:4px; font-size:12px; color:var(--text-soft);">↳ ${c.captures_count} contextual note${c.captures_count === 1 ? '' : 's'}</div>`;
+      } else if (c.file_events_count >= 10) {
+        ctxLine = `<div style="margin-top:4px; font-size:12px; color:var(--text-soft);">↳ ${c.file_events_count} related file changes observed</div>`;
       }
       // Top commit subjects (one-line each, max 3)
       let commitsLine = '';
-      if (c.top_commits && c.top_commits.length) {
+      if (c.evidence_kind === 'commit' && c.top_commits && c.top_commits.length) {
         commitsLine = '<ul style="margin:6px 0 0 18px; padding:0; font-size:12px; color:var(--text-soft);">';
         c.top_commits.forEach(g => {
           commitsLine += `<li><span style="font-family:var(--font-mono,monospace); color:var(--text-faint);">${escapeHtml(g.sha)}</span> ${escapeHtml(g.subject)}</li>`;
@@ -1325,7 +1596,7 @@ function renderToday(d) {
 
       html += `<div data-cluster="${escapeHtml(c.cluster_id)}" style="padding:10px 12px; background:var(--surface, #fff); border:1px solid var(--border, #eee5d2); border-radius:6px;">
         <div style="display:flex; align-items:baseline; justify-content:space-between; gap:12px;">
-          <div><strong>${name}</strong>${oneliner}</div>
+          <div><strong>${name}</strong><div style="margin-top:3px; font-size:11px; color:var(--text-faint);">${evidence}</div></div>
           <div style="text-align:right; white-space:nowrap;"><span style="font-variant-numeric:tabular-nums;">${c.hours.toFixed(1)} h</span> &nbsp;${assignBadge}</div>
         </div>
         ${ctxLine}
@@ -1397,7 +1668,7 @@ async function openCorrection(clusterId, currentStream, anchor) {
     background:var(--surface, #fff); border:1px solid var(--border, #ddd0b3);
     border-radius:8px; padding:8px; box-shadow:0 4px 20px rgba(0,0,0,0.15);
     z-index:9999; min-width:200px; max-height:300px; overflow:auto;`;
-  let html = '<div style="font-size:11px; color:var(--text-soft); margin-bottom:6px; padding:0 4px;">Set this cluster to:</div>';
+  let html = '<div style="font-size:11px; color:var(--text-soft); margin-bottom:6px; padding:0 4px;">Set this work block to:</div><div style="font-size:11px; color:var(--text-faint); margin:0 4px 8px;">Your correction is saved as a teaching example.</div>';
   streams.forEach(s => {
     const isCurrent = s.key === currentStream;
     html += `<div style="padding:6px 10px; cursor:pointer; border-radius:4px; ${isCurrent ? 'background:var(--bg-soft, #f5efe2); font-weight:600;' : ''}"
@@ -1432,9 +1703,31 @@ async function correctCluster(clusterId, toStream, anchor) {
     if (!r.ok) throw new Error('http ' + r.status);
     // Close popover + refresh
     document.querySelectorAll('.wp-correction-popover').forEach(el => el.remove());
+    showToast('Correction saved. WorkPulse will treat your choice as the source of truth.');
     if (typeof fetchToday === 'function') fetchToday();
+    if (typeof fetchReview === 'function') fetchReview();
   } catch (e) {
     alert('Correction failed: ' + e.message);
+  }
+}
+
+async function correctReview(clusterIds, toStream) {
+  const ids = (clusterIds || '').split(',').filter(Boolean);
+  try {
+    const responses = await Promise.all(ids.map(clusterId =>
+      fetch(`/api/v2/cluster/${clusterId}/correct`, {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({to_stream: toStream}),
+      })
+    ));
+    if (responses.some(r => !r.ok)) throw new Error('one or more corrections failed');
+    showToast(ids.length > 1
+      ? `${ids.length} similar work blocks taught.`
+      : 'Correction saved as a teaching example.');
+    await Promise.all([fetchReview(), fetchToday(), fetchProfile()]);
+  } catch (e) {
+    showToast('Could not save this correction.');
   }
 }
 
@@ -1664,6 +1957,14 @@ async function copyOrganizationUpdate() {
 let feedbackRating = 0;
 let feedbackStatusChecked = false;
 function openFeedbackModal() { document.getElementById('feedback-modal').classList.add('open'); }
+function openFeedbackFromInvite() {
+  document.getElementById('feedback-invite').classList.remove('open');
+  openFeedbackModal();
+}
+function dismissFeedbackInvite() {
+  document.getElementById('feedback-invite').classList.remove('open');
+  localStorage.setItem('wp.feedback.snoozeUntil', String(Date.now() + 86400000));
+}
 function closeFeedbackModal() {
   document.getElementById('feedback-modal').classList.remove('open');
   localStorage.setItem('wp.feedback.snoozeUntil', String(Date.now() + 86400000));
@@ -1679,7 +1980,7 @@ async function maybePromptFeedback() {
   if (Date.now() < snooze) return;
   try {
     const d = await (await fetch('/api/v2/feedback/status')).json();
-    if (d.due) openFeedbackModal();
+    if (d.due) document.getElementById('feedback-invite').classList.add('open');
   } catch (e) { /* feedback must never disturb the dashboard */ }
 }
 async function dismissFeedbackForever() {
@@ -1757,7 +2058,9 @@ async function fetchMeetings() {
 
 // ── Refresh orchestration ──────────────────────────────────────────────────
 async function refreshDayPanels() {
-  await Promise.all([fetchHealth(), fetchPersonal(), fetchProfile(), fetchToday(), fetchRealWork(), fetchLastActive(), fetchAI(), fetchMeetings()]);
+  await Promise.all([fetchHealth(), fetchPersonal(), fetchProfile(), fetchWorkflowLearning(), fetchToday(), fetchV2Timeline(), fetchLastActive(), fetchAI(), fetchMeetings()]);
+  await fetchRealWork();  // Today is the fallback source when legacy activity is empty.
+  await fetchReview();    // replaces the legacy title list with teachable decisions
   await fetchHeatmap();   // re-render so selected day highlights
 }
 
@@ -1797,21 +2100,27 @@ setInterval(refresh, 30000);
 // stream setup. Shown once (localStorage 'wp.tourDone'); replay via the Tour
 // button. Steps target real element ids so the highlight tracks the layout.
 const WP_TOUR_STEPS = [
-  { title: "Welcome to WorkPulse",
-    body: "WorkPulse quietly notices what you work on and files it under your projects. Here are the three things that matter — then we'll set up your projects together. Takes about a minute." },
-  { target: "#capture-bar", title: "Say what you're working on",
-    body: "Type one line, anytime. It sharpens how your time gets attributed — especially work that isn't tied to a file, like a call or planning." },
-  { target: "#ask-card", title: "Ask it anything",
-    body: "Once it knows your work, just ask. Try \"where is my client proposal?\" or \"what have I worked on this week?\" and it answers from your own activity, with the files as evidence. It works offline; add an API key or Ollama for richer answers." },
-  { target: "#today-card", title: "Your day, by project",
-    body: "Everything you did today, grouped by project. This is only as sharp as your project list — which is why the last step matters most." },
-  { target: "#profile-card", title: "What WorkPulse learns",
-    body: "Overnight it builds a short profile of how you actually work — your rhythms, your focus, and what's been neglected." },
-  { target: "#health-indicator", title: "System health",
-    body: "A green dot means the sensors are running and your data is fresh. If something silently breaks, it turns amber or red so you know." },
-  { target: "#wp-settings-btn", title: "Set up your streams",
-    body: "Your projects — we call them <b>streams</b> — live in Settings. Set them up now: without them, your time lands in a vague 'untagged' pile. Aim for the <b>8–12</b> areas you actually spend time on.",
-    ctaLabel: "Set up my streams →", cta: true },
+  { title: "Your work memory, on your device",
+    body: "<b>WorkPulse is useful before you sign in or connect to anyone.</b><br><br>It builds a private record of what moved, what still needs context, and what your work patterns may teach you. This takes about one minute.",
+    workspace: "today" },
+  { target: "#privacy-workspace", title: "It observes signals, not your screen",
+    body: "WorkPulse uses the active app and window, idle state, file-change metadata, and optional browser or calendar context.<br><br><b>It does not record keystrokes or continuously take screenshots.</b> Raw evidence stays on this device.",
+    workspace: "privacy" },
+  { target: "#today-card", title: "Observation becomes a proposed work story",
+    body: "Today groups those signals into projects and outputs. A title or app is evidence, not proof. When WorkPulse cannot establish the meaning, it says so instead of guessing.",
+    workspace: "today" },
+  { target: "[data-card=\"attention\"]", title: "Teach only the important mistakes",
+    body: "Needs your attention shows contradictory or uncertain filings. Confirm or correct a decision once; WorkPulse saves that answer as a teaching example for similar work.",
+    workspace: "brain" },
+  { target: "#ask-card", title: "Ask your own work",
+    body: "Ask what moved today, where an output was left, or how you approached previous work. The fast answer is deterministic. <b>Local Ollama is optional</b> for deeper interpretation.",
+    workspace: "brain" },
+  { target: "#organization-workspace", title: "An organisation is a separate permission",
+    body: "No manager is connected by default. If you opt in later, the organisation receives only the approved output-level fields you review—not raw titles, URLs, files, personal activity, or your private Brain.",
+    workspace: "organization" },
+  { target: "#wp-settings-btn", title: "Name the work areas that matter",
+    body: "Add the projects and responsibilities you actually work across. This gives the deterministic brain a starting vocabulary; it will still expose uncertainty and learn from corrections.",
+    workspace: "today", ctaLabel: "Set up my projects", cta: true },
 ];
 let wpTourIdx = 0;
 
@@ -1843,6 +2152,9 @@ function renderTourStep() {
   const spot = document.getElementById('wp-tour-spot');
   const tip  = document.getElementById('wp-tour-tip');
   if (!step || !tip) return;
+  if (step.workspace) {
+    showWorkspace(step.workspace, {skipPersist: true, instant: true});
+  }
   const isLast   = wpTourIdx === WP_TOUR_STEPS.length - 1;
   const dots     = WP_TOUR_STEPS.map((_, i) => `<i class="${i === wpTourIdx ? 'on' : ''}"></i>`).join('');
   const backBtn  = wpTourIdx > 0 ? `<button class="wp-tour-btn ghost" onclick="tourBack()">Back</button>` : '';
@@ -1939,7 +2251,15 @@ function tourFinishToStreams() {
 function askBackendLabel(b) {
   if (b === 'anthropic') return 'Hosted · Claude';
   if (b === 'ollama') return 'Local · Ollama';
+  if (b === 'workflow-memory') return 'Learned method';
   return 'Manual';
+}
+
+function askSuggestion(question) {
+  const input = document.getElementById('ask-input');
+  if (!input) return;
+  input.value = question;
+  document.getElementById('ask-form').requestSubmit();
 }
 
 // Minimal, safe markdown → HTML: escape first, then apply a small subset.
@@ -1972,17 +2292,51 @@ async function submitAsk(event) {
   const result = document.getElementById('ask-result');
   const answer = document.getElementById('ask-answer');
   const evidence = document.getElementById('ask-evidence');
+  const gap = document.getElementById('ask-gap');
+  const evidenceWrap = document.getElementById('ask-evidence-wrap');
+  const evidenceSummary = document.getElementById('ask-evidence-summary');
   const badge = document.getElementById('ask-backend');
   result.style.display = 'block';
   answer.innerHTML = '<div class="empty">Thinking…</div>';
   evidence.innerHTML = '';
+  gap.style.display = 'none';
+  gap.innerHTML = '';
+  evidenceWrap.style.display = 'none';
   try {
-    const r = await fetch('/api/ask', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ question: q }),
-    });
+    const useAI = !!document.getElementById('ask-use-ai')?.checked;
+    const controller = new AbortController();
+    const abortTimer = setTimeout(() => controller.abort(), 45000);
+    const progressTimer = useAI ? setTimeout(() => {
+      answer.innerHTML =
+        '<div class="empty">Ollama is reading your local evidence. Richer answers can take up to 35 seconds…</div>';
+    }, 7000) : null;
+    let r;
+    let fallbackNotice = '';
+    try {
+      r = await fetch('/api/ask', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({question: q, use_ai: useAI}),
+        signal: controller.signal,
+      });
+    } catch (err) {
+      if (!useAI || err.name !== 'AbortError') throw err;
+      fallbackNotice =
+        '<div class="ask-timeout-note">Ollama took too long, so WorkPulse returned the fast local answer instead.</div>';
+      r = await fetch('/api/ask', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({question: q, use_ai: false}),
+      });
+    } finally {
+      clearTimeout(abortTimer);
+      if (progressTimer) clearTimeout(progressTimer);
+    }
     const data = await r.json();
+    if (useAI && data.fallback && !fallbackNotice) {
+      fallbackNotice =
+        '<div class="ask-timeout-note">Ollama did not finish within the local response limit, so WorkPulse returned the fast answer instead.</div>';
+    }
     badge.textContent = askBackendLabel(data.backend);
     if (r.status === 401 && data.locked) {
       answer.innerHTML = renderMarkdownLite(data.answer) +
@@ -1994,9 +2348,15 @@ async function submitAsk(event) {
         escapeHtml(data.error || 'Something went wrong.') + '</div>';
       return false;
     }
-    answer.innerHTML = renderMarkdownLite(data.answer);
+    answer.innerHTML = fallbackNotice + renderMarkdownLite(data.answer);
+    if (data.gap) {
+      gap.style.display = 'block';
+      gap.innerHTML = `<b>What WorkPulse still doesn’t know</b><p>${escapeHtml(data.gap)}</p>`;
+    }
     const ev = data.evidence || [];
     if (ev.length) {
+      evidenceWrap.style.display = 'block';
+      evidenceSummary.textContent = `${ev.length} evidence item${ev.length === 1 ? '' : 's'} used`;
       evidence.innerHTML = ev.map(function (e) {
         if (e.type === 'work') {
           const h = e.hours ? ' · ' + e.hours + 'h' : '';
@@ -2007,7 +2367,10 @@ async function submitAsk(event) {
                  escapeHtml(e.basename || e.path || 'file') + '</span>';
         }
         if (e.type === 'atom') {
-          return '<span class="ask-chip">' + escapeHtml(e.atom_kind || 'atom') + '</span>';
+          const label = e.content || e.stream || e.atom_kind || 'Observed activity';
+          const meta = [e.date, e.stream, e.atom_kind].filter(Boolean).join(' · ');
+          return '<span class="ask-chip" title="' + escapeHtml(meta) + '">' +
+                 escapeHtml(label) + '</span>';
         }
         return '';
       }).join('');
@@ -2047,12 +2410,12 @@ const WORKSPACE_COPY = {
     action: 'Ask WorkPulse',
   },
   organization: {
-    kicker: 'ORGANISATIONAL WORKPULSE',
-    badge: 'Local demo',
-    badgeClass: 'demo',
-    title: 'Organisation',
-    description: 'Output coordination and aggregate insight without exposing raw personal activity.',
-    action: 'Preview update',
+    kicker: 'OPTIONAL CONNECTION',
+    badge: 'Not connected',
+    badgeClass: 'consent',
+    title: 'Organisation opt-in',
+    description: 'Personal WorkPulse is complete without this layer. Connect only when the benefit and permissions are clear.',
+    action: 'Review consent',
   },
   privacy: {
     kicker: 'DATA BOUNDARY',
@@ -2068,7 +2431,7 @@ const WORKSPACE_SELECTORS = {
   today: ['#capture-bar', '#today-card', '[data-card="donut"]', '[data-card="last-active"]'],
   timeline: ['[data-card="heatmap"]', '[data-card="timeline"]', '[data-card="apps"]',
              '[data-card="meetings"]', '#raw-sessions-card'],
-  brain: ['#ask-card', '#profile-card', '[data-card="attention"]', '[data-card="ai"]'],
+  brain: ['#ask-card', '#profile-card', '#workflow-card', '[data-card="attention"]', '[data-card="ai"]'],
   organization: ['#organization-workspace'],
   privacy: ['#privacy-workspace'],
 };
@@ -2088,6 +2451,17 @@ function showWorkspace(name, options) {
   (WORKSPACE_SELECTORS[next] || []).forEach(sel => {
     document.querySelectorAll(sel).forEach(el => el.classList.remove('workspace-hidden'));
   });
+  if (next === 'timeline') {
+    const chronology = document.querySelector('[data-card="timeline"]');
+    if (chronology) {
+      chronology.classList.remove('hidden', 'is-collapsed');
+      if (chronology.parentElement) chronology.parentElement.prepend(chronology);
+    }
+  }
+  if (next === 'brain') {
+    const profile = document.getElementById('profile-card');
+    if (profile) profile.classList.remove('hidden', 'is-collapsed');
+  }
 
   document.querySelectorAll('[data-workspace-target]').forEach(btn => {
     btn.classList.toggle('active', btn.dataset.workspaceTarget === next);
@@ -2143,7 +2517,8 @@ function syncSidebarHealth() {
   const text = (source.textContent || '').trim();
   const color = getComputedStyle(source).color;
   target.style.background = color;
-  label.textContent = text === '●' ? 'Signals available' : 'Needs attention';
+  label.textContent = text === '●' ? 'Signals available'
+                    : (text === '◉' ? 'Snapshot mode' : 'Needs attention');
 }
 
 document.addEventListener('DOMContentLoaded', function () {

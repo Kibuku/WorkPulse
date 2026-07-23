@@ -16,7 +16,7 @@ from pathlib import Path
 
 import pytest
 
-from workpulse.core import atoms, profile as pf, cluster, db, name_clusters as nc, think
+from workpulse.core import atoms, profile as pf, cluster, db, llm, name_clusters as nc, think
 
 
 @pytest.fixture()
@@ -85,7 +85,7 @@ def _seed_week(con, week_start: date):
 
 def test_load_params_reads_frontmatter():
     p = pf.load_params()
-    assert p["window_days"] == 30
+    assert p["window_days"] == 7
     assert p["min_stream_hours_floor"] == 0.5
     assert p["include_unpinned"] is True
 
@@ -258,8 +258,11 @@ def test_llm_path_writes_file_and_records_ai_call(env, monkeypatch):
         "## Open questions\n\n- q.\n"
     )
     monkeypatch.setattr(
-        think, "_call_anthropic",
-        lambda prompt, *, model, cfg: (canned, 500, 200, 1.2),
+        llm, "ask_text",
+        lambda prompt, *, max_tokens, model, cfg: (
+            canned, {"backend": "anthropic", "model": model,
+                     "input_tokens": 500, "output_tokens": 200,
+                     "duration_s": 1.2}),
     )
     r = pf.update_profile(con, as_of=today, days=14, cfg={"paths": {}})
     assert r["fallback"] is False
@@ -277,8 +280,10 @@ def test_llm_failure_falls_back(env, monkeypatch):
     today = date(2026, 6, 17)
     _seed_week(con, today - timedelta(days=6))
     monkeypatch.setattr(
-        think, "_call_anthropic",
-        lambda prompt, *, model, cfg: None,
+        llm, "ask_text",
+        lambda prompt, *, max_tokens, model, cfg: (
+            None, {"backend": "none", "model": None,
+                   "input_tokens": 0, "output_tokens": 0}),
     )
     r = pf.update_profile(con, as_of=today, days=14, cfg={"paths": {}})
     assert r["fallback"] is True
@@ -289,13 +294,15 @@ def test_skill_file_appears_in_prompt(env, monkeypatch):
     today = date(2026, 6, 17)
     _seed_week(con, today - timedelta(days=6))
     captured = {}
-    def _fake(prompt, *, model, cfg):
+    def _fake(prompt, *, max_tokens, model, cfg):
         captured["prompt"] = prompt
-        return ("---\nlast_updated: x\nwindow: x\ntotal_tracked_hours: 1\n"
+        return (("---\nlast_updated: x\nwindow: x\ntotal_tracked_hours: 1\n"
                 "---\n\n# Profile\n\n## Identity\n\nx\n\n## Streams\n\n\n\n"
                 "## How you work\n\n\n\n## On your mind\n\n\n\n"
-                "## Open questions\n\n", 1, 1, 0.1)
-    monkeypatch.setattr(think, "_call_anthropic", _fake)
+                "## Open questions\n\n"),
+                {"backend": "ollama", "model": "test-local",
+                 "input_tokens": 1, "output_tokens": 1, "duration_s": 0.1})
+    monkeypatch.setattr(llm, "ask_text", _fake)
     pf.update_profile(con, as_of=today, days=14, cfg={"paths": {}})
     p = captured["prompt"]
     assert "WINDOW:" in p and "TOTALS:" in p and "STREAMS:" in p

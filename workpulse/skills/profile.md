@@ -1,6 +1,6 @@
 ---
 # Parameters parsed at runtime by workpulse/core/profile.py.
-window_days:             30   # how far back the profile looks
+window_days:              7   # recent reliable behaviour; older evidence stays searchable
 include_unpinned:        true # surface unpinned captures even though noisy
 min_stream_hours_floor:  0.5  # streams below this in window don't get a section
 goal_phrase_min_length:  20   # captures shorter than this aren't goal candidates

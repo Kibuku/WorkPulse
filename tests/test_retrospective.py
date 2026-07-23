@@ -12,7 +12,7 @@ from datetime import datetime, timedelta, timezone
 
 import pytest
 
-from workpulse.core import atoms, db
+from workpulse.core import atoms, categorize, cluster, db
 from workpulse.core import retrospective as rmod
 
 
@@ -54,6 +54,20 @@ def test_summarize_totals_and_apps(env):
     apps = {x["label"]: x["seconds"] for x in area["apps"]}
     assert apps["Word"] == 3600 and apps["Excel"] == 1800
     assert area["apps"][0]["label"] == "Word"  # sorted by time desc
+
+
+def test_summarize_prefers_current_cluster_assignment(env):
+    con = _con()
+    now = datetime.now(timezone.utc)
+    _session(con, app="Word", title="School demo", stream="old-project",
+             start=now - timedelta(days=1), dur_minutes=60)
+    cluster.refresh(con)
+    cid = con.execute("SELECT cluster_id FROM job_view LIMIT 1").fetchone()[0]
+    categorize.correct_assignment(con, cid, "client-work")
+    roll = rmod.summarize(con, cfg=CFG)
+    streams = {a["stream"] for a in roll["areas"]}
+    assert "client-work" in streams
+    assert "old-project" not in streams
 
 
 def test_resolves_stream_from_query(env):

@@ -30,6 +30,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import sqlite3
 import subprocess
 import sys
@@ -181,6 +182,150 @@ def _file_events_in(con: sqlite3.Connection, start: str, end: str) -> dict:
     }
 
 
+def _session_titles_in(con: sqlite3.Connection, cluster_id: str | None,
+                       start: str, end: str) -> list[dict]:
+    """Most-seen foreground titles, retained locally for output inference."""
+    if cluster_id:
+        rows = con.execute(
+            """
+            SELECT s.app, sl.raw_title AS title, COUNT(*) AS count
+            FROM session s
+            LEFT JOIN session_local sl ON sl.session_id = s.id
+            WHERE s.cluster_id = ?
+              AND sl.raw_title IS NOT NULL AND sl.raw_title <> ''
+            GROUP BY s.app, sl.raw_title
+            ORDER BY count DESC
+            LIMIT 12
+            """,
+            (cluster_id,),
+        ).fetchall()
+    else:
+        rows = con.execute(
+            """
+            SELECT s.app, sl.raw_title AS title, COUNT(*) AS count
+            FROM session s
+            LEFT JOIN session_local sl ON sl.session_id = s.id
+            WHERE s.started_at BETWEEN ? AND ?
+              AND sl.raw_title IS NOT NULL AND sl.raw_title <> ''
+            GROUP BY s.app, sl.raw_title
+            ORDER BY count DESC
+            LIMIT 12
+            """,
+            (start, end),
+        ).fetchall()
+    return [dict(r) for r in rows]
+
+
+def _calendar_events_in(con: sqlite3.Connection, start: str,
+                        end: str) -> list[dict]:
+    rows = con.execute(
+        """
+        SELECT cel.raw_title AS title, ce.stream
+        FROM calendar_event ce
+        JOIN calendar_event_local cel ON cel.event_id = ce.id
+        WHERE ce.started_at < ? AND ce.ended_at > ?
+          AND cel.raw_title IS NOT NULL AND cel.raw_title <> ''
+        ORDER BY ce.started_at
+        """,
+        (end, start),
+    ).fetchall()
+    return [dict(r) for r in rows]
+
+
+_GENERIC_TITLES = {
+    "chatgpt", "claude", "safari", "google chrome", "microsoft edge",
+    "microsoft teams", "msteams", "microsoft outlook", "outlook",
+    "microsoft word", "microsoft powerpoint", "microsoft excel", "code",
+    "visual studio code", "dashboard", "getting started", "untitled",
+    "system settings", "accessibility", "computer use controls",
+    "usernotificationcenter", "whatsapp", "inbox",
+}
+
+
+def _clean_work_title(value: str) -> str:
+    title = " ".join((value or "").replace("_", " ").split())
+    title = re.sub(r"\s+[|•]\s+[^|•]+(?:\s+[|•]\s+[^|•]+)*$", "", title)
+    title = re.sub(r"\s*[-–—]\s*(Microsoft (?:Word|Excel|PowerPoint)|"
+                   r"Google Chrome|Safari|ChatGPT|Claude)$", "", title,
+                   flags=re.IGNORECASE)
+    return title.strip(" -–—|•")
+
+
+def infer_output(ctx: dict, assigned_label: str | None = None) -> dict:
+    """Choose the clearest local evidence of what moved forward.
+
+    This is intentionally deterministic. It explains the chosen evidence and
+    never invents an output when the only evidence is a generic application
+    title.
+    """
+    titles = ctx.get("session_titles") or []
+    total_title_samples = sum(int(item.get("count") or 0) for item in titles)
+    code_samples = sum(
+        int(item.get("count") or 0) for item in titles
+        if (item.get("app") or "").casefold() in {
+            "code", "visual studio code", "xcode", "pycharm",
+            "intellij idea", "android studio",
+        }
+    )
+    # A commit can be created by a parallel AI agent while the person's
+    # foreground attention is elsewhere. Treat it as the output name only
+    # when coding was materially present in this attention block.
+    commit_is_attention_signal = (
+        not titles
+        or code_samples >= max(3, round(total_title_samples * 0.15))
+    )
+    commits = ctx.get("git_commits") or []
+    if commits and commit_is_attention_signal:
+        title = _clean_work_title(commits[0].get("subject") or "")
+        if title:
+            return {"title": title[:100], "evidence_kind": "commit",
+                    "evidence_label": "Git commit", "specific": True}
+
+    captures = [c for c in (ctx.get("captures") or [])
+                if c.get("author") == "human" and c.get("body")]
+    if captures:
+        title = _clean_work_title(captures[-1]["body"])
+        if title:
+            return {"title": title[:100], "evidence_kind": "capture",
+                    "evidence_label": "Your capture", "specific": True}
+
+    events = ctx.get("calendar_events") or []
+    if events:
+        title = _clean_work_title(events[0].get("title") or "")
+        if title and title.casefold() not in _GENERIC_TITLES:
+            return {"title": title[:100], "evidence_kind": "calendar",
+                    "evidence_label": "Calendar overlap", "specific": True}
+
+    candidates = []
+    for item in titles:
+        title = _clean_work_title(item.get("title") or "")
+        app = _clean_work_title(item.get("app") or "")
+        folded = title.casefold().lstrip("\u200e")
+        if (not title or folded in _GENERIC_TITLES
+                or folded == app.casefold()
+                or len(re.findall(r"[A-Za-z]{3,}", title)) < 2):
+            continue
+        score = int(item.get("count") or 0)
+        # Artefact names are stronger than browser navigation/chrome titles.
+        if re.search(r"\.(?:docx?|xlsx?|pptx?|pdf|md)\b", title, re.I):
+            score += 20
+        if app.casefold() in {"microsoft powerpoint", "microsoft word",
+                              "microsoft excel", "code"}:
+            score += 10
+        candidates.append((score, title))
+    if candidates:
+        title = max(candidates, key=lambda x: x[0])[1]
+        return {"title": title[:100], "evidence_kind": "foreground_title",
+                "evidence_label": "Active document or page", "specific": True}
+
+    label = (assigned_label or "").strip()
+    if label and label != "Needs review":
+        return {"title": f"{label} work block", "evidence_kind": "project",
+                "evidence_label": "Project attribution", "specific": False}
+    return {"title": "Unclear work block", "evidence_kind": "insufficient",
+            "evidence_label": "Needs your review", "specific": False}
+
+
 # ── summary one-liner ───────────────────────────────────────────────────────
 
 def summary_line(ctx: dict) -> str:
@@ -243,11 +388,13 @@ def cluster_context(con: sqlite3.Connection, *,
         rng = _cluster_range(con, cluster_id)
         if rng is None:
             return {"captures": [], "git_commits": [], "skill_runs": [],
+                    "session_titles": [], "calendar_events": [],
                     "file_events": {"total": 0, "by_extension": []},
                     "summary": ""}
         started_at, ended_at = rng
     if not started_at or not ended_at:
         return {"captures": [], "git_commits": [], "skill_runs": [],
+                "session_titles": [], "calendar_events": [],
                 "file_events": {"total": 0, "by_extension": []},
                 "summary": ""}
 
@@ -263,6 +410,9 @@ def cluster_context(con: sqlite3.Connection, *,
         "git_commits": git_commits,
         "skill_runs":  _skill_runs_in(con, started_at, ended_at),
         "file_events": _file_events_in(con, started_at, ended_at),
+        "session_titles": _session_titles_in(
+            con, cluster_id, started_at, ended_at),
+        "calendar_events": _calendar_events_in(con, started_at, ended_at),
     }
     out["summary"] = summary_line(out)
     return out

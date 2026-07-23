@@ -47,7 +47,7 @@ from collections import defaultdict
 from datetime import datetime, timezone
 from pathlib import Path
 
-from workpulse.core import atoms, db
+from workpulse.core import atoms, db, llm
 from workpulse.core import projects as wp_projects
 from workpulse.common import load_config
 
@@ -266,11 +266,119 @@ def _score(signals_for_stream: list[tuple]) -> float:
     return round(sum(w for (_, w, _) in signals_for_stream), 2)
 
 
+def _ai_suggest(con: sqlite3.Connection, cluster_id: str, meta: dict,
+                projects: list[dict], signals: dict, *,
+                cfg: dict | None,
+                ai_counter: list[int] | None = None) -> dict | None:
+    """Ask the configured local/cloud model only when deterministic evidence
+    is ambiguous. Disabled unless llm.auto_tagging.enabled is explicit."""
+    auto_cfg = (((cfg or {}).get("llm") or {}).get("auto_tagging") or {})
+    if not auto_cfg.get("enabled", False):
+        return None
+    max_age_days = max(0, int(auto_cfg.get("max_age_days", 2)))
+    try:
+        ended = datetime.fromisoformat(meta["ended_at"])
+        if ended.tzinfo is None:
+            ended = ended.replace(tzinfo=timezone.utc)
+        if (datetime.now(timezone.utc) - ended.astimezone(timezone.utc)).days > max_age_days:
+            return None
+    except (KeyError, TypeError, ValueError):
+        return None
+
+    candidates = [
+        {"stream": p["stream"], "label": p["label"]}
+        for p in projects
+        if p.get("stream") not in {"personal", "misc"}
+    ]
+    valid_streams = {p["stream"] for p in candidates}
+    if not candidates or llm.active_backend(cfg) == "none":
+        return None
+
+    rows = con.execute(
+        """
+        SELECT s.app, sl.raw_title
+        FROM session s
+        LEFT JOIN session_local sl ON sl.session_id = s.id
+        WHERE s.cluster_id = ?
+        ORDER BY s.started_at DESC
+        LIMIT 12
+        """,
+        (cluster_id,),
+    ).fetchall()
+    clues = []
+    seen = set()
+    for row in rows:
+        app = (row["app"] or "Unknown app")[:60]
+        title = " ".join((row["raw_title"] or "").split())[:120]
+        clue = f"{app}: {title}" if title else app
+        if clue not in seen:
+            seen.add(clue)
+            clues.append(clue)
+        if len(clues) >= 6:
+            break
+
+    signal_summary = {
+        stream: [{"type": typ, "weight": weight}
+                 for typ, weight, _detail in stream_signals]
+        for stream, stream_signals in signals.items()
+    }
+    prompt = (
+        "Classify this sanitized work cluster into exactly one candidate project. "
+        "Do not invent a project. Return JSON only with keys stream, confidence "
+        "(0 to 1), and reason (one short sentence).\n"
+        f"Activity clues: {json.dumps(clues, ensure_ascii=False)}\n"
+        f"Existing signal scores: {json.dumps(signal_summary)}\n"
+        f"Candidates: {json.dumps(candidates, ensure_ascii=False)}"
+    )
+    if ai_counter is not None:
+        ai_counter[0] += 1
+    result, provider_meta = llm.ask_json(
+        prompt,
+        max_tokens=180,
+        cfg=cfg,
+    )
+    if not isinstance(result, dict):
+        return None
+    stream = str(result.get("stream") or "").strip()
+    try:
+        confidence = max(0.0, min(1.0, float(result.get("confidence", 0))))
+    except (TypeError, ValueError):
+        return None
+    if stream not in valid_streams:
+        return None
+    return {
+        "stream": stream,
+        "confidence": round(confidence, 3),
+        "reason": str(result.get("reason") or "Local AI classification")[:240],
+        "backend": provider_meta.get("backend"),
+        "model": provider_meta.get("model"),
+    }
+
+
+def _accepted_ai_suggestion(con: sqlite3.Connection, cluster_id: str,
+                            meta: dict, projects: list[dict], signals: dict,
+                            *, cfg: dict | None,
+                            ai_counter: list[int] | None = None) -> dict | None:
+    suggestion = _ai_suggest(
+        con, cluster_id, meta, projects, signals, cfg=cfg,
+        ai_counter=ai_counter,
+    )
+    threshold = float(
+        ((((cfg or {}).get("llm") or {}).get("auto_tagging") or {})
+         .get("auto_assign_threshold", 0.85))
+    )
+    if not suggestion or suggestion["confidence"] < threshold:
+        return None
+    return suggestion
+
+
 # ── main scoring + assignment ───────────────────────────────────────────────
 
 def assign_cluster(con: sqlite3.Connection, cluster_id: str,
                    *, cfg: dict | None = None,
-                   force: bool = False) -> dict:
+                   force: bool = False,
+                   allow_ai: bool = True,
+                   ai_counter: list[int] | None = None) -> dict:
     """Score and assign one cluster. Returns the assignment dict.
     Respects user overrides (source='user' assignments are never touched
     unless force=True). Returns {skipped: True, ...} when no signal fires
@@ -315,6 +423,22 @@ def assign_cluster(con: sqlite3.Connection, cluster_id: str,
         )
 
     if not signals:
+        ai_pick = (_accepted_ai_suggestion(
+            con, cluster_id, meta, projects, signals, cfg=cfg,
+            ai_counter=ai_counter,
+        ) if allow_ai else None)
+        if ai_pick:
+            return _write_assignment(
+                con, cluster_id,
+                stream=ai_pick["stream"],
+                confidence=ai_pick["confidence"],
+                source="agent",
+                evidence=[{"signal": "local_ai", "weight": 0,
+                           "detail": ai_pick["reason"],
+                           "backend": ai_pick["backend"],
+                           "model": ai_pick["model"]}],
+                cfg=cfg,
+            )
         # Fallback to misc when literally nothing matches
         return _write_assignment(con, cluster_id, stream="misc",
                                  confidence=0.0, source="fallback",
@@ -328,6 +452,28 @@ def assign_cluster(con: sqlite3.Connection, cluster_id: str,
     best_stream, best_score, best_sigs = scores[0]
     total_score = sum(s for (_, s, _) in scores) or 1.0
     confidence = round(best_score / total_score, 3)
+
+    ambiguity_threshold = float(
+        ((((cfg or {}).get("llm") or {}).get("auto_tagging") or {})
+         .get("ambiguity_threshold", 0.75))
+    )
+    if confidence < ambiguity_threshold:
+        ai_pick = (_accepted_ai_suggestion(
+            con, cluster_id, meta, projects, signals, cfg=cfg,
+            ai_counter=ai_counter,
+        ) if allow_ai else None)
+        if ai_pick:
+            return _write_assignment(
+                con, cluster_id,
+                stream=ai_pick["stream"],
+                confidence=ai_pick["confidence"],
+                source="agent",
+                evidence=[{"signal": "local_ai", "weight": 0,
+                           "detail": ai_pick["reason"],
+                           "backend": ai_pick["backend"],
+                           "model": ai_pick["model"]}],
+                cfg=cfg,
+            )
 
     evidence_payload = [
         {"signal": typ, "weight": w, "detail": detail}
@@ -401,10 +547,18 @@ def assign_all(con: sqlite3.Connection, *, since: str | None = None,
         params = (since,)
     sql += " ORDER BY total_seconds DESC"
     rows = con.execute(sql, params).fetchall()
+    auto_cfg = (((cfg or {}).get("llm") or {}).get("auto_tagging") or {})
+    ai_budget = max(0, int(auto_cfg.get("max_calls_per_refresh", 4)))
+    ai_counter = [0]
     counts = {"assigned_agent": 0, "kept_user": 0, "fallback": 0, "total": 0,
+              "ai_calls": 0, "ai_assignments": 0,
               "candidates_added": candidates_added}
     for r in rows:
-        res = assign_cluster(con, r["cluster_id"], cfg=cfg, force=force)
+        res = assign_cluster(
+            con, r["cluster_id"], cfg=cfg, force=force,
+            allow_ai=ai_counter[0] < ai_budget,
+            ai_counter=ai_counter,
+        )
         counts["total"] += 1
         if res.get("skipped"):
             if res.get("reason") == "user assignment present":
@@ -415,6 +569,9 @@ def assign_all(con: sqlite3.Connection, *, since: str | None = None,
             counts["fallback"] += 1
         elif src == "agent":
             counts["assigned_agent"] += 1
+            if any(e.get("signal") == "local_ai" for e in res.get("evidence", [])):
+                counts["ai_assignments"] += 1
+    counts["ai_calls"] = ai_counter[0]
     return counts
 
 

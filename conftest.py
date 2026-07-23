@@ -25,3 +25,19 @@ def _projects_taxonomy(monkeypatch):
     yield
     wp_projects._CACHE["mtime"] = 0
     wp_projects._CACHE["projects"] = []
+
+
+@pytest.fixture(autouse=True)
+def _local_ai_off_by_default(monkeypatch):
+    """Keep tests hermetic even when a developer has Ollama running locally."""
+    from workpulse.core import llm as wp_llm
+    monkeypatch.setattr(
+        wp_llm,
+        "_probe_ollama",
+        lambda cfg=None, force=False: {
+            "ts": 0.0,
+            "up": False,
+            "models": [],
+            "error": None,
+        },
+    )

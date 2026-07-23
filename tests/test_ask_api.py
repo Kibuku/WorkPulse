@@ -42,10 +42,19 @@ def client(tmp_path, monkeypatch):
 # ── router ────────────────────────────────────────────────────────────────────
 
 def test_route_classification():
+    assert appmod._ask_route("How do I make proposals") == "workflow"
+    assert appmod._ask_route("how do i do proposals?") == "workflow"
+    assert appmod._ask_route("How do I handle a concept note?") == "workflow"
+    assert appmod._ask_route(
+        "Tell me how I tend to work on proposals") == "workflow"
+    assert appmod._ask_route("What is my proposal workflow?") == "workflow"
+    assert appmod._ask_route(
+        "What did I do on the proposal last week?") == "retrospective"
     assert appmod._ask_route("where is my client z proposal") == "locate"
     assert appmod._ask_route("find the budget spreadsheet") == "locate"
     assert appmod._ask_route("how did I work on the report last week") == "retrospective"
     assert appmod._ask_route("summarize what I did this week") == "retrospective"
+    assert appmod._ask_route("How did I approach WorkPulse?") == "general"
     # month / "what happened" phrasings must reach the retrospective, not general
     assert appmod._ask_route("what happened in June") == "retrospective"
     assert appmod._ask_route("what was I doing in December") == "retrospective"
@@ -77,6 +86,46 @@ def test_ask_general_uses_think(client):
                     json={"question": "what is the state of the acme project"})
     assert r.status_code == 200, r.text
     assert r.json()["kind"] == "general"
+
+
+def test_ask_proposal_method_uses_workflow_memory(client):
+    con = db.connect(cfg={"paths": {}})
+    now = datetime.now(timezone.utc)
+    paths = [
+        (8, "/Private/A/Financial Proposal.docx"),
+        (7, "/Private/A/Financial Proposal v2.docx"),
+        (6, "/Private/A/Financial Proposal FINAL.pdf"),
+        (4, "/Private/B/Concept Note.docx"),
+        (3, "/Private/B/Concept Note REVISED.docx"),
+    ]
+    for days, path in paths:
+        atoms.write_file_event(
+            con,
+            raw_path=path,
+            kind="modified",
+            ts=(now - timedelta(days=days)).isoformat(),
+        )
+
+    r = client.post(
+        "/api/ask",
+        json={"question": "How do I make proposals", "use_ai": True},
+    )
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert body["kind"] == "workflow"
+    assert body["backend"] == "workflow-memory"
+    assert "candidate pattern" in body["answer"]
+    assert "proposal journeys" in body["answer"]
+    assert "56 hours" not in body["answer"]
+    assert body["evidence"]
+
+    natural = client.post(
+        "/api/ask",
+        json={"question": "how do i do proposals?", "use_ai": True},
+    )
+    assert natural.status_code == 200, natural.text
+    assert natural.json()["kind"] == "workflow"
+    assert natural.json()["backend"] == "workflow-memory"
 
 
 def test_ask_missing_question_is_400(client):

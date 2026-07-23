@@ -39,6 +39,7 @@ log = logging.getLogger("workpulse.llm")
 _DEFAULT_OLLAMA_URL   = "http://127.0.0.1:11434"
 _DEFAULT_LOCAL_MODEL  = "llama3.2:3b"          # ~2GB, fast on CPU, good at JSON
 _DEFAULT_CLOUD_MODEL  = "claude-haiku-4-5"
+_DEFAULT_INTERACTIVE_TIMEOUT_S = 35
 _OLLAMA_PROBE_CACHE_S = 60
 _ollama_probe = {"ts": 0.0, "up": False, "models": [], "error": None}
 
@@ -236,7 +237,11 @@ def _ollama_post(prompt: str, max_tokens: int, cfg: dict, meta: dict,
     )
     try:
         t0 = time.monotonic()
-        with urllib.request.urlopen(req, timeout=120) as resp:
+        timeout_s = float(
+            ((_llm_cfg(cfg).get("ollama") or {}).get("timeout_s"))
+            or _DEFAULT_INTERACTIVE_TIMEOUT_S
+        )
+        with urllib.request.urlopen(req, timeout=timeout_s) as resp:
             payload = json.loads(resp.read().decode("utf-8"))
         meta["duration_s"]    = round(time.monotonic() - t0, 3)
         meta["input_tokens"]  = int(payload.get("prompt_eval_count", 0) or 0)

@@ -12,6 +12,7 @@ Run standalone:
 
 from __future__ import annotations
 
+import asyncio
 import io
 import json
 import re
@@ -477,6 +478,40 @@ def api_v2_streams():
     return {"streams": [{"key": r["key"], "label": r["label"]} for r in rows]}
 
 
+@app.get("/api/v2/review")
+def api_v2_review(request: Request, days: int = 7):
+    """Small, privacy-aware inbox of project decisions worth teaching."""
+    from workpulse.core import db as wp_db, review as wp_review
+    cfg = load_config()
+    con = wp_db.connect(cfg)
+    return wp_review.inbox(
+        con,
+        days=max(1, min(days, 30)),
+        cfg=cfg,
+        include_private=_personal_unlocked(request),
+    )
+
+
+@app.get("/api/v2/workflows/proposal")
+def api_v2_workflow_proposal():
+    """Learn a proposal method from real local evidence; examples anonymized."""
+    from workpulse.core import db as wp_db, workflows as wp_workflows
+    cfg = load_config()
+    return wp_workflows.learn_proposal_method(wp_db.connect(cfg))
+
+
+@app.post("/api/v2/workflows/proposal/confirm")
+def api_v2_workflow_proposal_confirm():
+    """Promote the observed candidate to confirmed personal method memory."""
+    from workpulse.core import db as wp_db, workflows as wp_workflows
+    cfg = load_config()
+    try:
+        learned = wp_workflows.confirm_proposal_method(wp_db.connect(cfg))
+        return {"ok": True, "workflow": learned}
+    except ValueError as exc:
+        return JSONResponse({"error": str(exc)}, status_code=400)
+
+
 # ── Streams: create / edit / delete from the UI (writes config.yaml) ──────────
 # The taxonomy wizard is the pilot's onboarding surface — users build their
 # stream tree here instead of hand-editing YAML. config.yaml is the source of
@@ -832,6 +867,14 @@ def api_v2_health():
     tracker is visible the moment you open the page, not days later."""
     import json as _json
     from workpulse.common import ROOT as _ROOT
+    cfg = load_config()
+    if cfg.get("preview", {}).get("snapshot_mode"):
+        return {
+            "verdict": "snapshot",
+            "summary": "This preview uses a private copy of recent WorkPulse data. "
+                       "It does not indicate the live tracker state.",
+            "checks": [],
+        }
     p = _ROOT / "logs" / "health.json"
     if not p.exists():
         return {"verdict": "unknown", "summary": "No health check has run yet.",
@@ -848,10 +891,27 @@ def api_v2_profile():
     """Read the current brain/profile.md (the living profile).
     Returns the raw markdown + parsed frontmatter so the dashboard can
     render it. Empty payload if no profile has been generated yet."""
+    from workpulse.core import db as wp_db
     from workpulse.core.profile import _PROFILE_PATH
+    con = wp_db.connect(load_config())
+    memory = {
+        "active_days": con.execute(
+            "SELECT COUNT(DISTINCT substr(started_at,1,10)) FROM session"
+        ).fetchone()[0],
+        "human_captures": con.execute(
+            "SELECT COUNT(*) FROM capture WHERE author='human'"
+        ).fetchone()[0],
+        "corrections": con.execute(
+            "SELECT COUNT(*) FROM cluster_correction"
+        ).fetchone()[0],
+        "projects_observed": con.execute(
+            "SELECT COUNT(DISTINCT stream) FROM cluster_assignment "
+            "WHERE source != 'fallback'"
+        ).fetchone()[0],
+    }
     if not _PROFILE_PATH.exists():
         return {"exists": False, "raw": "",
-                "frontmatter": {}, "body": ""}
+                "frontmatter": {}, "body": "", "memory": memory}
     text = _PROFILE_PATH.read_text(encoding="utf-8")
     fm = {}
     body = text
@@ -864,7 +924,20 @@ def api_v2_profile():
             body = text[end + 5:].lstrip()
         except (ValueError, Exception):
             pass
-    return {"exists": True, "raw": text, "frontmatter": fm, "body": body}
+    return {"exists": True, "raw": text, "frontmatter": fm, "body": body,
+            "memory": memory}
+
+
+@app.post("/api/v2/profile/refresh")
+async def api_v2_profile_refresh(payload: dict | None = None):
+    """Refresh the local living profile using the active backend or fallback."""
+    from workpulse.core import db as wp_db, profile as wp_profile
+    cfg = load_config()
+    use_ai = bool((payload or {}).get("use_ai"))
+    result = wp_profile.update_profile(
+        wp_db.connect(cfg), cfg=cfg, force_fallback=not use_ai)
+    return {"ok": True, "fallback": result["fallback"],
+            "model": result["model"]}
 
 
 @app.get("/api/v2/today")
@@ -915,34 +988,79 @@ def api_v2_today(request: Request, date: Optional[str] = None):  # noqa: A002
         # If no assignment row exists, fall back to the cluster's old
         # session.stream (job_view.stream).
         assignment = con.execute(
-            "SELECT stream AS assigned_stream, confidence, source "
+            "SELECT stream AS assigned_stream, confidence, source, evidence "
             "FROM cluster_assignment WHERE cluster_id = ?",
             (c["cluster_id"],),
         ).fetchone()
         if assignment:
-            assigned_stream = assignment["assigned_stream"]
+            assigned_stream = (None if assignment["source"] == "fallback"
+                               else assignment["assigned_stream"])
             assignment_confidence = assignment["confidence"]
             assignment_source = assignment["source"]
+            try:
+                assignment_evidence = json.loads(assignment["evidence"] or "[]")
+            except (ValueError, TypeError):
+                assignment_evidence = []
         else:
             assigned_stream = c["stream"]
             assignment_confidence = None
             assignment_source = "unassigned"
+            assignment_evidence = []
+        if assignment_source == "user":
+            attribution_method = "Confirmed by you"
+            attribution_reason = "Your correction is the source of truth."
+        elif assignment_source == "fallback":
+            attribution_method = "Needs review"
+            attribution_reason = "WorkPulse did not find enough evidence to assign this."
+        elif any(e.get("signal") == "local_ai" for e in assignment_evidence):
+            ai_ev = next(e for e in assignment_evidence
+                         if e.get("signal") == "local_ai")
+            model = ai_ev.get("model") or "local model"
+            attribution_method = f"Ollama · {model}"
+            attribution_reason = ai_ev.get("detail") or "Local AI classification"
+        elif assignment_source == "agent":
+            signal_names = {
+                "calendar_event": "Calendar match",
+                "browser_visit": "Browser match",
+                "file_path": "File-path match",
+                "capture": "Capture match",
+                "title_keyword": "Title keyword match",
+                "plan_item": "Plan match",
+                "existing_stream": "Existing project rule",
+            }
+            first = assignment_evidence[0] if assignment_evidence else {}
+            attribution_method = signal_names.get(
+                first.get("signal"), "WorkPulse rules")
+            attribution_reason = first.get("detail") or \
+                "Deterministic local signals"
+        else:
+            attribution_method = "Not assigned"
+            attribution_reason = "No project decision has been made."
         # Pretty label for the assigned stream
         label_row = con.execute(
             "SELECT label FROM stream WHERE key = ?", (assigned_stream,),
         ).fetchone() if assigned_stream else None
-        assigned_label = label_row["label"] if label_row else (assigned_stream or "")
+        assigned_label = (label_row["label"] if label_row
+                          else (assigned_stream or "Needs review"))
+        output = wp_ctx.infer_output(ctx, assigned_label)
         enriched_clusters.append({
             "cluster_id": c["cluster_id"],
             "name":       c.get("name") or None,
             "name_source": c.get("name_source") or None,
             "one_liner":  c.get("one_liner") or None,
-            "stream":     c["stream"],                # raw session-stream
+            "stream":     assigned_stream,            # current source of truth
+            "raw_stream": c.get("raw_stream"),        # evidence/debug only
             "assigned_stream":     assigned_stream,   # Categorizer's pick
             "assigned_label":      assigned_label,
             "assignment_confidence": assignment_confidence,
             "assignment_source":   assignment_source, # 'user' | 'agent' | 'fallback' | 'unassigned'
+            "attribution_method":  attribution_method,
+            "attribution_reason":  attribution_reason,
             "hours":      c["hours"],
+            "output_title": output["title"],
+            "output_specific": output["specific"],
+            "evidence_kind": output["evidence_kind"],
+            "evidence_label": output["evidence_label"],
             "summary":    ctx["summary"],
             "git_commits_count": len(ctx["git_commits"]),
             "captures_count":    len(ctx["captures"]),
@@ -973,6 +1091,22 @@ def api_v2_today(request: Request, date: Optional[str] = None):  # noqa: A002
         "plan_vs_actual": ev["findings"]["plan_vs_actual"],
         "untagged_buckets": ev["findings"]["untagged_buckets"][:3],
     }
+
+
+@app.get("/api/v2/timeline")
+def api_v2_timeline(request: Request, date: Optional[str] = None):  # noqa: A002
+    """Meaningful work blocks and calendar commitments in one local chronology."""
+    from datetime import date as _date_cls
+    from workpulse.core import db as wp_db
+    from workpulse.core import timeline as wp_timeline
+    cfg = load_config()
+    try:
+        on = _date_cls.fromisoformat(date) if date else datetime.now().date()
+    except (ValueError, TypeError):
+        return JSONResponse({"error": "bad date"}, status_code=400)
+    con = wp_db.connect(cfg)
+    return wp_timeline.build_day(
+        con, on, cfg=cfg, include_private=_personal_unlocked(request))
 
 
 @app.get("/api/realwork")
@@ -1623,10 +1757,36 @@ _ASK_RETRO_RE = re.compile(
 _ASK_LOCATE_RE = re.compile(
     r"\b(where('?s| is| are)?|find|locate|open|which file|what file|"
     r"path (to|of)|show me the)\b", re.I)
+_ASK_METHOD_RE = re.compile(
+    r"\b(how did i approach|what approach did i|what method did i|"
+    r"how do i usually|how have i been approaching)\b", re.I)
+_ASK_PROPOSAL_METHOD_RE = re.compile(
+    r"\b(how (do|did|have) i (do|make|write|create|prepare|develop|produce|handle)|"
+    r"my (proposal|concept note) (method|process|workflow|approach)|"
+    r"how (do|did) i approach)\b.*\b(proposals?|concept notes?)\b|"
+    r"\b(proposals?|concept notes?)\b.*\b(method|process|workflow|approach)\b",
+    re.I,
+)
 
 
 def _ask_route(question: str) -> str:
     """Deterministic intent routing: retrospective > locate > general."""
+    low = question.casefold()
+    proposal_topic = bool(re.search(r"\b(proposals?|concept notes?)\b", low))
+    method_cue = (
+        bool(re.search(r"\bhow\b.*\b(i|my)\b|\b(i|my)\b.*\bhow\b", low))
+        or bool(re.search(r"\b(method|process|workflow|approach|way)\b", low))
+    )
+    time_cue = bool(re.search(
+        r"\b(yesterday|today|last (week|month)|this (week|month)|"
+        r"past week|in (january|february|march|april|may|june|july|august|"
+        r"september|october|november|december))\b", low))
+    if _ASK_PROPOSAL_METHOD_RE.search(question) or (
+            proposal_topic and method_cue and not time_cue):
+        return "workflow"
+    # Method questions need evidence synthesis, not a time-led worklog.
+    if _ASK_METHOD_RE.search(question):
+        return "general"
     if _ASK_RETRO_RE.search(question):
         return "retrospective"
     if _ASK_LOCATE_RE.search(question):
@@ -1641,16 +1801,40 @@ async def api_ask(payload: dict, request: Request):
     locate + retrospective read private paths, so they need the personal unlock.
     Keyless: answers work with no API key; a backend only sharpens the phrasing."""
     question = (payload.get("question") or "").strip()
+    use_ai = bool(payload.get("use_ai"))
     if not question:
         return JSONResponse({"error": "missing question"}, status_code=400)
 
     from workpulse.core import (db as wp_db, files as wp_files,
                                 retrospective as wp_retro, think as wp_think,
-                                llm as wp_llm)
+                                llm as wp_llm, projects as wp_projects,
+                                workflows as wp_workflows)
     cfg = load_config()
     con = wp_db.connect(cfg)
     kind = _ask_route(question)
     backend = wp_llm.active_backend(cfg)
+
+    if kind == "workflow":
+        result = wp_workflows.answer_proposal_question(con)
+        learned = result["workflow"]
+        return {
+            "kind": "workflow",
+            "backend": "workflow-memory",
+            "model": None,
+            "fallback": False,
+            "answer": result["answer"],
+            "gap": result["gap"],
+            "evidence": [
+                {
+                    "type": "workflow",
+                    "name": example["label"],
+                    "period": example["period"],
+                    "markers": example["evidence_markers"],
+                    "stages": example["stages"],
+                }
+                for example in learned["examples"]
+            ],
+        }
 
     if kind in ("locate", "retrospective"):
         # The private tier is protected only if the user set a personal password.
@@ -1668,6 +1852,9 @@ async def api_ask(payload: dict, request: Request):
         return {
             "kind": "locate", "backend": backend, "fallback": backend == "none",
             "answer": wp_files.format_hits(hits, question),
+            "gap": ("" if hits else
+                    "No indexed file matched. WorkPulse may not have observed "
+                    "the folder yet, or the file used different words."),
             "evidence": [{"type": "file", "path": h["path"],
                           "basename": h["basename"],
                           "last_touched": h["last_touched"]} for h in hits],
@@ -1675,10 +1862,34 @@ async def api_ask(payload: dict, request: Request):
 
     if kind == "retrospective":
         roll = wp_retro.summarize(con, query=question, cfg=cfg)
+        if use_ai:
+            try:
+                rendered, render_meta = await asyncio.wait_for(
+                    asyncio.to_thread(
+                        wp_retro.to_sop_markdown,
+                        roll,
+                        cfg=cfg,
+                        with_meta=True,
+                        use_backend=True,
+                    ),
+                    timeout=38,
+                )
+            except TimeoutError:
+                rendered, render_meta = wp_retro.to_sop_markdown(
+                    roll, cfg=cfg, with_meta=True, use_backend=False)
+        else:
+            rendered, render_meta = wp_retro.to_sop_markdown(
+                roll, cfg=cfg, with_meta=True, use_backend=False)
+        gap_match = re.search(r"\n##\s+Gap\s*\n+(.*)\Z", rendered,
+                              flags=re.I | re.S)
+        gap = gap_match.group(1).strip() if gap_match else ""
+        answer = rendered[:gap_match.start()].rstrip() if gap_match else rendered
         return {
-            "kind": "retrospective", "backend": backend,
-            "fallback": backend == "none",
-            "answer": wp_retro.to_sop_markdown(roll, cfg=cfg),
+            "kind": "retrospective",
+            "backend": render_meta.get("backend") or "none",
+            "model": render_meta.get("model"),
+            "fallback": render_meta.get("backend") == "none",
+            "answer": answer, "gap": gap,
             "window": roll["window"], "total_seconds": roll["total_seconds"],
             "evidence": (
                 [{"type": "work", "name": a["label"],
@@ -1689,12 +1900,48 @@ async def api_ask(payload: dict, request: Request):
             ),
         }
 
-    result = wp_think.think(con, question, cfg=cfg)
+    project_match = wp_projects.resolve_match(
+        question, wp_projects.load_projects(cfg))
+    retrieval_query = (
+        project_match["matched_keyword"] if project_match else question)
+    retrieval_stream = project_match["stream"] if project_match else None
+
+    if use_ai:
+        def _run_local_think():
+            # SQLite connections are thread-bound. Open the AI worker's own
+            # connection so the dashboard event loop remains responsive.
+            worker_con = wp_db.connect(cfg)
+            try:
+                return wp_think.think(
+                    worker_con, question, cfg=cfg, force_fallback=False,
+                    retrieval_query=retrieval_query,
+                    stream=retrieval_stream)
+            finally:
+                worker_con.close()
+
+        try:
+            result = await asyncio.wait_for(
+                asyncio.to_thread(_run_local_think), timeout=38)
+        except TimeoutError:
+            result = wp_think.think(
+                con, question, cfg=cfg, force_fallback=True,
+                retrieval_query=retrieval_query,
+                stream=retrieval_stream)
+    else:
+        result = wp_think.think(
+            con, question, cfg=cfg, force_fallback=True,
+            retrieval_query=retrieval_query,
+            stream=retrieval_stream)
     return {
-        "kind": "general", "backend": backend, "fallback": result["fallback"],
+        "kind": "general",
+        "backend": ("none" if result["fallback"] else backend),
+        "fallback": result["fallback"],
         "answer": result["answer"], "gap": result["gap"],
         "evidence": [{"type": "atom", "atom_id": a.get("atom_id"),
-                      "atom_kind": a.get("atom_kind")}
+                      "atom_kind": a.get("atom_kind"),
+                      "date": (a.get("ts") or "")[:10],
+                      "stream": a.get("stream"),
+                      "content": (a.get("content") or "")[:120]}
                      for a in result["atoms"][:10]],
     }
 
