@@ -64,7 +64,7 @@ jobs:
               Path("workpulse/__init__.py").read_text()).group(1)
           mac = Path(f"release-artifacts/WorkPulse-{version}-macOS.pkg")
           win = Path(f"release-artifacts/WorkPulseSetup-{version}-Windows.exe")
-          base = "https://raw.githubusercontent.com/Kibuku/WorkPulse/main/release-artifacts"
+          base = "https://njiani-flame.vercel.app/downloads"
           def item(path):
               return {
                   "filename": path.name,
