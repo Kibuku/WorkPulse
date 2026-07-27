@@ -136,7 +136,7 @@ def gather_signals(con: sqlite3.Connection, cluster_id: str,
     # 2) File paths touched during window
     paths = con.execute(
         """
-        SELECT fl.raw_path FROM file_event fe
+        SELECT DISTINCT fl.raw_path FROM file_event fe
         JOIN file_event_local fl ON fl.file_event_id = fe.id
         WHERE fe.ts BETWEEN ? AND ?
         """,
@@ -474,6 +474,18 @@ def assign_cluster(con: sqlite3.Connection, cluster_id: str,
                            "model": ai_pick["model"]}],
                 cfg=cfg,
             )
+        # A weak plurality is not knowledge. Keeping the interval unclassified
+        # is safer than turning the highest of several competing guesses into
+        # a fact that contaminates reports and learned behavior.
+        return _write_assignment(
+            con, cluster_id, stream="misc", confidence=confidence,
+            source="fallback",
+            evidence=[
+                {"signal": "ambiguous_candidate", "weight": best_score,
+                 "detail": f"{best_stream} was the strongest weak match"}
+            ],
+            cfg=cfg,
+        )
 
     evidence_payload = [
         {"signal": typ, "weight": w, "detail": detail}

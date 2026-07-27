@@ -162,11 +162,18 @@ def _resolve_stream(query: str | None, cfg: dict | None) -> str | None:
         return None
     streams = (cfg or {}).get("streams") or {}
     q = query.casefold()
+    # These are taxonomy containers and ordinary words in questions such as
+    # "What did I work on today?". Treating "work" as an explicitly requested
+    # project scopes the query to the Work root and can turn a full day into
+    # a false zero-hour answer. Concrete child projects still resolve below.
+    generic_names = {"work", "personal", "misc", "development", "dev"}
     candidates = []
     for key, val in streams.items():
         label = (val.get("label") if isinstance(val, dict) else str(val)) or key
         names = {key.replace("-", " ").replace("_", " "), str(label)}
         for name in names:
+            if name.strip().casefold() in generic_names:
+                continue
             words = re.escape(name.casefold()).replace(r"\ ", r"\s+")
             if re.search(rf"(?<!\w){words}(?!\w)", q):
                 candidates.append((len(name), key))
@@ -182,7 +189,8 @@ def _resolve_stream(query: str | None, cfg: dict | None) -> str | None:
         from workpulse.core import projects as wp_projects
         match = wp_projects.resolve_match(
             query, wp_projects.load_projects(), kind="text")
-        if match:
+        if match and str(match.get("matched_keyword") or "").strip().casefold() \
+                not in generic_names:
             return match["stream"]
     except Exception:
         pass
@@ -477,8 +485,17 @@ def to_sop_markdown(rollup: dict, *, cfg: dict | None = None,
             and ("unclassified time" in lowered or leaked_file)
         )
         voice_violation = "the person" in lowered
+        # Small local models sometimes stop exactly at a heading when they hit
+        # their token limit. A polished fragment is worse than the complete
+        # deterministic summary because it silently omits the largest section.
+        incomplete = (
+            "## gap" not in lowered
+            or bool(re.search(
+                r"(?i)##\s+[^\n]+\s*\Z", (text or "").rstrip()))
+        )
         if (text and meta.get("backend") != "none"
-                and not scoped_violation and not voice_violation):
+                and not scoped_violation and not voice_violation
+                and not incomplete):
             return (text, meta) if with_meta else text
     except Exception:
         pass

@@ -81,6 +81,28 @@ def test_resolves_stream_from_query(env):
     assert roll["session_count"] == 1
 
 
+def test_ordinary_word_work_does_not_scope_to_work_root(env):
+    con = _con()
+    now = datetime.now(timezone.utc)
+    cfg = {
+        "streams": {
+            "work": {"label": "Work"},
+            "client-work": {"label": "Client work", "parent": "work"},
+        }
+    }
+    _session(con, app="Word", title="Client report", stream="client-work",
+             start=now, dur_minutes=45)
+    _session(con, app="Safari", title="Unclassified research", stream=None,
+             start=now - timedelta(hours=1), dur_minutes=30)
+
+    roll = rmod.summarize(
+        con, query="What did I work on today?", cfg=cfg)
+
+    assert roll["stream"] is None
+    assert roll["session_count"] == 2
+    assert roll["total_seconds"] == 75 * 60
+
+
 def test_project_name_beats_generic_work_and_scopes_files(env):
     con = _con()
     now = datetime.now(timezone.utc)
@@ -207,6 +229,30 @@ def test_scoped_summary_does_not_promote_conflicting_output(monkeypatch, env):
         use_backend=False,
     )
     assert "WorkPulse build: recent work" in md
+
+
+def test_truncated_local_ai_answer_falls_back_to_complete_summary(
+        monkeypatch, env):
+    con = _con()
+    now = datetime.now(timezone.utc)
+    _session(con, app="Word", title="Report drafting", stream=None,
+             start=now - timedelta(minutes=30), dur_minutes=30)
+    roll = rmod.summarize(con, query="What did I work on today?", cfg={})
+    from workpulse.core import llm
+    monkeypatch.setattr(
+        llm, "ask_text",
+        lambda *args, **kwargs: (
+            "# What you worked on\n\nA partial answer.\n\n## Unclassified",
+            {"backend": "ollama", "model": "llama3.2:3b"},
+        ),
+    )
+
+    text, meta = rmod.to_sop_markdown(
+        roll, cfg={}, with_meta=True, use_backend=True)
+
+    assert meta["backend"] == "none"
+    assert "## Unclassified time" in text
+    assert "## Gap" in text
 
 
 # ── Natural-language date windows ────────────────────────────────────────────
