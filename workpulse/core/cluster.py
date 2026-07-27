@@ -45,6 +45,7 @@ _SKILL_PATH = PKG / "skills" / "cluster.md"
 
 _DEFAULTS = {
     "max_gap_minutes":     30,
+    "max_cluster_minutes": 60,
     "min_cluster_seconds": 60,
     "respect_stream":      True,
     "cluster_untagged":    True,
@@ -124,6 +125,7 @@ def refresh(con: sqlite3.Connection, *, params: dict | None = None,
     """
     p = params or load_params()
     max_gap_s = float(p["max_gap_minutes"]) * 60.0
+    max_cluster_s = float(p["max_cluster_minutes"]) * 60.0
     min_secs  = float(p["min_cluster_seconds"])
     respect_stream  = bool(p["respect_stream"])
     cluster_untagged = bool(p["cluster_untagged"])
@@ -234,7 +236,12 @@ def refresh(con: sqlite3.Connection, *, params: dict | None = None,
                 if not respect_stream:
                     current_stream = r["stream"]
                 gap_s = (s - prev_end).total_seconds() if prev_end else 0.0
-                if cluster_first_id is None or gap_s > max_gap_s:
+                cluster_age_s = (
+                    (s - cluster_started).total_seconds()
+                    if cluster_started is not None else 0.0
+                )
+                if (cluster_first_id is None or gap_s > max_gap_s
+                        or cluster_age_s >= max_cluster_s):
                     _flush()
                     cluster_first_id = r["id"]
                     cluster_started = s

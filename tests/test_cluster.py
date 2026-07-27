@@ -55,6 +55,7 @@ def _add(con, *, app, title, stream, start, dur_min=5):
 def test_load_params_reads_frontmatter():
     p = cluster.load_params()
     assert p["max_gap_minutes"] == 30
+    assert p["max_cluster_minutes"] == 60
     assert p["min_cluster_seconds"] == 60
     assert p["respect_stream"] is True
     assert p["cluster_untagged"] is True
@@ -87,6 +88,23 @@ def test_large_gap_splits_cluster(env):
          start=t0 + timedelta(hours=2), dur_min=10)
     s = cluster.refresh(con)
     assert s["clusters"] == 2
+
+
+def test_continuous_activity_is_capped_at_one_hour(env):
+    con = _con()
+    t0 = datetime(2026, 6, 9, 9, 0, tzinfo=timezone.utc)
+    for minute in range(120):
+        _add(con, app="Word", title="Long working session", stream=None,
+             start=t0 + timedelta(minutes=minute), dur_min=1)
+
+    result = cluster.refresh(con)
+    rows = con.execute(
+        "SELECT session_count, total_seconds FROM job_view ORDER BY started_at"
+    ).fetchall()
+
+    assert result["clusters"] == 2
+    assert [r["session_count"] for r in rows] == [60, 60]
+    assert all(r["total_seconds"] == 3600 for r in rows)
 
 
 def test_different_streams_never_cluster(env):

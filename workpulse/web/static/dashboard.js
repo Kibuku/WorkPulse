@@ -2389,7 +2389,7 @@ async function submitAsk(event) {
     const data = await r.json();
     if (useAI && data.fallback && !fallbackNotice) {
       fallbackNotice =
-        '<div class="ask-timeout-note">Ollama did not finish within the local response limit, so WorkPulse returned the fast answer instead.</div>';
+        '<div class="ask-timeout-note">Local AI could not improve this answer safely, so WorkPulse used the complete grounded summary instead.</div>';
     }
     badge.textContent = askBackendLabel(data.backend);
     if (r.status === 401 && data.locked) {

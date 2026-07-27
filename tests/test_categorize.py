@@ -144,13 +144,14 @@ def test_signals_pick_up_capture_about_stream(env):
 
 # ── assignment ──────────────────────────────────────────────────────────────
 
-def test_assign_picks_best_stream_by_score(env):
+def test_assign_leaves_competing_file_paths_unclassified(env):
     con = _con()
     cid = _seed_cluster_in_stream(con, stream=None)
     meta = con.execute(
         "SELECT started_at, ended_at FROM job_view WHERE cluster_id = ?", (cid,),
     ).fetchone()
-    # Two file events — Uganda twice, Mercy once — Uganda should win
+    # Repeated saves are not independent proof. Competing project paths make
+    # this interval ambiguous, so it must remain unclassified.
     base = datetime.fromisoformat(meta["started_at"])
     for i, path in enumerate([
         "/Documents/Uganda-MEMD/a.docx",
@@ -163,9 +164,30 @@ def test_assign_picks_best_stream_by_score(env):
         )
     res = cat.assign_cluster(con, cid)
     assert not res["skipped"]
+    assert res["stream"] == "misc"
+    assert res["source"] == "fallback"
+    assert res["confidence"] < 0.75
+
+
+def test_assigns_single_unambiguous_file_path(env):
+    con = _con()
+    cid = _seed_cluster_in_stream(con, stream=None)
+    meta = con.execute(
+        "SELECT started_at FROM job_view WHERE cluster_id = ?", (cid,),
+    ).fetchone()
+    base = datetime.fromisoformat(meta["started_at"])
+    for minute in (1, 2, 3):
+        atoms.write_file_event(
+            con, raw_path="/Documents/Uganda-MEMD/a.docx", kind="modified",
+            ts=_iso(base + timedelta(minutes=minute)),
+        )
+
+    res = cat.assign_cluster(con, cid, allow_ai=False)
+
     assert res["stream"] == "uganda"
     assert res["source"] == "agent"
-    assert res["confidence"] > 0
+    assert len([e for e in res["evidence"]
+                if e["signal"] == "file_path_match"]) == 1
 
 
 def test_assign_falls_back_to_misc_with_no_signal(env):
@@ -310,10 +332,11 @@ def test_assign_uses_daily_candidate_as_tie_breaker(env):
         author="human", cfg={"paths": {}},
     )
     res = cat.assign_cluster(con, cid)
-    # With no other signal, candidates compete on equal terms; both at +3,
-    # so one of them wins (taxonomy order = uganda first)
-    assert res["stream"] in ("uganda", "uganda2")
-    assert res["source"] == "agent"
+    # A plan containing two projects says both are possible, not which one owns
+    # this generic interval. Taxonomy order must not become a false fact.
+    assert res["stream"] == "misc"
+    assert res["source"] == "fallback"
+    assert res["confidence"] == 0.5
 
 
 # ── assign_all ──────────────────────────────────────────────────────────────

@@ -2,6 +2,7 @@
 # Parameters parsed at runtime by scripts/cluster.py.
 # Edit these to change clustering behavior — markdown is code (principle #5).
 max_gap_minutes:      30      # gap larger than this breaks the cluster
+max_cluster_minutes:  60      # safety cap: one clue must not label a whole day
 min_cluster_seconds:  60      # clusters shorter than this are dropped from job_view
 respect_stream:       true    # sessions in different streams never cluster together
 cluster_untagged:     true    # stream=NULL sessions still get clusters (principle #7)
@@ -27,10 +28,12 @@ For each stream (including the implicit "untagged" stream when
 2. If the gap from the previous session's `ended_at` to the next
    session's `started_at` is greater than `max_gap_minutes`, start a new
    cluster.
-3. Otherwise, extend the current cluster.
-4. Assign the cluster's id deterministically: a content-hash of
+3. Also start a new cluster when the current cluster reaches
+   `max_cluster_minutes`, even if activity was continuous.
+4. Otherwise, extend the current cluster.
+5. Assign the cluster's id deterministically: a content-hash of
    `(stream, first_session_id)`. Stable across reruns.
-5. Drop clusters whose total active time is below
+6. Drop clusters whose total active time is below
    `min_cluster_seconds` — these are mostly window-glances, not work.
 
 The cluster_id lands on `session.cluster_id`. The `job_view` table
@@ -45,6 +48,13 @@ genuinely a context shift. This number is the single most important
 parameter; if your work pattern is bursty (many short sessions in
 clumps), lower it to 10–15. If your work pattern is meeting-heavy with
 long pauses between focus blocks, raise it to 45.
+
+**60-minute cap.** Foreground activity is often continuous across an entire
+day, so a gap-only rule can merge unrelated meetings, documents, browsing and
+messages into one giant cluster. The cap limits the blast radius of a wrong
+signal: one calendar event or file path can describe at most an hour, not the
+whole day. It is a safety boundary until semantic task-boundary detection is
+strong enough to split on meaningful context changes.
 
 **Respect stream.** A session tagged `dev` and the next tagged `work`
 are not the same Job, even if they're a minute apart. If you context-
