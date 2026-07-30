@@ -340,6 +340,11 @@ def render_windows_task_xml(job: dict, *, python: Path | None = None,
     # or interval-based <Repetition><Interval>PT30M</Interval>
     interval_secs = job.get("interval_seconds")
     if job.get("daemon"):
+        # Windowless interpreter: a console python.exe launched by Task
+        # Scheduler is bound to a console that Windows closes on logon/session
+        # churn, killing the daemon with STATUS_CONTROL_C_EXIT (-1073741510).
+        # pythonw.exe has no console, so the dashboard/sensors survive.
+        pyw = python if frozen else python.with_name("pythonw.exe")
         # Long-running sensor: run at logon, restart on failure, and re-launch
         # whenever the interactive desktop becomes available again (unlock /
         # console-connect / remote-connect). On Windows a LogonTrigger +
@@ -367,7 +372,7 @@ def render_windows_task_xml(job: dict, *, python: Path | None = None,
   </Settings>
   <Actions Context="Author">
     <Exec>
-      <Command>{python}</Command>
+      <Command>{pyw}</Command>
       <Arguments>{args}</Arguments>
       <WorkingDirectory>{root}</WorkingDirectory>
     </Exec>
