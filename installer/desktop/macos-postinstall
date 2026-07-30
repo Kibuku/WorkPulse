@@ -10,6 +10,11 @@ USER_HOME="$(dscl . -read "/Users/$CONSOLE_USER" NFSHomeDirectory | awk '{print 
 BIN="/Applications/WorkPulse.app/Contents/MacOS/WorkPulse"
 LOG="/tmp/workpulse-install.log"
 
+if [ ! -x "$BIN" ]; then
+  echo "WorkPulse application was not installed at $BIN" >>"$LOG"
+  exit 1
+fi
+
 launchctl asuser "$USER_ID" sudo -u "$CONSOLE_USER" \
   env HOME="$USER_HOME" "$BIN" --cli install >>"$LOG" 2>&1
 launchctl asuser "$USER_ID" sudo -u "$CONSOLE_USER" \

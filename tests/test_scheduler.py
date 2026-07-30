@@ -14,6 +14,7 @@ import re
 import sys
 import xml.etree.ElementTree as ET
 from pathlib import Path
+from types import SimpleNamespace
 
 
 import pytest
@@ -244,6 +245,24 @@ def test_frozen_windows_task_uses_desktop_agent_protocol(monkeypatch):
     xml = scheduler.render_windows_task_xml(job)
     assert '"--agent" "workpulse.signals.activity"' in xml
     assert '"-m"' not in xml
+
+
+def test_windows_daemon_starts_immediately_after_registration(tmp_path, monkeypatch):
+    """A fresh install happens after logon, so LogonTrigger alone would leave
+    sensors dormant until the next sign-in."""
+    calls = []
+
+    def fake_run(args, **kwargs):
+        calls.append(args)
+        return SimpleNamespace(returncode=0, stdout="", stderr="")
+
+    monkeypatch.setattr(scheduler, "ROOT", tmp_path)
+    monkeypatch.setattr(scheduler.subprocess, "run", fake_run)
+    job = next(j for j in scheduler.jobs() if j["slug"] == "activity")
+
+    assert scheduler._windows_install_one(job).startswith("OK")
+    assert any(c[:2] == ["schtasks", "/Create"] for c in calls)
+    assert ["schtasks", "/Run", "/TN", job["label"]] in calls
 
 
 # ── platform dispatch ──────────────────────────────────────────────────────

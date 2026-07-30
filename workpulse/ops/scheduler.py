@@ -428,6 +428,20 @@ def _windows_install_one(job: dict) -> str:
     )
     if r.returncode != 0:
         return f"FAIL  {task_name}  {r.stderr.strip() or r.stdout.strip()}"
+    # A LogonTrigger only fires at the *next* sign-in. Fresh installs happen
+    # inside an already-running session, so without an explicit first run the
+    # activity + watcher tasks appear registered but produce no data until the
+    # user signs out or reboots.
+    if job.get("daemon"):
+        started = subprocess.run(
+            ["schtasks", "/Run", "/TN", task_name],
+            capture_output=True, text=True,
+        )
+        if started.returncode != 0:
+            return (
+                f"FAIL  {task_name} registered but did not start  "
+                f"{started.stderr.strip() or started.stdout.strip()}"
+            )
     return f"OK    {task_name}"
 
 

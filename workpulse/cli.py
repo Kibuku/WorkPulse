@@ -139,6 +139,12 @@ def cmd_doctor(args: argparse.Namespace) -> int:
 
 def cmd_web(args: argparse.Namespace) -> int:
     from workpulse.web import app
+    # Source-based Windows test installs commonly launch `workpulse web`
+    # directly rather than the tray application. Keep that path functional:
+    # the dashboard must not be alive while both sensors remain down.
+    if sys.platform == "win32":
+        app.start_watcher()
+        app.start_activity()
     app.run(host=args.host, port=args.port,
             start_watcher_on_launch=args.start_watcher)
     return 0

@@ -158,7 +158,7 @@ def check_agents_healthy() -> dict:
                 hard.append(f"{slug}: last exit {code}")
     if not hard and not soft:
         return {"check": "agents_healthy", "status": OK,
-                "message": f"all {len(_EXPECTED_AGENTS)} agents loaded and healthy"}
+                "message": f"all {len(_EXPECTED_AGENTS)} scheduled tasks are registered"}
     if not hard:
         return {"check": "agents_healthy", "status": WARN, "message": "; ".join(soft)}
     return {"check": "agents_healthy", "status": FAIL,

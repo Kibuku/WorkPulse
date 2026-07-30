@@ -21,7 +21,7 @@ if [[ -z "${PYTHON:-}" ]]; then
   exit 1
 fi
 VERSION="$($PYTHON -c 'from workpulse import __version__; print(__version__)')"
-BUILD="$ROOT/installer/desktop/build-mac"
+BUILD="$ROOT/installer/desktop/build-mac-$VERSION"
 ARTIFACTS="$ROOT/release-artifacts"
 
 $PYTHON -m pip install --upgrade pip
@@ -50,8 +50,16 @@ mkdir -p "$SCRIPTS"
 cp "$ROOT/installer/desktop/macos-postinstall" "$SCRIPTS/postinstall"
 chmod +x "$SCRIPTS/postinstall"
 
+COMPONENT_PLIST="$BUILD/component.plist"
+pkgbuild --analyze --root "$PAYLOAD" "$COMPONENT_PLIST"
+# PackageKit otherwise remembers an existing copy of the bundle and may
+# "relocate" the payload back to a developer build directory. WorkPulse has one
+# canonical install location: /Applications/WorkPulse.app.
+/usr/libexec/PlistBuddy -c "Set :0:BundleIsRelocatable false" "$COMPONENT_PLIST"
+
 pkgbuild --root "$PAYLOAD" \
   --scripts "$SCRIPTS" \
+  --component-plist "$COMPONENT_PLIST" \
   --identifier earth.njiani.workpulse \
   --version "$VERSION" \
   --install-location / \

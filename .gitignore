@@ -6,6 +6,7 @@ __pycache__/
 build/
 dist/
 installer/desktop/build-mac/
+installer/desktop/build-mac-*/
 installer/desktop/build/
 release-artifacts/
 .pytest_cache/
@@ -28,6 +29,7 @@ reports/
 brain/
 vault/
 preview-data/
+updates/
 
 # OS / IDE
 .DS_Store
