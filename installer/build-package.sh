@@ -35,11 +35,15 @@ trap 'rm -rf "$STAGE"' EXIT
 
 echo "==> Packaging WorkPulse $VER"
 
-# Extract the app payload ONCE (tracked files only -> user data excluded by
-# design), then each platform zip reuses this same payload.
+# Extract the runtime payload once. Do not archive the whole repository:
+# release-artifacts contains historical native installers, including unsigned
+# Windows executables, and development-only tests/docs needlessly inflate the
+# user download. Keep this allowlist aligned with setup.ps1/setup.sh.
 PAYLOAD="$STAGE/_payload"
 mkdir -p "$PAYLOAD"
-git archive --format=tar HEAD | tar -x -C "$PAYLOAD"
+git archive --format=tar HEAD \
+  workpulse config pyproject.toml setup.ps1 setup.sh LICENSE README.md \
+  | tar -x -C "$PAYLOAD"
 
 mkdir -p "$REPO_ROOT/dist"
 
@@ -105,6 +109,11 @@ build_pkg() {
   local out="$REPO_ROOT/dist/${zipname}"
   rm -f "$out"
   ( cd "$build" && zip -qr "$out" "$PKG" )
+  if unzip -Z1 "$out" | grep -Eiq '\.(exe|pkg)$'; then
+    rm -f "$out"
+    echo "Refusing source package containing a native installer: ${zipname}" >&2
+    return 1
+  fi
   echo "==> Built dist/${zipname}"
 }
 
