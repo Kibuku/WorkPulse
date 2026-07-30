@@ -3,7 +3,23 @@ set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 cd "$ROOT"
-PYTHON="${PYTHON:-python3}"
+if [[ -n "${PYTHON:-}" ]]; then
+  :
+elif [[ -x "$ROOT/.venv/bin/python" ]]; then
+  PYTHON="$ROOT/.venv/bin/python"
+else
+  for candidate in python3.13 python3.12 python3.11 python3; do
+    if command -v "$candidate" >/dev/null 2>&1 \
+      && "$candidate" -c 'import sys; raise SystemExit(sys.version_info < (3, 11))'; then
+      PYTHON="$candidate"
+      break
+    fi
+  done
+fi
+if [[ -z "${PYTHON:-}" ]]; then
+  echo "WorkPulse requires Python 3.11 or newer to build." >&2
+  exit 1
+fi
 VERSION="$($PYTHON -c 'from workpulse import __version__; print(__version__)')"
 BUILD="$ROOT/installer/desktop/build-mac"
 ARTIFACTS="$ROOT/release-artifacts"

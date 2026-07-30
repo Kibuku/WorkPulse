@@ -1,14 +1,17 @@
 $ErrorActionPreference = "Stop"
 $Root = (Resolve-Path (Join-Path $PSScriptRoot "..\..")).Path
-$Version = (& python -c "from workpulse import __version__; print(__version__)").Trim()
+$Python = (Get-Command python -ErrorAction Stop).Source
+& $Python -c "import sys; raise SystemExit(sys.version_info < (3, 11))"
+if ($LASTEXITCODE -ne 0) { throw "WorkPulse requires Python 3.11 or newer to build." }
+$Version = (& $Python -c "from workpulse import __version__; print(__version__)").Trim()
 $Build = Join-Path $PSScriptRoot "build"
 
-python -m pip install --upgrade pip
-python -m pip install -e "${Root}[win]" pyinstaller pystray pillow
+& $Python -m pip install --upgrade pip
+& $Python -m pip install -e "${Root}[win]" pyinstaller pystray pillow
 if (Test-Path $Build) { Remove-Item -Recurse -Force $Build }
 New-Item -ItemType Directory -Force -Path $Build | Out-Null
 
-python -m PyInstaller --noconfirm --clean --windowed `
+& $Python -m PyInstaller --noconfirm --clean --windowed `
   --name WorkPulse `
   --distpath $Build `
   --workpath (Join-Path $Build "pyi") `
