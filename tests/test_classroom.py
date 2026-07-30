@@ -130,3 +130,32 @@ def test_device_pairing_is_one_time_and_heartbeat_attributes_device(tmp_path: Pa
         assert False, "pairing code should be single use"
     except ValueError:
         pass
+
+
+def test_console_status_excludes_synthetic_devices(monkeypatch):
+    import workpulse.web.app as appmod
+
+    monkeypatch.setattr(appmod.classroom_core, "session_status", lambda: {
+        "mode": "class",
+        "active_session": {"id": "session-1"},
+        "scheduled_session": None,
+        "events": [
+            {"device_id": "Device 01", "rule": "old prototype event"},
+            {"device_id": "Device LIVE", "rule": "live event"},
+        ],
+    })
+    monkeypatch.setattr(appmod.classroom_core, "devices", lambda: [{
+        "id": "Device LIVE",
+        "name": "Lab Laptop",
+        "platform": "Windows",
+        "last_seen": "2026-07-30T16:00:00+00:00",
+        "last_app": "Microsoft Word",
+        "last_title": "Assignment.docx",
+        "last_domain": "",
+    }])
+
+    status = appmod.api_classroom_status()
+
+    assert [event["device_id"] for event in status["events"]] == ["Device LIVE"]
+    assert status["latest_signal"]["device_name"] == "Lab Laptop"
+    assert status["latest_signal"]["app"] == "Microsoft Word"

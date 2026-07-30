@@ -2738,8 +2738,8 @@ function renderClassroomStatus(status) {
   const scheduled = status.scheduled_session;
   const events = status.events || [];
   const activeEvents = active ? events.filter(event => event.session_id === active.id) : [];
-  const signal = status.latest_signal;
   const devices = status.devices || [];
+  const signal = status.latest_signal;
   const badge = document.getElementById('classroom-policy-badge');
   const title = document.getElementById('classroom-console-title');
   const time = document.getElementById('classroom-console-time');
@@ -2754,7 +2754,7 @@ function renderClassroomStatus(status) {
     if (title) title.textContent = active.title;
     if (time) time.textContent = 'Restores Normal learning automatically at ' + new Date(active.ends_at).toLocaleTimeString([], {hour: '2-digit', minute: '2-digit'});
     if (heading) heading.textContent = active.title + ' is active';
-    if (copy) copy.textContent = 'WorkPulse is evaluating this device against the declared policy. Allowed activity remains quiet; only exceptions require attention.';
+    if (copy) copy.textContent = 'WorkPulse is evaluating enrolled devices against the declared policy. Allowed activity remains quiet; only exceptions require attention.';
     if (remaining) remaining.textContent = mins + 'm';
     if (startButton) startButton.classList.add('workspace-hidden');
     if (endButton) endButton.classList.remove('workspace-hidden');
@@ -2771,7 +2771,9 @@ function renderClassroomStatus(status) {
   const liveSignal = document.getElementById('classroom-live-signal');
   if (liveSignal) liveSignal.textContent = classroomSignalLabel(signal);
   const deviceHealth = document.getElementById('classroom-device-health');
-  if (deviceHealth) deviceHealth.textContent = signal ? 'Signals available · ' + classroomSignalLabel(signal) : 'No recent signal available';
+  if (deviceHealth) deviceHealth.textContent = signal
+    ? (signal.device_name || signal.device_id) + ' · ' + classroomSignalLabel(signal)
+    : 'No enrolled device is reporting';
   const deviceCount = document.getElementById('classroom-device-count');
   if (deviceCount) deviceCount.textContent = String(devices.length);
   const deviceList = document.getElementById('classroom-device-list');
@@ -2813,7 +2815,8 @@ function renderClassroomStatus(status) {
     : 'No policy events recorded';
   const reportSession = document.getElementById('classroom-report-session');
   if (reportSession) reportSession.textContent = active
-    ? 'Active on Device 01 until ' + new Date(active.ends_at).toLocaleString()
+    ? 'Delivered to ' + devices.length + ' enrolled device' + (devices.length === 1 ? '' : 's') +
+      ' until ' + new Date(active.ends_at).toLocaleString()
     : scheduled ? 'Scheduled for ' + new Date(scheduled.started_at).toLocaleString()
     : 'Baseline rules delivered to enrolled devices';
   const scheduledSummary = document.getElementById('classroom-scheduled-summary');
@@ -2823,16 +2826,36 @@ function renderClassroomStatus(status) {
   const studentTitle = document.getElementById('classroom-student-title');
   const studentMessage = document.getElementById('classroom-student-message');
   const studentExpiry = document.getElementById('classroom-student-expiry');
-  if (studentTitle) studentTitle.textContent = active ? active.title : 'Normal learning';
-  if (studentMessage) studentMessage.textContent = active
-    ? 'Use the approved class resources normally. WorkPulse will guide you when a resource falls outside the session policy.'
-    : 'You can use this computer normally under the institution’s learning policy.';
-  if (studentExpiry) studentExpiry.textContent = active
-    ? 'Restores Normal learning at ' + new Date(active.ends_at).toLocaleTimeString([], {hour: '2-digit', minute: '2-digit'})
-    : 'Normal learning policy';
+  const studentDevice = document.getElementById('classroom-student-device');
+  const studentConnection = document.getElementById('classroom-student-connection');
+  const selectedDevice = devices[0] || null;
+  const selectedSeen = selectedDevice && selectedDevice.last_seen ? new Date(selectedDevice.last_seen) : null;
+  const selectedOnline = selectedSeen && (Date.now() - selectedSeen.getTime()) < 30000;
+  if (studentDevice) studentDevice.textContent = selectedDevice
+    ? selectedDevice.name + ' · ' + selectedDevice.id
+    : 'NO DEVICE SELECTED';
+  if (studentTitle) studentTitle.textContent = selectedDevice
+    ? (active ? active.title : 'Normal learning')
+    : 'No enrolled device';
+  if (studentMessage) studentMessage.textContent = selectedDevice
+    ? (active
+      ? 'Use the approved class resources normally. WorkPulse will guide you when a resource falls outside the session policy.'
+      : 'You can use this computer normally under the institution’s learning policy.')
+    : 'Pair a classroom computer to see its live policy view.';
+  if (studentConnection) studentConnection.textContent = selectedDevice
+    ? (selectedOnline ? 'Agent connected' : 'Offline · last seen ' + (selectedSeen ? selectedSeen.toLocaleTimeString() : 'never'))
+    : 'Waiting for enrolment';
+  if (studentExpiry) studentExpiry.textContent = selectedDevice
+    ? (active
+      ? 'Restores Normal learning at ' + new Date(active.ends_at).toLocaleTimeString([], {hour: '2-digit', minute: '2-digit'})
+      : 'Normal learning policy')
+    : '';
   const studentPolicy = document.getElementById('classroom-student-policy');
   if (studentPolicy) {
-    if (!active) {
+    if (!selectedDevice) {
+      studentPolicy.innerHTML = '<div><span>i</span><p><b>No live device</b>' +
+        '<small>Generate a pairing code and enrol a classroom computer.</small></p><em>Not connected</em></div>';
+    } else if (!active) {
       studentPolicy.innerHTML = '<div><span>i</span><p><b>Normal learning</b>' +
         '<small>No timed class policy is active.</small></p><em>Available</em></div>';
     } else {
@@ -2880,7 +2903,7 @@ async function startClassroomSession(mode) {
     return;
   }
   renderClassroomStatus(status);
-  showToast((isExam ? 'Exam' : 'Class') + ' policy is now active on this device');
+  showToast((isExam ? 'Exam' : 'Class') + ' session started');
 }
 
 async function scheduleClassroomSession() {
@@ -2946,11 +2969,8 @@ document.addEventListener('DOMContentLoaded', function () {
   setInterval(syncSidebarHealth, 2500);
   classroomPollTimer = setInterval(function () {
     if (activeWorkspace === 'classroom') {
-      fetch('/api/v2/classroom/evaluate', {
-        method: 'POST',
-        headers: {'Content-Type': 'application/json'},
-        body: '{}',
-      }).then(r => r.json()).then(renderClassroomStatus).catch(() => {});
+      fetch('/api/v2/classroom/status')
+        .then(r => r.json()).then(renderClassroomStatus).catch(() => {});
     }
   }, 5000);
 });

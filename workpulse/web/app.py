@@ -1986,8 +1986,25 @@ _ALLOWED_SECRETS = {"anthropic_key", "smtp_password", "smtp_user", "smtp_to"}
 @app.get("/api/v2/classroom/status")
 def api_classroom_status():
     status = classroom_core.session_status()
-    status["latest_signal"] = classroom_core.latest_signal()
-    status["devices"] = classroom_core.devices()
+    devices = classroom_core.devices()
+    device_ids = {device["id"] for device in devices}
+    # Classroom surfaces enrolled devices only. Older local-console prototype
+    # events used a synthetic "Device 01"; do not let those appear as learners.
+    status["events"] = [
+        event for event in status.get("events", [])
+        if event.get("device_id") in device_ids
+    ]
+    status["devices"] = devices
+    freshest = max(devices, key=lambda item: item.get("last_seen") or "", default=None)
+    status["latest_signal"] = ({
+        "device_id": freshest["id"],
+        "device_name": freshest["name"],
+        "ts": freshest.get("last_seen"),
+        "app": freshest.get("last_app") or "",
+        "title": freshest.get("last_title") or "",
+        "domain": freshest.get("last_domain") or "",
+        "source": "classroom_agent",
+    } if freshest else None)
     return status
 
 
@@ -2093,16 +2110,16 @@ async def api_classroom_start(request: Request):
         )
     except (TypeError, ValueError) as exc:
         return JSONResponse({"error": str(exc)}, status_code=400)
-    result = classroom_core.evaluate_signal()
-    status["latest_signal"] = result.get("signal")
-    status["latest_decision"] = result
+    status["devices"] = classroom_core.devices()
+    status["latest_signal"] = None
     return status
 
 
 @app.post("/api/v2/classroom/session/end")
 def api_classroom_end():
     status = classroom_core.end_session()
-    status["latest_signal"] = classroom_core.latest_signal()
+    status["devices"] = classroom_core.devices()
+    status["latest_signal"] = None
     return status
 
 
@@ -2110,8 +2127,10 @@ def api_classroom_end():
 async def api_classroom_evaluate(request: Request):
     payload = await request.json()
     signal = payload.get("signal") if isinstance(payload, dict) else None
+    if not signal:
+        return api_classroom_status()
     result = classroom_core.evaluate_signal(signal=signal)
-    status = classroom_core.session_status()
+    status = api_classroom_status()
     status["latest_signal"] = result.get("signal")
     status["latest_decision"] = result
     return status
