@@ -62,6 +62,7 @@ from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 
 from workpulse.common import load_config, resolve
+from workpulse.core import classroom as classroom_core
 
 app = FastAPI(title="WorkPulse", docs_url=None, redoc_url=None)
 
@@ -1978,6 +1979,142 @@ async def api_ask(payload: dict, request: Request):
 # ── Settings: in-app secret + email config (no terminal needed) ──────────────
 
 _ALLOWED_SECRETS = {"anthropic_key", "smtp_password", "smtp_user", "smtp_to"}
+
+
+# ── Classroom: Session Console and managed-device policy service ─────────────
+
+@app.get("/api/v2/classroom/status")
+def api_classroom_status():
+    status = classroom_core.session_status()
+    status["latest_signal"] = classroom_core.latest_signal()
+    status["devices"] = classroom_core.devices()
+    return status
+
+
+@app.get("/api/v2/classroom/policy")
+def api_classroom_policy(mode: str = "class"):
+    try:
+        return classroom_core.get_policy(mode)
+    except ValueError as exc:
+        return JSONResponse({"error": str(exc)}, status_code=400)
+
+
+@app.post("/api/v2/classroom/policy")
+async def api_classroom_policy_save(request: Request):
+    payload = await request.json()
+    try:
+        return classroom_core.save_policy(
+            str(payload.get("mode") or "class"), payload.get("policy") or {}
+        )
+    except ValueError as exc:
+        return JSONResponse({"error": str(exc)}, status_code=400)
+
+
+@app.post("/api/v2/classroom/pairing")
+def api_classroom_pairing(request: Request):
+    import ipaddress
+    import socket
+    import threading
+    try:
+        probe = socket.create_connection(("127.0.0.1", 5722), timeout=.2)
+        probe.close()
+    except OSError:
+        from workpulse import classroom_gateway
+        threading.Thread(
+            target=classroom_gateway.run,
+            kwargs={"host": "0.0.0.0", "port": 5722},
+            daemon=True,
+            name="workpulse-classroom-gateway",
+        ).start()
+    result = classroom_core.create_pairing()
+    candidates = []
+    for addresses in psutil.net_if_addrs().values():
+        for address in addresses:
+            if address.family != socket.AF_INET:
+                continue
+            try:
+                ip = ipaddress.ip_address(address.address)
+            except ValueError:
+                continue
+            if ip.is_private and not ip.is_loopback and not ip.is_link_local:
+                candidates.append(address.address)
+    host = candidates[0] if candidates else "SESSION-CONSOLE-IP"
+    result["server"] = f"http://{host}:5722"
+    result["network_addresses"] = candidates
+    return result
+
+
+@app.post("/api/v2/classroom/agent/enroll")
+async def api_classroom_agent_enroll(request: Request):
+    payload = await request.json()
+    try:
+        return classroom_core.enroll_device(
+            str(payload.get("code") or ""),
+            str(payload.get("name") or ""),
+            str(payload.get("platform") or "unknown"),
+        )
+    except ValueError as exc:
+        return JSONResponse({"error": str(exc)}, status_code=400)
+
+
+def _classroom_bearer(request: Request) -> str:
+    header = request.headers.get("authorization", "")
+    return header[7:].strip() if header.lower().startswith("bearer ") else ""
+
+
+@app.get("/api/v2/classroom/agent/policy")
+def api_classroom_agent_policy(request: Request):
+    if not classroom_core.authenticate_device(_classroom_bearer(request)):
+        return JSONResponse({"error": "unauthorized"}, status_code=401)
+    return classroom_core.agent_policy()
+
+
+@app.post("/api/v2/classroom/agent/heartbeat")
+async def api_classroom_agent_heartbeat(request: Request):
+    payload = await request.json()
+    try:
+        return classroom_core.device_heartbeat(
+            _classroom_bearer(request), payload.get("signal") or {}
+        )
+    except ValueError as exc:
+        return JSONResponse({"error": str(exc)}, status_code=401)
+
+
+@app.post("/api/v2/classroom/session/start")
+async def api_classroom_start(request: Request):
+    payload = await request.json()
+    try:
+        status = classroom_core.start_session(
+            mode=str(payload.get("mode") or "class"),
+            title=str(payload.get("title") or "Classroom session"),
+            duration_minutes=int(payload.get("duration_minutes") or 60),
+            policy=payload.get("policy"),
+            starts_at=payload.get("starts_at"),
+        )
+    except (TypeError, ValueError) as exc:
+        return JSONResponse({"error": str(exc)}, status_code=400)
+    result = classroom_core.evaluate_signal()
+    status["latest_signal"] = result.get("signal")
+    status["latest_decision"] = result
+    return status
+
+
+@app.post("/api/v2/classroom/session/end")
+def api_classroom_end():
+    status = classroom_core.end_session()
+    status["latest_signal"] = classroom_core.latest_signal()
+    return status
+
+
+@app.post("/api/v2/classroom/evaluate")
+async def api_classroom_evaluate(request: Request):
+    payload = await request.json()
+    signal = payload.get("signal") if isinstance(payload, dict) else None
+    result = classroom_core.evaluate_signal(signal=signal)
+    status = classroom_core.session_status()
+    status["latest_signal"] = result.get("signal")
+    status["latest_decision"] = result
+    return status
 
 
 @app.post("/api/settings/secret")

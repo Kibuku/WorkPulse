@@ -149,6 +149,17 @@ def cmd_version(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_classroom_agent(args: argparse.Namespace) -> int:
+    from workpulse import classroom_agent
+    return classroom_agent.main(args.agent_args)
+
+
+def cmd_classroom_gateway(args: argparse.Namespace) -> int:
+    from workpulse.classroom_gateway import run
+    run(host=args.host, port=args.port)
+    return 0
+
+
 def _run(cmd: list[str]) -> tuple[int, str]:
     r = subprocess.run(cmd, capture_output=True, text=True)
     return r.returncode, (r.stdout + r.stderr).strip()
@@ -199,6 +210,8 @@ _COMMANDS = {
     "doctor":    cmd_doctor,
     "web":       cmd_web,
     "version":   cmd_version,
+    "classroom-agent": cmd_classroom_agent,
+    "classroom-gateway": cmd_classroom_gateway,
 }
 
 
@@ -213,6 +226,13 @@ def main(argv: list[str] | None = None) -> int:
     sub.add_parser("status",    help="show agents + a health summary")
     sub.add_parser("doctor",    help="run the health checks")
     sub.add_parser("version",   help="print the installed version")
+    ca = sub.add_parser("classroom-agent",
+                        help="enrol or run this computer as a Classroom device")
+    ca.add_argument("agent_args", nargs=argparse.REMAINDER)
+    cg = sub.add_parser("classroom-gateway",
+                        help="run the restricted Classroom device gateway")
+    cg.add_argument("--host", default="0.0.0.0")
+    cg.add_argument("--port", type=int, default=5722)
     w = sub.add_parser("web",   help="run the local dashboard")
     w.add_argument("--host", default="127.0.0.1")
     w.add_argument("--port", type=int, default=5700)

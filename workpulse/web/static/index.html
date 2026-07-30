@@ -4,7 +4,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>WorkPulse</title>
-  <link rel="stylesheet" href="/static/dashboard.css?v=20260724a">
+  <link rel="stylesheet" href="/static/dashboard.css?v=20260730a">
 </head>
 <body>
 
@@ -28,12 +28,16 @@
       <span class="nav-icon">⌾</span><span>Privacy</span>
     </button>
   </nav>
-  <div class="sidebar-label optional-label">Optional connections</div>
+  <div class="sidebar-label optional-label">WorkPulse spaces</div>
   <nav class="workspace-nav optional-nav">
     <button class="workspace-nav-item optional-connection" data-workspace-target="organization" onclick="showWorkspace('organization')">
       <span class="nav-icon">◇</span>
       <span class="optional-connection-copy"><span>Organisation</span><small>Not connected</small></span>
       <span class="opt-in-pill">Opt in</span>
+    </button>
+    <button class="workspace-nav-item optional-connection" data-workspace-target="classroom" onclick="showWorkspace('classroom')">
+      <span class="nav-icon">▣</span>
+      <span class="optional-connection-copy"><span>Classroom</span><small>University pilot</small></span>
     </button>
   </nav>
   <div class="sidebar-bottom">
@@ -391,6 +395,138 @@
     </div>
   </section>
 
+  <section id="classroom-workspace" class="span-12 workspace-surface workspace-hidden" data-workspace="classroom">
+    <div class="classroom-context-bar">
+      <div>
+        <span class="capability-badge live" id="classroom-policy-badge">Normal learning</span>
+        <strong id="classroom-console-title">Institutional learning policy</strong>
+        <small id="classroom-console-time">Enrolled devices follow the institution's baseline access rules</small>
+      </div>
+      <div class="classroom-context-source">
+        <span class="sidebar-health-dot"></span>
+        <span><b>Session Console · This computer</b><small id="classroom-device-health">Checking WorkPulse signals</small></span>
+      </div>
+    </div>
+
+    <div class="classroom-console-tabs">
+      <button class="active" data-classroom-console="session" onclick="showClassroomConsole('session')">Session console</button>
+      <button data-classroom-console="student" onclick="showClassroomConsole('student')">Student device</button>
+      <button data-classroom-console="policy" onclick="showClassroomConsole('policy')">Class policy</button>
+    </div>
+
+    <div id="classroom-console-session" class="classroom-console-panel">
+      <div class="classroom-main-grid">
+        <article class="classroom-primary-card">
+          <div class="showcase-label">CURRENT SESSION</div>
+          <h3 id="classroom-session-heading">Normal learning is active</h3>
+          <p id="classroom-session-copy">WorkPulse monitors session status and surfaces exceptions that need attention.</p>
+          <div class="classroom-report-stats">
+            <div><strong id="classroom-device-count">0</strong><span>devices reporting</span></div>
+            <div><strong id="classroom-event-count">0</strong><span>policy events</span></div>
+            <div><strong id="classroom-decision-count">0</strong><span>decisions needed</span></div>
+            <div><strong id="classroom-time-remaining">Always</strong><span>policy duration</span></div>
+          </div>
+          <div class="classroom-health-meta"><span id="classroom-live-signal">Waiting for a WorkPulse signal</span></div>
+          <div class="classroom-actions">
+            <button class="btn-primary" id="classroom-start-now" onclick="startClassroomSession('class')">Start class now</button>
+            <button class="btn-ghost workspace-hidden" id="classroom-end-session" onclick="endClassroomSession()">End session early</button>
+          </div>
+        </article>
+        <article class="classroom-request-card">
+          <div class="showcase-label">NEEDS YOUR ATTENTION</div>
+          <h4 id="classroom-attention-heading">No decisions needed</h4>
+          <div id="classroom-live-events"><p class="classroom-card-copy">No policy or device-health exception needs attention.</p></div>
+        </article>
+      </div>
+
+      <div class="classroom-main-grid">
+        <article class="classroom-primary-card">
+          <div class="showcase-label">UPCOMING SESSION</div>
+          <h3>Schedule a learning policy</h3>
+          <div class="classroom-schedule-form">
+            <label>Session name<input id="classroom-session-name" value="Research Methods"></label>
+            <label>Starts at<input id="classroom-session-start" type="datetime-local"></label>
+            <label>Duration<input id="classroom-session-duration" type="number" min="5" max="480" value="90"><span>minutes</span></label>
+          </div>
+          <div class="classroom-actions">
+            <button class="btn-primary" onclick="scheduleClassroomSession()">Schedule session</button>
+            <button class="btn-ghost" onclick="showClassroomConsole('policy')">Review policy</button>
+          </div>
+          <p class="classroom-card-copy" id="classroom-scheduled-summary">At the scheduled time, enrolled devices activate the policy automatically and restore Normal learning when it ends.</p>
+        </article>
+        <article class="classroom-policy-card">
+          <div class="showcase-label">SESSION REPORT</div>
+          <h4>Session activity summary</h4>
+          <div class="classroom-report-line"><span>✓</span><p><b>Policy delivery</b><small id="classroom-report-session">Baseline rules delivered to enrolled devices</small></p></div>
+          <div class="classroom-report-line"><span>i</span><p><b>Observed exceptions</b><small id="classroom-report-decision">No policy events recorded</small></p></div>
+          <div class="classroom-report-line"><span>✓</span><p><b>Automatic restoration</b><small>Normal learning resumes when a timed session ends</small></p></div>
+        </article>
+      </div>
+      <div class="classroom-main-grid classroom-device-grid">
+        <article class="classroom-primary-card">
+          <div class="showcase-label">ENROLLED DEVICES</div>
+          <h3>Classroom computers</h3>
+          <div id="classroom-device-list" class="classroom-device-list">
+            <p class="classroom-card-copy">No student devices have paired with this console.</p>
+          </div>
+        </article>
+        <article class="classroom-policy-card">
+          <div class="showcase-label">ADD A DEVICE</div>
+          <h4>Pair another laptop</h4>
+          <p class="classroom-card-copy">The devices may use any shared network where they can reach each other. Generate a one-time code, then enter it on the managed device.</p>
+          <button class="btn-primary" onclick="createClassroomPairing()">Generate pairing code</button>
+          <div id="classroom-pairing-result" class="classroom-pairing-result workspace-hidden"></div>
+        </article>
+      </div>
+    </div>
+
+    <div id="classroom-console-student" class="classroom-console-panel workspace-hidden">
+      <div class="classroom-main-grid">
+        <article class="classroom-primary-card">
+          <div class="showcase-label">DEVICE 01</div>
+          <h3 id="classroom-student-title">Institutional safeguarding is active</h3>
+          <p id="classroom-student-message">You can use this computer normally under the institution’s learning policy.</p>
+          <div class="classroom-health-line"><span style="width:100%"></span></div>
+          <div class="classroom-health-meta"><span>Agent connected</span><span id="classroom-student-expiry">Normal learning policy</span></div>
+        </article>
+        <article class="classroom-policy-card">
+          <div class="showcase-label">SESSION ACCESS</div>
+          <h4>Resources available on this device</h4>
+          <div id="classroom-student-policy" class="classroom-baseline-list">
+            <div><span>i</span><p><b>Normal learning</b><small>No timed class policy is active.</small></p><em>Available</em></div>
+          </div>
+          <button class="btn-ghost" onclick="showClassroomConsole('policy')">View complete class policy</button>
+        </article>
+      </div>
+    </div>
+
+    <div id="classroom-console-policy" class="classroom-console-panel workspace-hidden">
+      <div class="classroom-main-grid">
+        <article class="classroom-primary-card">
+          <div class="showcase-label">CLASS RESOURCES</div>
+          <h3>Edit the class allowlist</h3>
+          <div class="classroom-policy-form">
+            <label>Allowed websites<textarea id="classroom-policy-allowed-domains" rows="6" placeholder="One domain per line"></textarea></label>
+            <label>Allowed applications<textarea id="classroom-policy-allowed-apps" rows="6" placeholder="One application per line"></textarea></label>
+          </div>
+        </article>
+        <article class="classroom-policy-card">
+          <div class="showcase-label">RESTRICTIONS</div>
+          <h4>Explicitly restricted resources</h4>
+          <div class="classroom-policy-form">
+            <label>Restricted websites<textarea id="classroom-policy-blocked-domains" rows="4" placeholder="One domain per line"></textarea></label>
+            <label>Restricted applications<textarea id="classroom-policy-blocked-apps" rows="4" placeholder="One application per line"></textarea></label>
+          </div>
+          <div class="classroom-actions">
+            <button class="btn-primary" onclick="saveClassroomPolicy()">Save class policy</button>
+            <button class="btn-ghost" onclick="loadClassroomPolicy()">Discard changes</button>
+          </div>
+          <p class="classroom-card-copy" id="classroom-policy-saved">Saved policies are used by the next class session and sent to every enrolled device.</p>
+        </article>
+      </div>
+    </div>
+  </section>
+
   <section id="privacy-workspace" class="span-12 workspace-surface workspace-hidden" data-workspace="privacy">
     <div class="section-intro">
       <div>
@@ -638,6 +774,6 @@
 
 <div class="toast" id="toast"></div>
 
-  <script src="/static/dashboard.js?v=20260727a"></script>
+  <script src="/static/dashboard.js?v=20260729d"></script>
 </body>
 </html>
