@@ -340,13 +340,23 @@ def render_windows_task_xml(job: dict, *, python: Path | None = None,
     # or interval-based <Repetition><Interval>PT30M</Interval>
     interval_secs = job.get("interval_seconds")
     if job.get("daemon"):
-        # Long-running sensor: run at logon, restart on failure. On Windows
-        # a LogonTrigger + RestartOnFailure is the analog of launchd's
-        # RunAtLoad + KeepAlive.
+        # Long-running sensor: run at logon, restart on failure, and re-launch
+        # whenever the interactive desktop becomes available again (unlock /
+        # console-connect / remote-connect). On Windows a LogonTrigger +
+        # SessionStateChangeTriggers + RestartOnFailure is the analog of
+        # launchd's RunAtLoad + KeepAlive: the sensor needs a live desktop
+        # session, so a laptop that sleeps/locks would otherwise leave a dead
+        # sensor until the *next* logon. MultipleInstancesPolicy=IgnoreNew
+        # means these extra triggers never spawn a duplicate while it is up.
         return f"""<?xml version="1.0" encoding="UTF-16"?>
 <Task version="1.4" xmlns="http://schemas.microsoft.com/windows/2004/02/mit/task">
   <RegistrationInfo><Description>{job['description']}</Description></RegistrationInfo>
-  <Triggers><LogonTrigger><Enabled>true</Enabled></LogonTrigger></Triggers>
+  <Triggers>
+    <LogonTrigger><Enabled>true</Enabled></LogonTrigger>
+    <SessionStateChangeTrigger><Enabled>true</Enabled><StateChange>SessionUnlock</StateChange></SessionStateChangeTrigger>
+    <SessionStateChangeTrigger><Enabled>true</Enabled><StateChange>ConsoleConnect</StateChange></SessionStateChangeTrigger>
+    <SessionStateChangeTrigger><Enabled>true</Enabled><StateChange>RemoteConnect</StateChange></SessionStateChangeTrigger>
+  </Triggers>
   <Settings>
     <MultipleInstancesPolicy>IgnoreNew</MultipleInstancesPolicy>
     <DisallowStartIfOnBatteries>false</DisallowStartIfOnBatteries>
