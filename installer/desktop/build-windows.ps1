@@ -5,11 +5,16 @@ $Python = (Get-Command python -ErrorAction Stop).Source
 if ($LASTEXITCODE -ne 0) { throw "WorkPulse requires Python 3.11 or newer to build." }
 $Version = (& $Python -c "from workpulse import __version__; print(__version__)").Trim()
 $Build = Join-Path $PSScriptRoot "build"
+$Artifacts = Join-Path $Root "release-artifacts"
 
 & $Python -m pip install --upgrade pip
 & $Python -m pip install -e "${Root}[win]" pyinstaller pystray pillow
 if (Test-Path $Build) { Remove-Item -Recurse -Force $Build }
 New-Item -ItemType Directory -Force -Path $Build | Out-Null
+# Historical release files remain in Git, but each Actions artifact should
+# contain only the installer created by this run.
+Get-ChildItem $Artifacts -Filter "*Windows.exe" -ErrorAction SilentlyContinue |
+  Remove-Item -Force
 
 & $Python -m PyInstaller --noconfirm --clean --windowed `
   --name WorkPulse `

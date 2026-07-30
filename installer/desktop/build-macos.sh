@@ -28,6 +28,8 @@ $PYTHON -m pip install --upgrade pip
 $PYTHON -m pip install -e '.[mac]' pyinstaller pystray pillow
 rm -rf "$BUILD"
 mkdir -p "$BUILD" "$ARTIFACTS"
+# Do not upload every historical package as the artifact for this run.
+find "$ARTIFACTS" -maxdepth 1 -type f -name '*macOS.pkg' -delete
 
 $PYTHON -m PyInstaller --noconfirm --clean --windowed \
   --name WorkPulse \
