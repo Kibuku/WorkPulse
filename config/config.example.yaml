@@ -36,14 +36,14 @@ streams:
 watcher:
   # Watch real work locations, NOT all of ~. Watching the whole home dir
   # floods the file signal with app cache/state churn (99% noise, measured).
-  # OneDrive / SharePoint / iCloud sync locally under ~/Library/CloudStorage,
-  # so real project files (with project names in the path) are captured there.
+  # Cloud locations are discovered per platform: macOS uses CloudStorage and
+  # Windows automatically adds the OneDrive folders registered for the user.
   watch_roots:
     - "~/Documents"
     - "~/Desktop"
     - "~/Downloads"
     - "~/Library/CloudStorage"   # macOS: OneDrive / SharePoint / Google Drive
-    # - "D:/"                    # Windows: add drives / OneDrive path as needed
+    # - "D:/"                    # Windows: add other work drives as needed
 
   # Directory names/paths to skip entirely (never recurse into).
   ignore_dirs:

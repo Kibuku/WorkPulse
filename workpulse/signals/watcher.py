@@ -52,6 +52,39 @@ def _expand_root(root_str: str) -> Path:
     return p.resolve()
 
 
+def _watch_roots(
+    configured: list[str],
+    *,
+    platform: str | None = None,
+    environ: dict[str, str] | None = None,
+) -> list[Path]:
+    """Resolve configured roots and add platform-native cloud folders.
+
+    The example configuration is shared by macOS and Windows. Platform-only
+    defaults are ignored on the other OS, while Windows OneDrive locations are
+    discovered from the environment set by the OneDrive client.
+    """
+    platform = platform or sys.platform
+    environ = os.environ if environ is None else environ
+    roots: list[Path] = []
+
+    for value in configured:
+        normalised = value.replace("\\", "/")
+        if platform == "win32" and normalised.endswith("/Library/CloudStorage"):
+            continue
+        roots.append(_expand_root(value))
+
+    if platform == "win32":
+        for key in ("OneDriveCommercial", "OneDriveConsumer", "OneDrive"):
+            value = environ.get(key)
+            if value:
+                roots.append(Path(value).expanduser().resolve())
+
+    # Preserve ordering while avoiding duplicate roots (the three OneDrive
+    # environment variables often point to the same directory).
+    return list(dict.fromkeys(roots))
+
+
 def _is_ignored_dir(path: Path, ignore_dirs: list[str]) -> bool:
     """Return True if path falls under any ignored directory."""
     path_str = str(path).replace("\\", "/")
@@ -226,7 +259,7 @@ def main() -> None:
     logs_dir = resolve(cfg["paths"]["logs"])
     ensure_dir(logs_dir)
 
-    roots = [_expand_root(r) for r in cfg["watcher"]["watch_roots"]]
+    roots = _watch_roots(cfg["watcher"]["watch_roots"])
 
     log.info("WorkPulse file watcher starting")
     log.info("  watching : %s", [str(r) for r in roots])
