@@ -224,6 +224,9 @@ def test_windows_xml_daemon_uses_logon_trigger():
     xml = scheduler.render_windows_task_xml(j)
     assert "<LogonTrigger>" in xml
     assert "<RestartOnFailure>" in xml
+    assert "<DisallowStartIfOnBatteries>false</DisallowStartIfOnBatteries>" in xml
+    assert "<StopIfGoingOnBatteries>false</StopIfGoingOnBatteries>" in xml
+    assert "<StartWhenAvailable>true</StartWhenAvailable>" in xml
 
 
 def test_windows_xml_calendar_weekly_uses_sunday():
