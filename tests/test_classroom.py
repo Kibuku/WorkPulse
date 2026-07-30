@@ -159,3 +159,53 @@ def test_console_status_excludes_synthetic_devices(monkeypatch):
     assert [event["device_id"] for event in status["events"]] == ["Device LIVE"]
     assert status["latest_signal"]["device_name"] == "Lab Laptop"
     assert status["latest_signal"]["app"] == "Microsoft Word"
+
+
+def test_classroom_invitation_accepts_private_gateway_only():
+    import workpulse.web.app as appmod
+
+    assert appmod._validate_classroom_server("http://10.10.1.80:5722") == \
+        "http://10.10.1.80:5722"
+
+    for unsafe in (
+        "https://10.10.1.80:5722",
+        "http://10.10.1.80:9999",
+        "http://example.com:5722",
+        "http://8.8.8.8:5722",
+    ):
+        try:
+            appmod._validate_classroom_server(unsafe)
+            assert False, unsafe
+        except ValueError:
+            pass
+
+
+def test_local_join_enrolls_and_starts_agent(monkeypatch):
+    from fastapi.testclient import TestClient
+    import workpulse.classroom_agent as agent
+    import workpulse.web.app as appmod
+
+    calls = {}
+
+    def fake_enroll(server, code, name):
+        calls["enroll"] = (server, code, name)
+        return {"device_id": "Device ABCD", "device_name": name, "token": "secret"}
+
+    monkeypatch.setattr(agent, "enroll", fake_enroll)
+    monkeypatch.setattr(agent, "start_background",
+                        lambda: {"running": True, "started": True})
+
+    response = TestClient(appmod.app).post(
+        "/api/v2/classroom/local-agent/join",
+        json={
+            "server": "http://10.10.1.80:5722",
+            "code": "vqj-324",
+            "name": "Library Laptop",
+        },
+    )
+
+    assert response.status_code == 200
+    assert calls["enroll"] == (
+        "http://10.10.1.80:5722", "VQJ-324", "Library Laptop"
+    )
+    assert response.json()["running"] is True

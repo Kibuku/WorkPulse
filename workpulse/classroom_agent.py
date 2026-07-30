@@ -6,6 +6,7 @@ import argparse
 import json
 import platform
 import sys
+import threading
 import time
 import urllib.error
 import urllib.request
@@ -19,6 +20,9 @@ from workpulse.common import ROOT, ensure_dir
 
 
 CONFIG_PATH = ROOT / "config" / "classroom-agent.json"
+_agent_thread: threading.Thread | None = None
+_agent_lock = threading.Lock()
+_last_remote_status: dict = {}
 
 
 def _request(url: str, *, method: str = "GET", body: dict | None = None,
@@ -84,6 +88,7 @@ def _foreground() -> dict:
 
 
 def run(interval: int = 5) -> None:
+    global _last_remote_status
     if not CONFIG_PATH.exists():
         raise RuntimeError("this device is not enrolled; run classroom-agent enroll first")
     cfg = json.loads(CONFIG_PATH.read_text(encoding="utf-8"))
@@ -103,6 +108,7 @@ def run(interval: int = 5) -> None:
                 body={"signal": signal},
                 token=cfg["token"],
             )
+            _last_remote_status = result.get("status") or {}
             mode = result["status"]["mode"]
             decision = result["decision"]["decision"]
             print(f"{datetime.now():%H:%M:%S}  {mode:<6}  {decision:<12}  "
@@ -110,6 +116,44 @@ def run(interval: int = 5) -> None:
         except Exception as exc:
             print(f"{datetime.now():%H:%M:%S}  offline  {exc}")
         time.sleep(max(2, interval))
+
+
+def start_background(interval: int = 5) -> dict:
+    """Start this device's enrolled agent once, owned by the local dashboard."""
+    global _agent_thread
+    with _agent_lock:
+        if _agent_thread and _agent_thread.is_alive():
+            return {"running": True, "started": False}
+        if not CONFIG_PATH.exists():
+            raise RuntimeError("this device is not enrolled")
+        _agent_thread = threading.Thread(
+            target=run,
+            kwargs={"interval": interval},
+            daemon=True,
+            name="workpulse-classroom-agent",
+        )
+        _agent_thread.start()
+        return {"running": True, "started": True}
+
+
+def local_status() -> dict:
+    enrolled = CONFIG_PATH.exists()
+    cfg = {}
+    if enrolled:
+        try:
+            cfg = json.loads(CONFIG_PATH.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            enrolled = False
+    return {
+        "enrolled": enrolled,
+        "running": bool(_agent_thread and _agent_thread.is_alive()),
+        "device_id": cfg.get("device_id"),
+        "device_name": cfg.get("device_name"),
+        "server": cfg.get("server"),
+        "mode": _last_remote_status.get("mode", "normal"),
+        "active_session": _last_remote_status.get("active_session"),
+        "scheduled_session": _last_remote_status.get("scheduled_session"),
+    }
 
 
 def main(argv: list[str] | None = None) -> int:

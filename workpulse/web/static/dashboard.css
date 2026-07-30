@@ -300,6 +300,33 @@ body {
   outline: 3px solid rgba(82, 119, 237, .11);
 }
 .classroom-device-list { display: grid; gap: 8px; margin-top: 16px; }
+.classroom-join-form { display: grid; gap: 10px; margin-top: 16px; }
+.classroom-join-form label {
+  display: grid;
+  gap: 5px;
+  color: #667389;
+  font-size: 9px;
+  font-weight: 800;
+  letter-spacing: .45px;
+  text-transform: uppercase;
+}
+.classroom-join-form input {
+  width: 100%;
+  box-sizing: border-box;
+  border: 1px solid #d9e0ea;
+  border-radius: 9px;
+  padding: 11px 12px;
+  background: #fff;
+  color: #1c273a;
+  font: inherit;
+  font-size: 11px;
+  text-transform: none;
+}
+.classroom-join-form input:focus {
+  border-color: #718fe2;
+  outline: 3px solid rgba(82, 119, 237, .11);
+}
+.classroom-join-form small { min-height: 16px; color: var(--text-soft); font-size: 9px; }
 .classroom-enrolled-device {
   display: grid;
   grid-template-columns: 10px 1fr;

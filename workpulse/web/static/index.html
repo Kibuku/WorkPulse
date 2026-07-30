@@ -473,8 +473,8 @@
         <article class="classroom-policy-card">
           <div class="showcase-label">ADD A DEVICE</div>
           <h4>Pair another laptop</h4>
-          <p class="classroom-card-copy">The devices may use any shared network where they can reach each other. Generate a one-time code, then enter it on the managed device.</p>
-          <button class="btn-primary" onclick="createClassroomPairing()">Generate pairing code</button>
+          <p class="classroom-card-copy">The devices may use any shared network where they can reach each other. Create an invitation and paste it into WorkPulse on the other computer.</p>
+          <button class="btn-primary" onclick="createClassroomPairing()">Create invitation</button>
           <div id="classroom-pairing-result" class="classroom-pairing-result workspace-hidden"></div>
         </article>
       </div>
@@ -486,16 +486,28 @@
           <div class="showcase-label" id="classroom-student-device">NO DEVICE SELECTED</div>
           <h3 id="classroom-student-title">No enrolled device</h3>
           <p id="classroom-student-message">Pair a classroom computer to see its live policy view.</p>
-          <div class="classroom-health-line"><span style="width:100%"></span></div>
+          <div class="classroom-health-line"><span id="classroom-student-health-bar" style="width:0"></span></div>
           <div class="classroom-health-meta"><span id="classroom-student-connection">Waiting for enrolment</span><span id="classroom-student-expiry"></span></div>
         </article>
         <article class="classroom-policy-card">
-          <div class="showcase-label">SESSION ACCESS</div>
-          <h4>Resources available on this device</h4>
-          <div id="classroom-student-policy" class="classroom-baseline-list">
-            <div><span>i</span><p><b>Normal learning</b><small>No timed class policy is active.</small></p><em>Available</em></div>
+          <div class="showcase-label">JOIN A CLASSROOM</div>
+          <h4>Connect this computer</h4>
+          <p class="classroom-card-copy">Paste the invitation from the Session Console. WorkPulse handles the address, pairing code and agent automatically.</p>
+          <div class="classroom-join-form">
+            <label>Invitation<input id="classroom-join-invitation" placeholder="Paste WorkPulse classroom invitation"></label>
+            <label>Device name<input id="classroom-join-name" placeholder="e.g. Library Laptop 12"></label>
+            <button class="btn-primary" id="classroom-join-button" onclick="joinClassroomDevice()">Connect this device</button>
+            <small id="classroom-join-status"></small>
           </div>
-          <button class="btn-ghost" onclick="showClassroomConsole('policy')">View complete class policy</button>
+        </article>
+      </div>
+      <div class="classroom-main-grid">
+        <article class="classroom-primary-card">
+          <div class="showcase-label">SESSION ACCESS</div>
+          <h3>Resources available on this device</h3>
+          <div id="classroom-student-policy" class="classroom-baseline-list">
+            <div><span>i</span><p><b>No live device</b><small>Connect this computer to receive its classroom policy.</small></p><em>Not connected</em></div>
+          </div>
         </article>
       </div>
     </div>

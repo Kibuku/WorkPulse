@@ -2584,6 +2584,7 @@ function focusPrimaryAction() {
 let classroomDecision = '';
 let activeClassroomMode = 'overview';
 let classroomPollTimer = null;
+let localClassroomAgent = null;
 
 function showClassroomConsole(name) {
   const next = ['session', 'student', 'policy'].includes(name) ? name : 'session';
@@ -2594,6 +2595,7 @@ function showClassroomConsole(name) {
     button.classList.toggle('active', button.dataset.classroomConsole === next);
   });
   if (next === 'policy') loadClassroomPolicy();
+  if (next === 'student') fetchLocalClassroomAgent();
   fetchClassroomStatus();
 }
 
@@ -2648,17 +2650,138 @@ async function createClassroomPairing() {
   const result = await response.json();
   const box = document.getElementById('classroom-pairing-result');
   if (!box) return;
-  const args = ' classroom-agent enroll --server ' + result.server +
-    ' --code ' + result.code + ' --name "Lab Laptop"';
-  const macCommand = '/Applications/WorkPulse.app/Contents/MacOS/WorkPulse --cli' + args;
-  const windowsCommand = '"%LOCALAPPDATA%\\Programs\\WorkPulse\\WorkPulse.exe" --cli' + args;
   box.classList.remove('workspace-hidden');
   box.innerHTML =
     '<span>ONE-TIME CODE</span><strong>' + escapeHtml(result.code) + '</strong>' +
     '<small>Expires ' + escapeHtml(new Date(result.expires_at).toLocaleTimeString()) + '</small>' +
-    '<label>macOS</label><code>' + escapeHtml(macCommand) + '</code>' +
-    '<label>Windows</label><code>' + escapeHtml(windowsCommand) + '</code>' +
-    '<p>After enrolment, keep the agent running with the matching WorkPulse executable and <b>--cli classroom-agent run</b>.</p>';
+    '<label>Invitation</label><code>' + escapeHtml(result.invitation) + '</code>' +
+    '<button class="btn-ghost" onclick="copyClassroomInvitation(this)" data-invitation="' +
+      escapeHtml(result.invitation) + '">Copy invitation</button>' +
+    '<p>On the other computer, open WorkPulse → Classroom → Device view and paste this invitation.</p>';
+}
+
+async function copyClassroomInvitation(button) {
+  const invitation = button.dataset.invitation || '';
+  try {
+    await navigator.clipboard.writeText(invitation);
+    button.textContent = 'Invitation copied';
+  } catch (_) {
+    showToast('Select and copy the invitation shown above');
+  }
+}
+
+function parseClassroomInvitation(value) {
+  const invitation = new URL((value || '').trim());
+  if (invitation.protocol !== 'workpulse:' || invitation.hostname !== 'classroom' ||
+      invitation.pathname !== '/join') throw new Error('This is not a WorkPulse Classroom invitation');
+  const server = invitation.searchParams.get('server');
+  const code = invitation.searchParams.get('code');
+  if (!server || !code) throw new Error('The invitation is incomplete');
+  return {server, code};
+}
+
+async function joinClassroomDevice() {
+  const invitationInput = document.getElementById('classroom-join-invitation');
+  const nameInput = document.getElementById('classroom-join-name');
+  const status = document.getElementById('classroom-join-status');
+  const button = document.getElementById('classroom-join-button');
+  let invitation;
+  try {
+    invitation = parseClassroomInvitation(invitationInput && invitationInput.value);
+  } catch (error) {
+    if (status) status.textContent = error.message;
+    return;
+  }
+  if (button) {
+    button.disabled = true;
+    button.textContent = 'Connecting…';
+  }
+  if (status) status.textContent = 'Contacting the Session Console…';
+  try {
+    const response = await fetch('/api/v2/classroom/local-agent/join', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({
+        server: invitation.server,
+        code: invitation.code,
+        name: (nameInput && nameInput.value || '').trim() || 'Classroom computer',
+      }),
+    });
+    const result = await response.json();
+    if (!response.ok) throw new Error(result.error || 'Could not connect this device');
+    if (status) status.textContent = result.device_name + ' is connected and reporting.';
+    if (button) button.textContent = 'Connected';
+    showToast(result.device_name + ' connected to the Session Console');
+    fetchLocalClassroomAgent();
+  } catch (error) {
+    if (status) status.textContent = error.message;
+    if (button) {
+      button.disabled = false;
+      button.textContent = 'Try again';
+    }
+  }
+}
+
+function renderLocalClassroomAgent(agent) {
+  localClassroomAgent = agent || {};
+  const device = document.getElementById('classroom-student-device');
+  const title = document.getElementById('classroom-student-title');
+  const message = document.getElementById('classroom-student-message');
+  const connection = document.getElementById('classroom-student-connection');
+  const expiry = document.getElementById('classroom-student-expiry');
+  const joinStatus = document.getElementById('classroom-join-status');
+  const studentPolicy = document.getElementById('classroom-student-policy');
+  const healthBar = document.getElementById('classroom-student-health-bar');
+  const active = localClassroomAgent.active_session;
+  if (!localClassroomAgent.enrolled) {
+    if (device) device.textContent = 'THIS COMPUTER · NOT CONNECTED';
+    if (title) title.textContent = 'Join a classroom';
+    if (message) message.textContent = 'Paste an invitation to connect this computer to a Session Console.';
+    if (connection) connection.textContent = 'Waiting for enrolment';
+    if (expiry) expiry.textContent = '';
+    if (healthBar) healthBar.style.width = '0';
+    if (studentPolicy) studentPolicy.innerHTML = '<div><span>i</span><p><b>No live device</b>' +
+      '<small>Paste an invitation to connect this computer.</small></p><em>Not connected</em></div>';
+    return;
+  }
+  if (device) device.textContent =
+    (localClassroomAgent.device_name || 'Classroom computer') + ' · ' + localClassroomAgent.device_id;
+  if (title) title.textContent = active ? active.title : 'Normal learning';
+  if (message) message.textContent = active
+    ? 'The class policy is active. Approved activity stays quiet and exceptions are sent to the Session Console.'
+    : 'This computer is connected and following the institution’s normal learning policy.';
+  if (connection) connection.textContent = localClassroomAgent.running ? 'Agent connected' : 'Agent needs attention';
+  if (healthBar) healthBar.style.width = localClassroomAgent.running ? '100%' : '35%';
+  if (expiry) expiry.textContent = active
+    ? 'Ends ' + new Date(active.ends_at).toLocaleTimeString([], {hour: '2-digit', minute: '2-digit'})
+    : 'Normal learning policy';
+  if (joinStatus) joinStatus.textContent =
+    (localClassroomAgent.device_name || 'This device') + ' is already connected.';
+  if (studentPolicy) {
+    if (!active) {
+      studentPolicy.innerHTML = '<div><span>i</span><p><b>Normal learning</b>' +
+        '<small>No timed class policy is active.</small></p><em>Available</em></div>';
+    } else {
+      const policy = active.policy || {};
+      const domains = (policy.allowed_domains || []).slice(0, 4);
+      const apps = (policy.allowed_apps || []).slice(0, 4);
+      studentPolicy.innerHTML =
+        '<div><span>✓</span><p><b>Approved websites</b><small>' +
+        escapeHtml(domains.join(' · ') || 'No website allowlist') +
+        '</small></p><em>Allowed</em></div>' +
+        '<div><span>✓</span><p><b>Approved applications</b><small>' +
+        escapeHtml(apps.join(' · ') || 'No application allowlist') +
+        '</small></p><em>Allowed</em></div>';
+    }
+  }
+}
+
+async function fetchLocalClassroomAgent() {
+  try {
+    const response = await fetch('/api/v2/classroom/local-agent');
+    if (!response.ok) return;
+    renderLocalClassroomAgent(await response.json());
+  } catch (_) {}
 }
 
 function showClassroomMode(name) {
@@ -2823,54 +2946,7 @@ function renderClassroomStatus(status) {
   if (scheduledSummary && scheduled) scheduledSummary.textContent =
     scheduled.title + ' will activate automatically at ' + new Date(scheduled.started_at).toLocaleString() +
     ' and restore Normal learning at ' + new Date(scheduled.ends_at).toLocaleTimeString([], {hour: '2-digit', minute: '2-digit'}) + '.';
-  const studentTitle = document.getElementById('classroom-student-title');
-  const studentMessage = document.getElementById('classroom-student-message');
-  const studentExpiry = document.getElementById('classroom-student-expiry');
-  const studentDevice = document.getElementById('classroom-student-device');
-  const studentConnection = document.getElementById('classroom-student-connection');
-  const selectedDevice = devices[0] || null;
-  const selectedSeen = selectedDevice && selectedDevice.last_seen ? new Date(selectedDevice.last_seen) : null;
-  const selectedOnline = selectedSeen && (Date.now() - selectedSeen.getTime()) < 30000;
-  if (studentDevice) studentDevice.textContent = selectedDevice
-    ? selectedDevice.name + ' · ' + selectedDevice.id
-    : 'NO DEVICE SELECTED';
-  if (studentTitle) studentTitle.textContent = selectedDevice
-    ? (active ? active.title : 'Normal learning')
-    : 'No enrolled device';
-  if (studentMessage) studentMessage.textContent = selectedDevice
-    ? (active
-      ? 'Use the approved class resources normally. WorkPulse will guide you when a resource falls outside the session policy.'
-      : 'You can use this computer normally under the institution’s learning policy.')
-    : 'Pair a classroom computer to see its live policy view.';
-  if (studentConnection) studentConnection.textContent = selectedDevice
-    ? (selectedOnline ? 'Agent connected' : 'Offline · last seen ' + (selectedSeen ? selectedSeen.toLocaleTimeString() : 'never'))
-    : 'Waiting for enrolment';
-  if (studentExpiry) studentExpiry.textContent = selectedDevice
-    ? (active
-      ? 'Restores Normal learning at ' + new Date(active.ends_at).toLocaleTimeString([], {hour: '2-digit', minute: '2-digit'})
-      : 'Normal learning policy')
-    : '';
-  const studentPolicy = document.getElementById('classroom-student-policy');
-  if (studentPolicy) {
-    if (!selectedDevice) {
-      studentPolicy.innerHTML = '<div><span>i</span><p><b>No live device</b>' +
-        '<small>Generate a pairing code and enrol a classroom computer.</small></p><em>Not connected</em></div>';
-    } else if (!active) {
-      studentPolicy.innerHTML = '<div><span>i</span><p><b>Normal learning</b>' +
-        '<small>No timed class policy is active.</small></p><em>Available</em></div>';
-    } else {
-      const policy = active.policy || {};
-      const domains = (policy.allowed_domains || []).slice(0, 4);
-      const apps = (policy.allowed_apps || []).slice(0, 4);
-      studentPolicy.innerHTML =
-        '<div><span>✓</span><p><b>Approved websites</b><small>' +
-        escapeHtml(domains.join(' · ') || 'No website allowlist') +
-        '</small></p><em>Allowed</em></div>' +
-        '<div><span>✓</span><p><b>Approved applications</b><small>' +
-        escapeHtml(apps.join(' · ') || 'No application allowlist') +
-        '</small></p><em>Allowed</em></div>';
-    }
-  }
+  if (localClassroomAgent) renderLocalClassroomAgent(localClassroomAgent);
 }
 
 async function fetchClassroomStatus() {
@@ -2971,6 +3047,7 @@ document.addEventListener('DOMContentLoaded', function () {
     if (activeWorkspace === 'classroom') {
       fetch('/api/v2/classroom/status')
         .then(r => r.json()).then(renderClassroomStatus).catch(() => {});
+      fetchLocalClassroomAgent();
     }
   }, 5000);
 });

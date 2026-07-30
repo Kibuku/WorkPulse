@@ -13,6 +13,7 @@ Run standalone:
 from __future__ import annotations
 
 import asyncio
+import ipaddress
 import io
 import json
 import re
@@ -22,6 +23,7 @@ from collections import defaultdict
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 from typing import Optional
+from urllib.parse import urlparse
 
 # Paths/filenames to suppress from the dashboard display
 _NOISE_PATTERNS = [
@@ -2057,8 +2059,53 @@ def api_classroom_pairing(request: Request):
                 candidates.append(address.address)
     host = candidates[0] if candidates else "SESSION-CONSOLE-IP"
     result["server"] = f"http://{host}:5722"
+    result["invitation"] = (
+        "workpulse://classroom/join"
+        f"?server={result['server']}&code={result['code']}"
+    )
     result["network_addresses"] = candidates
     return result
+
+
+def _validate_classroom_server(server: str) -> str:
+    parsed = urlparse(server.strip())
+    if parsed.scheme != "http" or not parsed.hostname or parsed.port != 5722:
+        raise ValueError("invitation does not contain a valid Classroom console")
+    try:
+        address = ipaddress.ip_address(parsed.hostname)
+    except ValueError as exc:
+        raise ValueError("Classroom console must use its local network address") from exc
+    if not (address.is_private or address.is_loopback):
+        raise ValueError("Classroom console is not on a private network")
+    return f"http://{parsed.hostname}:5722"
+
+
+@app.get("/api/v2/classroom/local-agent")
+def api_classroom_local_agent():
+    from workpulse import classroom_agent
+    return classroom_agent.local_status()
+
+
+@app.post("/api/v2/classroom/local-agent/join")
+async def api_classroom_local_agent_join(request: Request):
+    from workpulse import classroom_agent
+    payload = await request.json()
+    try:
+        server = _validate_classroom_server(str(payload.get("server") or ""))
+        result = classroom_agent.enroll(
+            server,
+            str(payload.get("code") or "").strip().upper(),
+            str(payload.get("name") or "").strip() or "Classroom computer",
+        )
+        background = classroom_agent.start_background()
+    except (RuntimeError, OSError, ValueError) as exc:
+        return JSONResponse({"error": str(exc)}, status_code=400)
+    return {
+        "ok": True,
+        "device_id": result["device_id"],
+        "device_name": result["device_name"],
+        **background,
+    }
 
 
 @app.post("/api/v2/classroom/agent/enroll")
@@ -2192,6 +2239,12 @@ def dashboard():
 def run(host: str = "127.0.0.1", port: int = PORT, start_watcher_on_launch: bool = False):
     if start_watcher_on_launch:
         start_watcher()
+    try:
+        from workpulse import classroom_agent
+        if classroom_agent.local_status()["enrolled"]:
+            classroom_agent.start_background()
+    except (RuntimeError, OSError, ValueError):
+        pass
     uvicorn.run(app, host=host, port=port, log_level="warning")
 
 
