@@ -1,47 +1,47 @@
 {
-  "version": "2.0.14",
-  "published_at": "2026-08-04T13:15:11.398793+00:00",
+  "version": "2.0.15",
+  "published_at": "2026-08-04T14:14:17.120297+00:00",
   "notes": "Reliability, tracking and experience improvements.",
   "products": {
     "workpulse-institution": {
       "platforms": {
         "macos": {
-          "filename": "WorkPulseInstitution-2.0.14-macOS.pkg",
-          "url": "https://njiani-flame.vercel.app/downloads/WorkPulseInstitution-2.0.14-macOS.pkg",
-          "sha256": "73360fa302398019286b860bbb819785c9fca1849301ba15aff628ee02c991a5"
+          "filename": "WorkPulseInstitution-2.0.15-macOS.pkg",
+          "url": "https://njiani-flame.vercel.app/downloads/WorkPulseInstitution-2.0.15-macOS.pkg",
+          "sha256": "fe6f708b69c7ed1ab047942f7ae061f496f2094608872fc270274e2438ab7067"
         },
         "windows": {
-          "filename": "WorkPulseInstitutionSetup-2.0.14-Windows.exe",
-          "url": "https://njiani-flame.vercel.app/downloads/WorkPulseInstitutionSetup-2.0.14-Windows.exe",
-          "sha256": "80d3ca0c42422131095eb6979f401c8a54a3bac010d754285fffe4709a004aeb"
+          "filename": "WorkPulseInstitutionSetup-2.0.15-Windows.exe",
+          "url": "https://njiani-flame.vercel.app/downloads/WorkPulseInstitutionSetup-2.0.15-Windows.exe",
+          "sha256": "14f3f8480a32485ab627482742d16f1a6058b94c12a174e669a9a834a7d52e1e"
         }
       }
     },
     "learning-facilitator": {
       "platforms": {
         "macos": {
-          "filename": "LearningPulseFacilitator-2.0.14-macOS.pkg",
-          "url": "https://njiani-flame.vercel.app/downloads/LearningPulseFacilitator-2.0.14-macOS.pkg",
-          "sha256": "6c06118e9502d6f7749717957cd08020345f3f92ddff49dcf6875e592dc83761"
+          "filename": "LearningPulseFacilitator-2.0.15-macOS.pkg",
+          "url": "https://njiani-flame.vercel.app/downloads/LearningPulseFacilitator-2.0.15-macOS.pkg",
+          "sha256": "961a56aab0162c26a9670c8dffadf8e0271a8d9d5c94fcc445d6a5c31cee180a"
         },
         "windows": {
-          "filename": "LearningPulseFacilitatorSetup-2.0.14-Windows.exe",
-          "url": "https://njiani-flame.vercel.app/downloads/LearningPulseFacilitatorSetup-2.0.14-Windows.exe",
-          "sha256": "173aba645c5a2260f9ae60a3479c5908161e58a189e77c3d857074078edbf50d"
+          "filename": "LearningPulseFacilitatorSetup-2.0.15-Windows.exe",
+          "url": "https://njiani-flame.vercel.app/downloads/LearningPulseFacilitatorSetup-2.0.15-Windows.exe",
+          "sha256": "b95ffed30aae9d7d2e5032f7679c77add9d456234c9bae61a63aa831fe44a884"
         }
       }
     },
     "learning-device": {
       "platforms": {
         "macos": {
-          "filename": "LearningPulseDevice-2.0.14-macOS.pkg",
-          "url": "https://njiani-flame.vercel.app/downloads/LearningPulseDevice-2.0.14-macOS.pkg",
-          "sha256": "dd78a9df91372110b07efc18d1d1a4f2d566ac7f73d7bc4d3cbf5bc36bd6222f"
+          "filename": "LearningPulseDevice-2.0.15-macOS.pkg",
+          "url": "https://njiani-flame.vercel.app/downloads/LearningPulseDevice-2.0.15-macOS.pkg",
+          "sha256": "0aacbefae11ff28c69abd6fa2cfb9e9b1c8bd79d72b2acec76ea37428af29f59"
         },
         "windows": {
-          "filename": "LearningPulseDeviceSetup-2.0.14-Windows.exe",
-          "url": "https://njiani-flame.vercel.app/downloads/LearningPulseDeviceSetup-2.0.14-Windows.exe",
-          "sha256": "0e7a83e68715c00e6485e78977af15940a10ae585e6283b564c29de20f8ea469"
+          "filename": "LearningPulseDeviceSetup-2.0.15-Windows.exe",
+          "url": "https://njiani-flame.vercel.app/downloads/LearningPulseDeviceSetup-2.0.15-Windows.exe",
+          "sha256": "7a03211506fdc4f1c3c233a8822a5cba452ee95e698ce2fb5919ed6392a5bf34"
         }
       }
     }
