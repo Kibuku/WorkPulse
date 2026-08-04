@@ -8,7 +8,10 @@ if [[ -n "${PYTHON:-}" ]]; then
 elif [[ -x "$ROOT/.venv/bin/python" ]]; then
   PYTHON="$ROOT/.venv/bin/python"
 else
-  for candidate in python3.13 python3.12 python3.11 python3; do
+  # GitHub setup-python exposes its managed interpreter as `python`. Prefer it
+  # over Homebrew's versioned executables, which are PEP-668 externally managed
+  # and reject the build dependency installation.
+  for candidate in python python3.12 python3.11 python3.13 python3; do
     if command -v "$candidate" >/dev/null 2>&1 \
       && "$candidate" -c 'import sys; raise SystemExit(sys.version_info < (3, 11))'; then
       PYTHON="$candidate"
