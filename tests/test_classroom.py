@@ -113,7 +113,7 @@ def test_saved_policy_is_used_by_next_session(tmp_path: Path):
     assert status["active_session"]["policy"]["allowed_domains"] == ["example.edu"]
 
 
-def test_device_pairing_is_one_time_and_heartbeat_attributes_device(tmp_path: Path):
+def test_class_invitation_enrolls_multiple_devices_and_attributes_heartbeat(tmp_path: Path):
     vault = tmp_path / "classroom.db"
     pairing = classroom.create_pairing(path=vault)
     enrolled = classroom.enroll_device(
@@ -125,11 +125,13 @@ def test_device_pairing_is_one_time_and_heartbeat_attributes_device(tmp_path: Pa
     }, path=vault)
     assert result["decision"]["event"]["device_id"] == enrolled["device_id"]
     assert classroom.devices(path=vault)[0]["name"] == "Lab Laptop"
-    try:
-        classroom.enroll_device(pairing["code"], "Another", "Windows", path=vault)
-        assert False, "pairing code should be single use"
-    except ValueError:
-        pass
+    second = classroom.enroll_device(
+        pairing["code"], "Another", "Windows", path=vault
+    )
+    assert second["device_id"] != enrolled["device_id"]
+    assert {device["name"] for device in classroom.devices(path=vault)} == {
+        "Lab Laptop", "Another",
+    }
 
 
 def test_console_status_excludes_synthetic_devices(monkeypatch):

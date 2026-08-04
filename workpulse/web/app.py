@@ -23,7 +23,7 @@ from collections import defaultdict
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 from typing import Optional
-from urllib.parse import urlparse
+from urllib.parse import quote, urlparse
 
 # Paths/filenames to suppress from the dashboard display
 _NOISE_PATTERNS = [
@@ -2119,6 +2119,13 @@ def api_classroom_pairing(request: Request):
     result["invitation"] = (
         "workpulse://classroom/join"
         f"?server={result['server']}&code={result['code']}"
+    )
+    # This URL is opened on the learning device. Because it points to localhost,
+    # it reaches that device's own installed LearningPulse dashboard. The page
+    # prefills the invitation but still requires a visible user confirmation.
+    result["join_url"] = (
+        "http://127.0.0.1:5700/learning?role=device&invite="
+        + quote(result["invitation"], safe="")
     )
     result["network_addresses"] = candidates
     return result

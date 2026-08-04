@@ -149,6 +149,7 @@ def local_status() -> dict:
         "running": bool(_agent_thread and _agent_thread.is_alive()),
         "device_id": cfg.get("device_id"),
         "device_name": cfg.get("device_name"),
+        "suggested_name": platform.node() or "Learning device",
         "server": cfg.get("server"),
         "mode": _last_remote_status.get("mode", "normal"),
         "active_session": _last_remote_status.get("active_session"),

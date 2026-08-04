@@ -487,8 +487,8 @@
         <article class="classroom-policy-card">
           <div class="showcase-label">ADD A DEVICE</div>
           <h4>Pair another laptop</h4>
-          <p class="classroom-card-copy">The devices may use any shared network where they can reach each other. Create an invitation and paste it into LearningPulse on the other computer.</p>
-          <button class="btn-primary" onclick="createClassroomPairing()">Create invitation</button>
+          <p class="classroom-card-copy">Create one short-lived class link and open it on every learning device joining this session.</p>
+          <button class="btn-primary" onclick="createClassroomPairing()">Create class link</button>
           <div id="classroom-pairing-result" class="classroom-pairing-result workspace-hidden"></div>
         </article>
       </div>
@@ -505,8 +505,8 @@
         <article class="classroom-policy-card">
           <div class="showcase-label">ADD A DEVICE</div>
           <h4>Connect another computer</h4>
-          <p class="classroom-card-copy">Create an invitation here, then paste it into LearningPulse on the learning device.</p>
-          <button class="btn-primary" onclick="createClassroomPairing()">Create invitation</button>
+          <p class="classroom-card-copy">One short-lived class link connects all devices joining during its validity window.</p>
+          <button class="btn-primary" onclick="createClassroomPairing()">Create class link</button>
         </article>
       </div>
     </div>
@@ -523,10 +523,10 @@
         <article class="classroom-policy-card">
           <div class="showcase-label">JOIN A LEARNING SESSION</div>
           <h4>Connect this computer</h4>
-          <p class="classroom-card-copy">Paste the invitation from the facilitator. LearningPulse handles the address, pairing code and agent automatically.</p>
+          <p class="classroom-card-copy">Open the facilitator’s class link, review the connection, and confirm once. This device reconnects automatically afterwards.</p>
           <div class="classroom-join-form">
-            <label>Invitation<input id="classroom-join-invitation" placeholder="Paste LearningPulse invitation"></label>
-            <label>Device name<input id="classroom-join-name" placeholder="e.g. Library Laptop 12"></label>
+            <label>Class invitation<input id="classroom-join-invitation" placeholder="Filled automatically from the class link"></label>
+            <label>Device name<input id="classroom-join-name" placeholder="Detected from this computer"></label>
             <button class="btn-primary" id="classroom-join-button" onclick="joinClassroomDevice()">Connect this device</button>
             <small id="classroom-join-status"></small>
           </div>

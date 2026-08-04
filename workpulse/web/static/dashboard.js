@@ -6,7 +6,8 @@ let availableStreams = [];    // [{key, label, color}]
 let todayISO = null;
 const PRODUCT_MODE = location.pathname.startsWith('/learning') ? 'learning' :
   (location.pathname.startsWith('/institution') ? 'institution' : 'developer');
-const LEARNING_ROLE = new URLSearchParams(location.search).get('role') === 'device'
+const LEARNING_ROLE = (location.pathname.endsWith('/device') ||
+  new URLSearchParams(location.search).get('role') === 'device')
   ? 'device' : 'facilitator';
 
 const TITLE_CASE = s => (s || '').replace(/-/g,' ').replace(/\b\w/g, c => c.toUpperCase());
@@ -2713,12 +2714,12 @@ async function createClassroomPairing() {
   if (!box) return;
   box.classList.remove('workspace-hidden');
   box.innerHTML =
-    '<span>ONE-TIME CODE</span><strong>' + escapeHtml(result.code) + '</strong>' +
+    '<span>CLASS INVITATION</span><strong>' + escapeHtml(result.code) + '</strong>' +
     '<small>Expires ' + escapeHtml(new Date(result.expires_at).toLocaleTimeString()) + '</small>' +
-    '<label>Invitation</label><code>' + escapeHtml(result.invitation) + '</code>' +
+    '<label>Open this link on each learning device</label><code>' + escapeHtml(result.join_url) + '</code>' +
     '<button class="btn-ghost" onclick="copyClassroomInvitation(this)" data-invitation="' +
-      escapeHtml(result.invitation) + '">Copy invitation</button>' +
-    '<p>On the other computer, open WorkPulse → Classroom → Device view and paste this invitation.</p>';
+      escapeHtml(result.join_url) + '">Copy class link</button>' +
+    '<p>Use the same link for every device joining during this window. Each computer confirms once, then reconnects automatically in future sessions.</p>';
 }
 
 async function copyClassroomInvitation(button) {
@@ -2739,6 +2740,21 @@ function parseClassroomInvitation(value) {
   const code = invitation.searchParams.get('code');
   if (!server || !code) throw new Error('The invitation is incomplete');
   return {server, code};
+}
+
+function prefillClassroomInvitationFromLink() {
+  const encoded = new URLSearchParams(location.search).get('invite');
+  const input = document.getElementById('classroom-join-invitation');
+  const status = document.getElementById('classroom-join-status');
+  if (!encoded || !input) return;
+  try {
+    parseClassroomInvitation(encoded);
+    input.value = encoded;
+    if (status) status.textContent = 'Invitation ready. Confirm to connect this computer.';
+    history.replaceState({}, '', '/learning?role=device');
+  } catch (_) {
+    if (status) status.textContent = 'This invitation is incomplete or invalid.';
+  }
 }
 
 async function joinClassroomDevice() {
@@ -2796,6 +2812,10 @@ function renderLocalClassroomAgent(agent) {
   const active = localClassroomAgent.active_session;
   const interventions = localClassroomAgent.interventions || [];
   if (!localClassroomAgent.enrolled) {
+    const nameInput = document.getElementById('classroom-join-name');
+    if (nameInput && !nameInput.value) {
+      nameInput.value = localClassroomAgent.suggested_name || '';
+    }
     if (device) device.textContent = 'THIS COMPUTER · NOT CONNECTED';
     if (title) title.textContent = 'Join a learning session';
     if (message) message.textContent = 'Paste an invitation from the facilitator to connect this computer.';
@@ -3154,6 +3174,9 @@ function syncSidebarHealth() {
 
 document.addEventListener('DOMContentLoaded', function () {
   configureProductMode();
+  if (PRODUCT_MODE === 'learning' && LEARNING_ROLE === 'device') {
+    prefillClassroomInvitationFromLink();
+  }
   if (PRODUCT_MODE !== 'learning') {
     const saved = localStorage.getItem('wp_active_workspace') || 'today';
     showWorkspace(saved, { skipPersist: true, instant: true });

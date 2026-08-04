@@ -281,7 +281,11 @@ def enroll_device(
             "SELECT * FROM classroom_pairing WHERE code_hash=?",
             (_hash_secret(code.strip().upper()),),
         ).fetchone()
-        if not row or row["used_at"] or datetime.fromisoformat(row["expires_at"]) < datetime.now(timezone.utc):
+        # One facilitator invitation enrols the class during its short validity
+        # window. Requiring a new code for every lab computer made setup the
+        # dominant classroom task. Each enrolled device still receives its own
+        # identity and bearer token.
+        if not row or datetime.fromisoformat(row["expires_at"]) < datetime.now(timezone.utc):
             raise ValueError("pairing code is invalid or expired")
         device_id = "Device " + secrets.token_hex(2).upper()
         token = secrets.token_urlsafe(32)
@@ -292,10 +296,6 @@ def enroll_device(
             VALUES (?, ?, ?, ?, ?, ?)
             """,
             (device_id, name.strip() or device_id, platform_name, _hash_secret(token), _now(), _now()),
-        )
-        con.execute(
-            "UPDATE classroom_pairing SET used_at=? WHERE code_hash=?",
-            (_now(), row["code_hash"]),
         )
         con.commit()
         return {"device_id": device_id, "device_name": name.strip() or device_id, "token": token}
