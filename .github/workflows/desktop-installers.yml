@@ -27,7 +27,7 @@ jobs:
         run: .\installer\desktop\build-windows.ps1
       - uses: actions/upload-artifact@v4
         with:
-          name: windows-installer
+          name: windows-installers
           path: release-artifacts/*Windows.exe
 
   macos:
@@ -41,7 +41,7 @@ jobs:
       - run: ./installer/desktop/build-macos.sh
       - uses: actions/upload-artifact@v4
         with:
-          name: macos-installer
+          name: macos-installers
           path: release-artifacts/*macOS.pkg
 
   publish-to-repo:
@@ -62,8 +62,6 @@ jobs:
           version = re.search(
               r'__version__\s*=\s*"([^"]+)"',
               Path("workpulse/__init__.py").read_text()).group(1)
-          mac = Path(f"release-artifacts/WorkPulse-{version}-macOS.pkg")
-          win = Path(f"release-artifacts/WorkPulseSetup-{version}-Windows.exe")
           base = "https://njiani-flame.vercel.app/downloads"
           def item(path):
               return {
@@ -71,11 +69,23 @@ jobs:
                   "url": f"{base}/{path.name}",
                   "sha256": hashlib.sha256(path.read_bytes()).hexdigest(),
               }
+          flavors = {
+              "workpulse-institution": ("WorkPulseInstitution", "WorkPulseInstitutionSetup"),
+              "learning-facilitator": ("LearningPulseFacilitator", "LearningPulseFacilitatorSetup"),
+              "learning-device": ("LearningPulseDevice", "LearningPulseDeviceSetup"),
+          }
+          products = {}
+          for channel, (mac_name, win_name) in flavors.items():
+              mac = Path(f"release-artifacts/{mac_name}-{version}-macOS.pkg")
+              win = Path(f"release-artifacts/{win_name}-{version}-Windows.exe")
+              products[channel] = {"platforms": {
+                  "macos": item(mac), "windows": item(win),
+              }}
           manifest = {
               "version": version,
               "published_at": datetime.now(timezone.utc).isoformat(),
               "notes": "Reliability, tracking and experience improvements.",
-              "platforms": {"macos": item(mac), "windows": item(win)},
+              "products": products,
           }
           Path("release-artifacts/latest.json").write_text(
               json.dumps(manifest, indent=2) + "\n")

@@ -1,16 +1,16 @@
 # WorkPulse
 
-A local-first personal attention brain. It passively tracks what you work on —
-app focus, file changes, calendar, browser — then synthesizes it into
-project-attributed intelligence: what you did, on which project, and what the
-brain still doesn't know.
+A local-first institutional work-intelligence engine. It passively tracks how
+digital work moves from activity to output, then synthesizes app focus, file
+changes, calendar, and browser signals into attributable organizational
+intelligence while preserving explicit data boundaries.
 
 Everything runs on your machine. Nothing leaves it unless you choose to sync.
 
-Personal WorkPulse is **download-first and account-free**. Installation creates
-a local profile and data store; sign-in is reserved for optional capabilities
-that genuinely need a remote identity, such as encrypted device sync, backup,
-or joining an organisation. See
+The commercial products are **WorkPulse Institution** and **LearningPulse**.
+The former Personal surface remains an internal Developer Lab for improving the
+shared Pulse Core; it is not publicly packaged or sold. Institution sign-in and
+tenant enrollment are reserved for the shared capabilities that need them. See
 [`docs/PRODUCT_DECISIONS_AND_ROADMAP.md`](docs/PRODUCT_DECISIONS_AND_ROADMAP.md).
 
 The dashboard explains every tracking mechanism in plain language. It also

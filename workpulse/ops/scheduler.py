@@ -71,6 +71,12 @@ def jobs() -> list[dict]:
             "args":    [],
             "hour":    None, "minute": None, "weekday": None,
             "daemon":  True,
+            # macOS: an own launchd Aqua agent (needs window-server access).
+            # Windows: the tray owns it (start_activity), so registering it ALSO
+            # as a scheduled task double-manages and conflicts — the task grabs
+            # the "running" lock in a non-interactive session and the tray then
+            # skips starting the real, capturing sensor. Tray-only on Windows.
+            "platforms": ("darwin",),
             "description": "Foreground-app sensor (frontmost window + browser tab).",
         },
         {
@@ -80,6 +86,8 @@ def jobs() -> list[dict]:
             "args":    [],
             "hour":    None, "minute": None, "weekday": None,
             "daemon":  True,
+            # See activity above: tray-owned on Windows, launchd agent on macOS.
+            "platforms": ("darwin",),
             "description": "File-change sensor (FSEvents over the vault).",
         },
         # Sleep-proof once-a-day (and once-a-week) rollups. Runs hourly,
@@ -433,19 +441,45 @@ def render_windows_task_xml(job: dict, *, python: Path | None = None,
 """
 
 
+def _win_install_log(line: str) -> None:
+    """Append an install result to logs/install.log. The frozen Windows build
+    is a GUI app with no console, so anything `--cli install` prints while the
+    installer runs it hidden is lost. Persisting each task result here is the
+    only way to see, after the fact, why a scheduled task failed to register."""
+    try:
+        p = ROOT / "logs" / "install.log"
+        p.parent.mkdir(parents=True, exist_ok=True)
+        with p.open("a", encoding="utf-8") as f:
+            f.write(line + "\n")
+    except OSError:
+        pass
+
+
 def _windows_install_one(job: dict) -> str:
     xml = render_windows_task_xml(job)
     xml_path = ROOT / "logs" / f"{job['slug']}.task.xml"
     xml_path.parent.mkdir(parents=True, exist_ok=True)
     xml_path.write_text(xml, encoding="utf-16")
     task_name = job["label"]
+    # A task left over from an older install can block the overwrite: schtasks
+    # /Create /F does NOT reliably replace a task that is currently RUNNING
+    # (the daemon sensors of a prior install are running at install time), so
+    # the new command silently never lands and the task keeps pointing at the
+    # old executable. Stop and delete it first, then /Create always applies.
+    # Both are best-effort — a missing task returns non-zero and is fine.
+    subprocess.run(["schtasks", "/End", "/TN", task_name],
+                   capture_output=True, text=True)
+    subprocess.run(["schtasks", "/Delete", "/TN", task_name, "/F"],
+                   capture_output=True, text=True)
     # /F overwrites; UTF-16 required by schtasks /XML
     r = subprocess.run(
         ["schtasks", "/Create", "/TN", task_name, "/XML", str(xml_path), "/F"],
         capture_output=True, text=True,
     )
     if r.returncode != 0:
-        return f"FAIL  {task_name}  {r.stderr.strip() or r.stdout.strip()}"
+        line = f"FAIL  {task_name}  {r.stderr.strip() or r.stdout.strip()}"
+        _win_install_log(line)
+        return line
     # A LogonTrigger only fires at the *next* sign-in. Fresh installs happen
     # inside an already-running session, so without an explicit first run the
     # activity + watcher tasks appear registered but produce no data until the
@@ -456,11 +490,44 @@ def _windows_install_one(job: dict) -> str:
             capture_output=True, text=True,
         )
         if started.returncode != 0:
-            return (
+            line = (
                 f"FAIL  {task_name} registered but did not start  "
                 f"{started.stderr.strip() or started.stdout.strip()}"
             )
-    return f"OK    {task_name}"
+            _win_install_log(line)
+            return line
+    line = f"OK    {task_name}"
+    _win_install_log(line)
+    return line
+
+
+_LEGACY_WINDOWS_TASKS = (
+    "com.workpulse.dashboard",   # Windows serves the dashboard from the tray,
+    "com.workpulse.menubar",     # not a task; menubar is a macOS-only agent.
+    "WorkPulse-ReportDaily",     # v1 task names, superseded by the nightly
+    "WorkPulse-ReportWeekly",    # rollup + the com.workpulse.* agent set.
+    "WorkPulse-Watcher",
+    "WorkPulse-Consolidate",
+)
+
+
+def remove_legacy_windows_tasks() -> list[str]:
+    """Delete scheduled tasks left by older installs (v1, or a clone that
+    registered its own Windows dashboard task) that the current agent set no
+    longer manages, so they can't fight the new install for a port or
+    double-sense. Best-effort and idempotent — a missing task is skipped."""
+    if sys.platform != "win32":
+        return []
+    removed = []
+    for name in _LEGACY_WINDOWS_TASKS:
+        subprocess.run(["schtasks", "/End", "/TN", name],
+                       capture_output=True, text=True)
+        r = subprocess.run(["schtasks", "/Delete", "/TN", name, "/F"],
+                           capture_output=True, text=True)
+        if r.returncode == 0:
+            removed.append(name)
+            _win_install_log(f"RETIRE {name}")
+    return removed
 
 
 def _windows_uninstall_one(job: dict) -> str:

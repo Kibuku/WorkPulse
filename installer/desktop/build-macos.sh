@@ -43,26 +43,23 @@ $PYTHON -m PyInstaller --noconfirm --clean --windowed \
   --add-data "$ROOT/config/config.example.yaml:config" \
   "$ROOT/workpulse/desktop.py"
 
-PAYLOAD="$BUILD/payload"
-mkdir -p "$PAYLOAD/Applications"
-cp -R "$BUILD/dist/WorkPulse.app" "$PAYLOAD/Applications/"
+build_flavor() {
+  local slug="$1" app_name="$2" product="$3" role="$4" entry="$5" identifier="$6"
+  local flavor_build="$BUILD/$slug" payload="$BUILD/$slug/payload"
+  local scripts="$BUILD/$slug/scripts" component="$BUILD/$slug/component.plist"
+  mkdir -p "$payload/Applications" "$scripts"
+  cp -R "$BUILD/dist/WorkPulse.app" "$payload/Applications/$app_name.app"
+  sed -e "s|@APP_NAME@|$app_name|g" -e "s|@PRODUCT@|$product|g" \
+      -e "s|@ROLE@|$role|g" -e "s|@ENTRY_PATH@|$entry|g" \
+      "$ROOT/installer/desktop/macos-postinstall" > "$scripts/postinstall"
+  chmod +x "$scripts/postinstall"
+  pkgbuild --analyze --root "$payload" "$component"
+  /usr/libexec/PlistBuddy -c "Set :0:BundleIsRelocatable false" "$component"
+  pkgbuild --root "$payload" --scripts "$scripts" --component-plist "$component" \
+    --identifier "$identifier" --version "$VERSION" --install-location / \
+    "$ARTIFACTS/${slug}-${VERSION}-macOS.pkg"
+}
 
-SCRIPTS="$BUILD/scripts"
-mkdir -p "$SCRIPTS"
-cp "$ROOT/installer/desktop/macos-postinstall" "$SCRIPTS/postinstall"
-chmod +x "$SCRIPTS/postinstall"
-
-COMPONENT_PLIST="$BUILD/component.plist"
-pkgbuild --analyze --root "$PAYLOAD" "$COMPONENT_PLIST"
-# PackageKit otherwise remembers an existing copy of the bundle and may
-# "relocate" the payload back to a developer build directory. WorkPulse has one
-# canonical install location: /Applications/WorkPulse.app.
-/usr/libexec/PlistBuddy -c "Set :0:BundleIsRelocatable false" "$COMPONENT_PLIST"
-
-pkgbuild --root "$PAYLOAD" \
-  --scripts "$SCRIPTS" \
-  --component-plist "$COMPONENT_PLIST" \
-  --identifier earth.njiani.workpulse \
-  --version "$VERSION" \
-  --install-location / \
-  "$ARTIFACTS/WorkPulse-${VERSION}-macOS.pkg"
+build_flavor "WorkPulseInstitution" "WorkPulse Institution" "institution" "member" "/institution" "earth.njiani.workpulse.institution"
+build_flavor "LearningPulseFacilitator" "LearningPulse Facilitator" "learning" "facilitator" "/learning" "earth.njiani.pulse.learning.facilitator"
+build_flavor "LearningPulseDevice" "LearningPulse Device" "learning" "device" "/learning/device" "earth.njiani.pulse.learning.device"

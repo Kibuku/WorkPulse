@@ -118,7 +118,7 @@ def run(*, force: bool = False, cfg: dict | None = None) -> dict:
     run_weekly = force or state["weekly_due"]
 
     if run_daily:
-        from workpulse.core import cleanup, consolidate, report, profile
+        from workpulse.core import cleanup, consolidate, report, profile, classroom
         # Order matters: categorize is already handled by dream-refresh
         # every 30 min, so clusters are current. Consolidate first (it's
         # what _ran_today keys on), then the report, then the profile.
@@ -129,6 +129,7 @@ def run(*, force: bool = False, cfg: dict | None = None) -> dict:
         # Synthesize first, then discard old reconstructable evidence. Durable
         # captures/reports/profile markers are intentionally never pruned.
         did["retention"] = cleanup.apply_retention(con, cfg=cfg)
+        did["learning_retention"] = classroom.apply_retention()
         did["daily"] = True
 
     if run_weekly:

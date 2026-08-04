@@ -4,6 +4,10 @@ let aiEnabled = false;
 let currentDate = null;       // YYYY-MM-DD; null = today
 let availableStreams = [];    // [{key, label, color}]
 let todayISO = null;
+const PRODUCT_MODE = location.pathname.startsWith('/learning') ? 'learning' :
+  (location.pathname.startsWith('/institution') ? 'institution' : 'developer');
+const LEARNING_ROLE = new URLSearchParams(location.search).get('role') === 'device'
+  ? 'device' : 'facilitator';
 
 const TITLE_CASE = s => (s || '').replace(/-/g,' ').replace(/\b\w/g, c => c.toUpperCase());
 
@@ -2464,20 +2468,20 @@ const WORKSPACE_COPY = {
     action: 'Ask WorkPulse',
   },
   organization: {
-    kicker: 'OPTIONAL CONNECTION',
-    badge: 'Not connected',
-    badgeClass: 'consent',
-    title: 'Organisation opt-in',
-    description: 'Personal WorkPulse is complete without this layer. Connect only when the benefit and permissions are clear.',
-    action: 'Review consent',
+    kicker: 'INSTITUTION',
+    badge: 'Workspace',
+    badgeClass: 'live',
+    title: 'Institution',
+    description: 'Review the purpose-bound work projection available to your team while raw evidence remains protected.',
+    action: 'Review boundaries',
   },
   classroom: {
-    kicker: 'WORKPULSE CLASSROOM',
+    kicker: 'LEARNINGPULSE',
     badge: '',
     badgeClass: '',
-    title: 'Classroom',
-    description: 'Scheduled learning policies activate automatically on enrolled devices. WorkPulse remains quiet until a decision needs attention.',
-    action: 'Open Session Console',
+    title: 'Learning sessions',
+    description: 'Declare the exercise and AI-use policy, then see only the evidence that needs a facilitator response.',
+    action: 'Open session',
   },
   privacy: {
     kicker: 'DATA BOUNDARY',
@@ -2587,7 +2591,7 @@ let classroomPollTimer = null;
 let localClassroomAgent = null;
 
 function showClassroomConsole(name) {
-  const next = ['session', 'student', 'policy'].includes(name) ? name : 'session';
+  const next = ['session', 'devices', 'student', 'policy', 'report'].includes(name) ? name : 'session';
   document.querySelectorAll('.classroom-console-panel').forEach(el => el.classList.add('workspace-hidden'));
   const panel = document.getElementById('classroom-console-' + next);
   if (panel) panel.classList.remove('workspace-hidden');
@@ -2596,7 +2600,64 @@ function showClassroomConsole(name) {
   });
   if (next === 'policy') loadClassroomPolicy();
   if (next === 'student') fetchLocalClassroomAgent();
+  if (next === 'report') loadLearningReport();
   fetchClassroomStatus();
+}
+
+function configureProductMode() {
+  const brand = document.getElementById('product-brand-name');
+  const topbar = document.getElementById('topbar-product-name');
+  const learningNav = document.getElementById('learning-product-nav');
+  const optionalLabel = document.querySelector('.optional-label');
+  const optionalNav = document.querySelector('.optional-nav');
+  if (optionalLabel) optionalLabel.classList.add('workspace-hidden');
+  if (optionalNav) optionalNav.classList.add('workspace-hidden');
+  if (PRODUCT_MODE === 'learning') {
+    document.title = 'LearningPulse';
+    document.body.dataset.product = 'learning';
+    if (brand) brand.textContent = 'LearningPulse';
+    if (topbar) topbar.textContent = 'LearningPulse';
+    document.querySelectorAll('.app-sidebar > .sidebar-label:not(.optional-label), .app-sidebar > nav.workspace-nav:not(.optional-nav)')
+      .forEach(el => el.classList.add('workspace-hidden'));
+    if (learningNav) learningNav.classList.remove('workspace-hidden');
+    const lock = document.getElementById('personal-lock-btn');
+    if (lock) lock.classList.add('workspace-hidden');
+    document.querySelectorAll('.topbar-right button').forEach(button => {
+      if (!['health-indicator', 'wp-settings-btn'].includes(button.id)) button.classList.add('workspace-hidden');
+    });
+    showWorkspace('classroom', {skipPersist: true, instant: true});
+    if (LEARNING_ROLE === 'device') {
+      if (learningNav) learningNav.innerHTML = '<div class="sidebar-label">Learning device</div><nav class="workspace-nav"><button class="workspace-nav-item active"><span class="nav-icon">▣</span><span>This device</span></button></nav>';
+      const pageTitle = document.getElementById('workspace-title');
+      const pageDescription = document.getElementById('workspace-description');
+      const consoleTitle = document.getElementById('classroom-console-title');
+      const contextSource = document.querySelector('.classroom-context-source b');
+      if (pageTitle) pageTitle.textContent = 'This learning device';
+      if (pageDescription) pageDescription.textContent = 'Connect this computer once, then session policy and facilitator support arrive automatically.';
+      if (consoleTitle) consoleTitle.textContent = 'Waiting for a learning session';
+      if (contextSource) contextSource.textContent = 'This learning device';
+      showClassroomConsole('student');
+    }
+  } else if (PRODUCT_MODE === 'institution') {
+    document.title = 'WorkPulse Institution';
+    document.body.dataset.product = 'institution';
+    if (brand) brand.textContent = 'WorkPulse Institution';
+    if (topbar) topbar.textContent = 'WorkPulse Institution';
+    const orgButton = document.querySelector('[data-workspace-target="organization"]');
+    const mainNav = document.querySelector('.app-sidebar > nav.workspace-nav:not(.optional-nav)');
+    if (orgButton && mainNav) {
+      orgButton.classList.remove('optional-connection');
+      const copy = orgButton.querySelector('.optional-connection-copy');
+      if (copy) copy.innerHTML = '<span>Institution</span><small>Purpose-bound view</small>';
+      const pill = orgButton.querySelector('.opt-in-pill');
+      if (pill) pill.remove();
+      mainNav.appendChild(orgButton);
+    }
+  } else {
+    document.title = 'Pulse Developer Lab';
+    if (brand) brand.textContent = 'Pulse Developer Lab';
+    if (topbar) topbar.textContent = 'Pulse Developer Lab';
+  }
 }
 
 function policyLines(id) {
@@ -2733,10 +2794,11 @@ function renderLocalClassroomAgent(agent) {
   const studentPolicy = document.getElementById('classroom-student-policy');
   const healthBar = document.getElementById('classroom-student-health-bar');
   const active = localClassroomAgent.active_session;
+  const interventions = localClassroomAgent.interventions || [];
   if (!localClassroomAgent.enrolled) {
     if (device) device.textContent = 'THIS COMPUTER · NOT CONNECTED';
-    if (title) title.textContent = 'Join a classroom';
-    if (message) message.textContent = 'Paste an invitation to connect this computer to a Session Console.';
+    if (title) title.textContent = 'Join a learning session';
+    if (message) message.textContent = 'Paste an invitation from the facilitator to connect this computer.';
     if (connection) connection.textContent = 'Waiting for enrolment';
     if (expiry) expiry.textContent = '';
     if (healthBar) healthBar.style.width = '0';
@@ -2750,6 +2812,9 @@ function renderLocalClassroomAgent(agent) {
   if (message) message.textContent = active
     ? 'The class policy is active. Approved activity stays quiet and exceptions are sent to the Session Console.'
     : 'This computer is connected and following the institution’s normal learning policy.';
+  if (message && interventions.length) {
+    message.textContent = 'Facilitator message: ' + interventions[interventions.length - 1].message;
+  }
   if (connection) connection.textContent = localClassroomAgent.running ? 'Agent connected' : 'Agent needs attention';
   if (healthBar) healthBar.style.width = localClassroomAgent.running ? '100%' : '35%';
   if (expiry) expiry.textContent = active
@@ -2774,6 +2839,47 @@ function renderLocalClassroomAgent(agent) {
         '</small></p><em>Allowed</em></div>';
     }
   }
+}
+
+async function sendLearningSupport(deviceId, deviceName) {
+  const message = window.prompt('Support message for ' + deviceName);
+  if (!message || !message.trim()) return;
+  const response = await fetch('/api/v2/classroom/intervention', {
+    method: 'POST', headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({device_id: deviceId, kind: 'support', message: message.trim()}),
+  });
+  const result = await response.json();
+  if (!response.ok) return showToast(result.error || 'Could not send support');
+  showToast('Support sent to ' + deviceName);
+  fetchClassroomStatus();
+}
+
+async function loadLearningReport() {
+  const response = await fetch('/api/v2/classroom/report');
+  const report = await response.json();
+  const title = document.getElementById('learning-report-title');
+  const context = document.getElementById('learning-report-context');
+  const stats = document.getElementById('learning-report-stats');
+  const body = document.getElementById('learning-report-body');
+  if (!report.session) return;
+  const session = report.session;
+  const summary = report.summary || {};
+  if (title) title.textContent = session.title;
+  if (context) context.textContent = [session.exercise, session.learning_goal].filter(Boolean).join(' · ') || 'Declared learning session';
+  if (stats) stats.innerHTML =
+    '<div><strong>' + Number(summary.devices_observed || 0) + '</strong><span>devices observed</span></div>' +
+    '<div><strong>' + Number(summary.policy_exceptions || 0) + '</strong><span>policy exceptions</span></div>' +
+    '<div><strong>' + Number(summary.facilitator_actions || 0) + '</strong><span>support actions</span></div>' +
+    '<div><strong>' + escapeHtml(String(session.ai_use || 'approved_only').replaceAll('_', ' ')) + '</strong><span>AI-use rule</span></div>';
+  if (body) body.innerHTML =
+    '<h4>Observed exceptions</h4>' + ((report.events || []).length ? report.events.map(item =>
+      '<div class="classroom-event-example"><span>!</span><p><b>' + escapeHtml(item.device_id + ' · ' + item.rule) +
+      '</b><small>' + escapeHtml((item.occurrences || 1) + ' occurrence(s) · ' + (item.domain || item.app || 'activity')) + '</small></p></div>'
+    ).join('') : '<p class="classroom-card-copy">No policy exception was recorded.</p>') +
+    '<h4>Facilitator actions</h4>' + ((report.interventions || []).length ? report.interventions.map(item =>
+      '<div class="classroom-report-line"><span>✓</span><p><b>' + escapeHtml(item.device_name) +
+      '</b><small>' + escapeHtml(item.message) + '</small></p></div>'
+    ).join('') : '<p class="classroom-card-copy">No support action was sent.</p>');
 }
 
 async function fetchLocalClassroomAgent() {
@@ -2877,17 +2983,17 @@ function renderClassroomStatus(status) {
     if (title) title.textContent = active.title;
     if (time) time.textContent = 'Restores Normal learning automatically at ' + new Date(active.ends_at).toLocaleTimeString([], {hour: '2-digit', minute: '2-digit'});
     if (heading) heading.textContent = active.title + ' is active';
-    if (copy) copy.textContent = 'WorkPulse is evaluating enrolled devices against the declared policy. Allowed activity remains quiet; only exceptions require attention.';
+    if (copy) copy.textContent = 'LearningPulse is evaluating enrolled devices against the declared policy. Allowed activity remains quiet; only exceptions require attention.';
     if (remaining) remaining.textContent = mins + 'm';
     if (startButton) startButton.classList.add('workspace-hidden');
     if (endButton) endButton.classList.remove('workspace-hidden');
   } else {
-    if (badge) badge.textContent = 'Normal learning';
-    if (title) title.textContent = 'Institutional learning policy';
+    if (badge) badge.textContent = 'Ready';
+    if (title) title.textContent = 'Learning session policy';
     if (time) time.textContent = scheduled ? 'Next session starts automatically ' + new Date(scheduled.started_at).toLocaleString() : "Enrolled devices follow the institution's baseline access rules";
-    if (heading) heading.textContent = 'Normal learning is active';
-    if (copy) copy.textContent = 'WorkPulse monitors session status and surfaces exceptions that need attention.';
-    if (remaining) remaining.textContent = 'Always';
+    if (heading) heading.textContent = 'Ready for a learning session';
+    if (copy) copy.textContent = 'Declare an exercise and its AI-use policy. Enrolled devices will join when the session starts.';
+    if (remaining) remaining.textContent = 'Not timed';
     if (startButton) startButton.classList.remove('workspace-hidden');
     if (endButton) endButton.classList.add('workspace-hidden');
   }
@@ -2900,17 +3006,18 @@ function renderClassroomStatus(status) {
   const deviceCount = document.getElementById('classroom-device-count');
   if (deviceCount) deviceCount.textContent = String(devices.length);
   const deviceList = document.getElementById('classroom-device-list');
-  if (deviceList) {
-    deviceList.innerHTML = devices.length ? devices.map(device => {
+  const fullDeviceList = document.getElementById('classroom-device-list-full');
+  const deviceMarkup = devices.length ? devices.map(device => {
       const seen = device.last_seen ? new Date(device.last_seen) : null;
       const online = seen && (Date.now() - seen.getTime()) < 30000;
       return '<div class="classroom-enrolled-device"><span class="' + (online ? 'online' : '') + '"></span>' +
         '<p><b>' + escapeHtml(device.name) + '</b><small>' +
         escapeHtml(device.id + ' · ' + device.platform + ' · ' + (online ? 'Connected now' : 'Last seen ' + (seen ? seen.toLocaleTimeString() : 'never'))) +
-        '</small><em>' + escapeHtml([device.last_app, device.last_domain].filter(Boolean).join(' · ') || 'Waiting for signal') +
-        '</em></p></div>';
-    }).join('') : '<p class="classroom-card-copy">No student devices have paired with this console.</p>';
-  }
+        '</small><em>' + escapeHtml([device.last_app, device.last_domain].filter(Boolean).join(' · ') || 'Waiting for signal') + '</em></p>' +
+        (active ? '<button class="btn-ghost" onclick="sendLearningSupport(\'' + jsAttr(device.id) + '\',\'' + jsAttr(device.name) + '\')">Send support</button>' : '') + '</div>';
+    }).join('') : '<p class="classroom-card-copy">No learning devices have paired with this console.</p>';
+  if (deviceList) deviceList.innerHTML = deviceMarkup;
+  if (fullDeviceList) fullDeviceList.innerHTML = deviceMarkup;
   const eventCount = document.getElementById('classroom-event-count');
   if (eventCount) eventCount.textContent = String(activeEvents.length);
   const decisionCount = document.getElementById('classroom-decision-count');
@@ -2969,8 +3076,11 @@ async function startClassroomSession(mode) {
     headers: {'Content-Type': 'application/json'},
     body: JSON.stringify({
       mode: isExam ? 'exam' : 'class',
-      title: isExam ? 'Controlled assessment' : ((document.getElementById('classroom-session-name') || {}).value || 'Research Methods'),
-      duration_minutes: isExam ? 60 : 90,
+      title: isExam ? 'Controlled assessment' : ((document.getElementById('classroom-session-name') || {}).value || 'Learning session'),
+      duration_minutes: isExam ? 60 : Number((document.getElementById('classroom-session-duration') || {}).value || 90),
+      exercise: ((document.getElementById('classroom-session-exercise') || {}).value || '').trim(),
+      learning_goal: ((document.getElementById('classroom-session-goal') || {}).value || '').trim(),
+      ai_use: ((document.getElementById('classroom-session-ai-use') || {}).value || 'approved_only'),
     }),
   });
   const status = await response.json();
@@ -2997,6 +3107,9 @@ async function scheduleClassroomSession() {
       title: (document.getElementById('classroom-session-name').value || 'Class session').trim(),
       duration_minutes: Number(document.getElementById('classroom-session-duration').value || 60),
       starts_at: new Date(startValue).toISOString(),
+      exercise: (document.getElementById('classroom-session-exercise').value || '').trim(),
+      learning_goal: (document.getElementById('classroom-session-goal').value || '').trim(),
+      ai_use: document.getElementById('classroom-session-ai-use').value || 'approved_only',
     }),
   });
   const status = await response.json();
@@ -3005,7 +3118,7 @@ async function scheduleClassroomSession() {
     return;
   }
   renderClassroomStatus(status);
-  showToast('Session scheduled · WorkPulse will activate it automatically');
+  showToast('Session scheduled · LearningPulse will activate it automatically');
 }
 
 async function evaluateClassroomNow() {
@@ -3040,8 +3153,11 @@ function syncSidebarHealth() {
 }
 
 document.addEventListener('DOMContentLoaded', function () {
-  const saved = localStorage.getItem('wp_active_workspace') || 'today';
-  showWorkspace(saved, { skipPersist: true, instant: true });
+  configureProductMode();
+  if (PRODUCT_MODE !== 'learning') {
+    const saved = localStorage.getItem('wp_active_workspace') || 'today';
+    showWorkspace(saved, { skipPersist: true, instant: true });
+  }
   setInterval(syncSidebarHealth, 2500);
   classroomPollTimer = setInterval(function () {
     if (activeWorkspace === 'classroom') {

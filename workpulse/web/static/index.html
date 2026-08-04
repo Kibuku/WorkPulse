@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>WorkPulse</title>
+<title>Pulse</title>
   <link rel="stylesheet" href="/static/dashboard.css?v=20260730a">
 </head>
 <body>
@@ -11,7 +11,7 @@
 <aside class="app-sidebar" aria-label="WorkPulse navigation">
   <div class="sidebar-brand">
     <span class="sidebar-mark">W</span>
-    <span>WorkPulse</span>
+    <span id="product-brand-name">Pulse</span>
   </div>
   <div class="sidebar-label">Your workspace</div>
   <nav class="workspace-nav">
@@ -28,6 +28,15 @@
       <span class="nav-icon">⌾</span><span>Privacy</span>
     </button>
   </nav>
+  <div id="learning-product-nav" class="workspace-hidden">
+    <div class="sidebar-label">Learning session</div>
+    <nav class="workspace-nav">
+      <button class="workspace-nav-item active" data-classroom-console="session" onclick="showClassroomConsole('session')"><span class="nav-icon">◉</span><span>Session</span></button>
+      <button class="workspace-nav-item" data-classroom-console="devices" onclick="showClassroomConsole('devices')"><span class="nav-icon">▣</span><span>Devices</span></button>
+      <button class="workspace-nav-item" data-classroom-console="policy" onclick="showClassroomConsole('policy')"><span class="nav-icon">◇</span><span>Policy</span></button>
+      <button class="workspace-nav-item" data-classroom-console="report" onclick="showClassroomConsole('report')"><span class="nav-icon">▥</span><span>Report</span></button>
+    </nav>
+  </div>
   <div class="sidebar-label optional-label">WorkPulse spaces</div>
   <nav class="workspace-nav optional-nav">
     <button class="workspace-nav-item optional-connection" data-workspace-target="organization" onclick="showWorkspace('organization')">
@@ -53,7 +62,7 @@
   <div class="brand" style="display:flex; align-items:center; gap:8px;">
     <button id="personal-lock-btn" onclick="openPersonalModal()" title="Personal (locked)"
             style="background:transparent; border:0; cursor:pointer; padding:2px 4px; font-size:14px; color:var(--text-soft); opacity:0.6;">🔒</button>
-    <span class="pulse" id="pulse"></span>WorkPulse <span id="actor-suffix" style="color:var(--text-soft);font-weight:400;margin-left:6px"></span></div>
+    <span class="pulse" id="pulse"></span><span id="topbar-product-name">Pulse</span> <span id="actor-suffix" style="color:var(--text-soft);font-weight:400;margin-left:6px"></span></div>
   <div class="topbar-right">
     <span class="date" id="date"></span>
     <button id="update-available-btn" class="update-available-btn"
@@ -351,19 +360,19 @@
   <section id="organization-workspace" class="span-12 workspace-surface workspace-hidden" data-workspace="organization">
     <div class="section-intro organization-consent-intro">
       <div>
-        <span class="capability-badge consent">Optional layer</span>
-        <h3>Your WorkPulse remains yours</h3>
-        <p>Personal WorkPulse works fully on its own. Connecting to an organisation is a separate choice with explicit permissions, visible boundaries and a reversible disconnect.</p>
+        <span class="capability-badge consent">Institution workspace</span>
+        <h3>Useful institutional context, with visible boundaries</h3>
+        <p>WorkPulse turns local work evidence into a purpose-bound institutional projection. Enrollment, requested fields and retention must be visible before information is shared.</p>
       </div>
-      <button class="btn-primary" onclick="openOrganizationModal()">Explore consent setup</button>
+      <button class="btn-primary" onclick="openOrganizationModal()">Review information boundary</button>
     </div>
     <div class="consent-principles" aria-label="Organisation connection principles">
-      <div><b>1</b><span><strong>Choose</strong><small>No organisation is connected by default.</small></span></div>
+      <div><b>1</b><span><strong>Enrol</strong><small>Join a named institutional workspace.</small></span></div>
       <div><b>2</b><span><strong>Review</strong><small>See every field requested before sharing.</small></span></div>
       <div><b>3</b><span><strong>Approve</strong><small>Share outputs, never raw personal activity.</small></span></div>
-      <div><b>4</b><span><strong>Disconnect</strong><small>Withdraw access without losing your memory.</small></span></div>
+      <div><b>4</b><span><strong>Audit</strong><small>See what was shared and under which purpose.</small></span></div>
     </div>
-    <div class="optional-preview-label"><span>What an approved organisation layer could add</span><small>Preview only · currently disconnected</small></div>
+    <div class="optional-preview-label"><span>Institutional capabilities being connected</span><small>Local projection · enrollment control plane next</small></div>
     <div class="showcase-grid">
       <article class="showcase-card">
         <div class="showcase-label">OUTPUT BRIEF</div>
@@ -399,36 +408,38 @@
     <div class="classroom-context-bar">
       <div>
         <span class="capability-badge live" id="classroom-policy-badge">Normal learning</span>
-        <strong id="classroom-console-title">Institutional learning policy</strong>
+        <strong id="classroom-console-title">Learning session policy</strong>
         <small id="classroom-console-time">Enrolled devices follow the institution's baseline access rules</small>
       </div>
       <div class="classroom-context-source">
         <span class="sidebar-health-dot"></span>
-        <span><b>Session Console · This computer</b><small id="classroom-device-health">Checking WorkPulse signals</small></span>
+        <span><b>Facilitator console · This computer</b><small id="classroom-device-health">Checking LearningPulse signals</small></span>
       </div>
     </div>
 
     <div class="classroom-console-tabs">
       <button class="active" data-classroom-console="session" onclick="showClassroomConsole('session')">Session console</button>
-      <button data-classroom-console="student" onclick="showClassroomConsole('student')">Device view</button>
+      <button data-classroom-console="devices" onclick="showClassroomConsole('devices')">Devices</button>
+      <button data-classroom-console="student" onclick="showClassroomConsole('student')">This device</button>
       <button data-classroom-console="policy" onclick="showClassroomConsole('policy')">Class policy</button>
+      <button data-classroom-console="report" onclick="showClassroomConsole('report')">Report</button>
     </div>
 
     <div id="classroom-console-session" class="classroom-console-panel">
       <div class="classroom-main-grid">
         <article class="classroom-primary-card">
           <div class="showcase-label">CURRENT SESSION</div>
-          <h3 id="classroom-session-heading">Normal learning is active</h3>
-          <p id="classroom-session-copy">WorkPulse monitors session status and surfaces exceptions that need attention.</p>
+          <h3 id="classroom-session-heading">Ready for a learning session</h3>
+          <p id="classroom-session-copy">LearningPulse monitors session status and surfaces exceptions that need attention.</p>
           <div class="classroom-report-stats">
             <div><strong id="classroom-device-count">0</strong><span>devices reporting</span></div>
             <div><strong id="classroom-event-count">0</strong><span>policy events</span></div>
             <div><strong id="classroom-decision-count">0</strong><span>decisions needed</span></div>
             <div><strong id="classroom-time-remaining">Always</strong><span>policy duration</span></div>
           </div>
-          <div class="classroom-health-meta"><span id="classroom-live-signal">Waiting for a WorkPulse signal</span></div>
+          <div class="classroom-health-meta"><span id="classroom-live-signal">Waiting for a LearningPulse signal</span></div>
           <div class="classroom-actions">
-            <button class="btn-primary" id="classroom-start-now" onclick="startClassroomSession('class')">Start class now</button>
+            <button class="btn-primary" id="classroom-start-now" onclick="startClassroomSession('class')">Start session now</button>
             <button class="btn-ghost workspace-hidden" id="classroom-end-session" onclick="endClassroomSession()">End session early</button>
           </div>
         </article>
@@ -442,9 +453,12 @@
       <div class="classroom-main-grid">
         <article class="classroom-primary-card">
           <div class="showcase-label">UPCOMING SESSION</div>
-          <h3>Schedule a learning policy</h3>
+          <h3>Schedule a learning session</h3>
           <div class="classroom-schedule-form">
-            <label>Session name<input id="classroom-session-name" value="Research Methods"></label>
+            <label>Course or session<input id="classroom-session-name" placeholder="e.g. Research Methods"></label>
+            <label class="classroom-form-wide">Exercise<input id="classroom-session-exercise" placeholder="What should learners complete?"></label>
+            <label class="classroom-form-wide">Learning goal<input id="classroom-session-goal" placeholder="What should learners understand or demonstrate?"></label>
+            <label>AI use<select id="classroom-session-ai-use"><option value="approved_only">Approved tools only</option><option value="brainstorm">Brainstorming only</option><option value="attributed">Allowed with attribution</option><option value="prohibited">Not permitted</option><option value="open">Open use</option></select></label>
             <label>Starts at<input id="classroom-session-start" type="datetime-local"></label>
             <label>Duration<input id="classroom-session-duration" type="number" min="5" max="480" value="90"><span>minutes</span></label>
           </div>
@@ -465,7 +479,7 @@
       <div class="classroom-main-grid classroom-device-grid">
         <article class="classroom-primary-card">
           <div class="showcase-label">ENROLLED DEVICES</div>
-          <h3>Classroom computers</h3>
+          <h3>Learning devices</h3>
           <div id="classroom-device-list" class="classroom-device-list">
             <p class="classroom-card-copy">No student devices have paired with this console.</p>
           </div>
@@ -473,9 +487,26 @@
         <article class="classroom-policy-card">
           <div class="showcase-label">ADD A DEVICE</div>
           <h4>Pair another laptop</h4>
-          <p class="classroom-card-copy">The devices may use any shared network where they can reach each other. Create an invitation and paste it into WorkPulse on the other computer.</p>
+          <p class="classroom-card-copy">The devices may use any shared network where they can reach each other. Create an invitation and paste it into LearningPulse on the other computer.</p>
           <button class="btn-primary" onclick="createClassroomPairing()">Create invitation</button>
           <div id="classroom-pairing-result" class="classroom-pairing-result workspace-hidden"></div>
+        </article>
+      </div>
+    </div>
+
+    <div id="classroom-console-devices" class="classroom-console-panel workspace-hidden">
+      <div class="classroom-main-grid classroom-device-grid">
+        <article class="classroom-primary-card">
+          <div class="showcase-label">REAL DEVICES</div>
+          <h3>Connected learning devices</h3>
+          <p class="classroom-card-copy">Only enrolled computers appear here. Send contextual support during an active session without opening a raw screen.</p>
+          <div id="classroom-device-list-full" class="classroom-device-list"><p class="classroom-card-copy">No devices are connected.</p></div>
+        </article>
+        <article class="classroom-policy-card">
+          <div class="showcase-label">ADD A DEVICE</div>
+          <h4>Connect another computer</h4>
+          <p class="classroom-card-copy">Create an invitation here, then paste it into LearningPulse on the learning device.</p>
+          <button class="btn-primary" onclick="createClassroomPairing()">Create invitation</button>
         </article>
       </div>
     </div>
@@ -485,16 +516,16 @@
         <article class="classroom-primary-card">
           <div class="showcase-label" id="classroom-student-device">NO DEVICE SELECTED</div>
           <h3 id="classroom-student-title">No enrolled device</h3>
-          <p id="classroom-student-message">Pair a classroom computer to see its live policy view.</p>
+          <p id="classroom-student-message">Connect this learning device to receive its session policy.</p>
           <div class="classroom-health-line"><span id="classroom-student-health-bar" style="width:0"></span></div>
           <div class="classroom-health-meta"><span id="classroom-student-connection">Waiting for enrolment</span><span id="classroom-student-expiry"></span></div>
         </article>
         <article class="classroom-policy-card">
-          <div class="showcase-label">JOIN A CLASSROOM</div>
+          <div class="showcase-label">JOIN A LEARNING SESSION</div>
           <h4>Connect this computer</h4>
-          <p class="classroom-card-copy">Paste the invitation from the Session Console. WorkPulse handles the address, pairing code and agent automatically.</p>
+          <p class="classroom-card-copy">Paste the invitation from the facilitator. LearningPulse handles the address, pairing code and agent automatically.</p>
           <div class="classroom-join-form">
-            <label>Invitation<input id="classroom-join-invitation" placeholder="Paste WorkPulse classroom invitation"></label>
+            <label>Invitation<input id="classroom-join-invitation" placeholder="Paste LearningPulse invitation"></label>
             <label>Device name<input id="classroom-join-name" placeholder="e.g. Library Laptop 12"></label>
             <button class="btn-primary" id="classroom-join-button" onclick="joinClassroomDevice()">Connect this device</button>
             <small id="classroom-join-status"></small>
@@ -536,6 +567,16 @@
           <p class="classroom-card-copy" id="classroom-policy-saved">Saved policies are used by the next class session and sent to every enrolled device.</p>
         </article>
       </div>
+    </div>
+
+    <div id="classroom-console-report" class="classroom-console-panel workspace-hidden">
+      <article class="classroom-primary-card learning-report-card">
+        <div class="showcase-label">FACTUAL SESSION ACCOUNT</div>
+        <h3 id="learning-report-title">No learning session recorded yet</h3>
+        <p id="learning-report-context" class="classroom-card-copy">A report will appear after real devices participate in a declared session.</p>
+        <div id="learning-report-stats" class="classroom-report-stats"></div>
+        <div id="learning-report-body" class="learning-report-body"></div>
+      </article>
     </div>
   </section>
 
@@ -583,7 +624,7 @@
 
 <aside id="feedback-invite" class="feedback-invite" aria-live="polite">
   <div>
-    <strong>Help shape WorkPulse</strong>
+    <strong>Help shape Pulse</strong>
     <span>When you have a moment, tell us what worked and what got in your way.</span>
   </div>
   <button class="text-action" onclick="dismissFeedbackInvite()">Later</button>

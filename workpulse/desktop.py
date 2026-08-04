@@ -17,16 +17,53 @@ import sys
 from pathlib import Path
 
 
-def _default_home() -> Path:
+_HOME_NAMES = {
+    ("institution", "member"): "Institution",
+    ("developer", "lab"): "DeveloperLab",
+    ("learning", "facilitator"): "LearningFacilitator",
+    ("learning", "device"): "LearningDevice",
+}
+
+
+def _runtime_flavour(argv: list[str]) -> tuple[str, str]:
+    """Infer flavour before importing common.py (which freezes ROOT).
+
+    Install commands carry explicit values. Normal launches infer them from the
+    flavour-specific application/install directory. Unknown/legacy executables
+    remain Personal Pulse for backwards compatibility.
+    """
+    try:
+        p = argv.index("--product")
+        r = argv.index("--role")
+        pair = (argv[p + 1].lower(), argv[r + 1].lower().replace("_", "-"))
+        if pair == ("learning", "learning-device"):
+            pair = ("learning", "device")
+        if pair in _HOME_NAMES:
+            return pair
+    except (ValueError, IndexError):
+        pass
+    runtime = str(Path(sys.executable).resolve()).lower()
+    if "workpulseinstitution" in runtime or "workpulse institution" in runtime:
+        return "institution", "member"
+    if "learningpulsefacilitator" in runtime or "learningpulse facilitator" in runtime:
+        return "learning", "facilitator"
+    if "learningpulsedevice" in runtime or "learningpulse device" in runtime:
+        return "learning", "device"
+    return "developer", "lab"
+
+
+def _default_home(flavour: tuple[str, str]) -> Path:
+    name = _HOME_NAMES[flavour]
     if sys.platform == "darwin":
-        return Path.home() / "Library" / "Application Support" / "WorkPulse"
+        return Path.home() / "Library" / "Application Support" / "Pulse" / name
     if sys.platform == "win32":
-        return Path(os.environ.get("LOCALAPPDATA", Path.home())) / "WorkPulse"
-    return Path.home() / ".workpulse"
+        return Path(os.environ.get("LOCALAPPDATA", Path.home())) / "Pulse" / name
+    return Path.home() / ".pulse" / name.lower()
 
 
-def _prepare_home() -> Path:
-    home = Path(os.environ.setdefault("WORKPULSE_HOME", str(_default_home())))
+def _prepare_home(argv: list[str]) -> Path:
+    home = Path(os.environ.setdefault(
+        "WORKPULSE_HOME", str(_default_home(_runtime_flavour(argv)))))
     home.mkdir(parents=True, exist_ok=True)
     os.chdir(home)
     return home
@@ -39,8 +76,8 @@ def _run_agent(module: str, args: list[str]) -> int:
 
 
 def main(argv: list[str] | None = None) -> int:
-    _prepare_home()
     argv = list(sys.argv[1:] if argv is None else argv)
+    _prepare_home(argv)
     if argv[:1] == ["--agent"]:
         if len(argv) < 2:
             raise SystemExit("--agent requires a module name")

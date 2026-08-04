@@ -153,6 +153,7 @@ def local_status() -> dict:
         "mode": _last_remote_status.get("mode", "normal"),
         "active_session": _last_remote_status.get("active_session"),
         "scheduled_session": _last_remote_status.get("scheduled_session"),
+        "interventions": _last_remote_status.get("interventions", []),
     }
 
 

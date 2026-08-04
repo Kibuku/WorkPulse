@@ -209,3 +209,89 @@ def test_local_join_enrolls_and_starts_agent(monkeypatch):
         "http://10.10.1.80:5722", "VQJ-324", "Library Laptop"
     )
     assert response.json()["running"] is True
+
+
+def test_declared_exercise_and_ai_rule_are_persisted(tmp_path: Path):
+    vault = tmp_path / "learning.db"
+    status = classroom.start_session(
+        mode="class",
+        title="Research Methods",
+        exercise="Compare two sampling approaches",
+        learning_goal="Defend a suitable sampling method",
+        ai_use="brainstorm",
+        path=vault,
+    )
+    session = status["active_session"]
+    assert session["exercise"] == "Compare two sampling approaches"
+    assert session["learning_goal"] == "Defend a suitable sampling method"
+    assert session["ai_use"] == "brainstorm"
+
+
+def test_prohibited_ai_use_creates_factual_policy_event(tmp_path: Path):
+    vault = tmp_path / "learning.db"
+    classroom.start_session(
+        mode="class", title="Independent analysis", ai_use="prohibited", path=vault
+    )
+    result = classroom.evaluate_signal({
+        "app": "Google Chrome", "domain": "chatgpt.com", "title": "ChatGPT",
+        "device_id": "Device TEST", "source_ref": "browser:ai",
+    }, path=vault)
+    assert result["decision"] == "policy_event"
+    assert "AI use is not permitted" in result["rule"]
+
+
+def test_facilitator_support_reaches_device_and_report(tmp_path: Path):
+    vault = tmp_path / "learning.db"
+    pairing = classroom.create_pairing(path=vault)
+    enrolled = classroom.enroll_device(pairing["code"], "Lab 12", "Windows", path=vault)
+    status = classroom.start_session(
+        mode="class", title="Data analysis", exercise="Clean the dataset", path=vault
+    )
+    heartbeat = classroom.device_heartbeat(enrolled["token"], {
+        "app": "Microsoft Excel", "title": "survey-data.xlsx", "domain": "",
+    }, path=vault)
+    assert heartbeat["decision"]["decision"] == "policy_event"
+    sent = classroom.send_intervention(
+        enrolled["device_id"], "Check the missing-value column first", path=vault
+    )
+    second = classroom.device_heartbeat(enrolled["token"], {
+        "app": "Microsoft Excel", "title": "survey-data.xlsx", "domain": "",
+    }, path=vault)
+    assert second["status"]["interventions"][0]["message"] == \
+        "Check the missing-value column first"
+    classroom.acknowledge_intervention(enrolled["token"], sent["id"], path=vault)
+    report = classroom.session_report(status["active_session"]["id"], path=vault)
+    assert report["summary"]["devices_observed"] == 1
+    assert report["summary"]["facilitator_actions"] == 1
+    assert report["summary"]["acknowledged_actions"] == 1
+    assert report["interventions"][0]["device_name"] == "Lab 12"
+
+
+def test_product_entry_routes_are_separate():
+    from fastapi.testclient import TestClient
+    import workpulse.web.app as appmod
+
+    client = TestClient(appmod.app)
+    assert client.get("/personal").status_code == 200
+    assert client.get("/learning").status_code == 200
+    source = client.get("/learning").text
+    assert "learning-product-nav" in source
+
+
+def test_learning_retention_removes_heavy_evidence_but_keeps_session_marker(tmp_path: Path):
+    vault = tmp_path / "learning.db"
+    pairing = classroom.create_pairing(path=vault)
+    enrolled = classroom.enroll_device(pairing["code"], "Lab 2", "Windows", path=vault)
+    status = classroom.start_session(
+        mode="class", title="Methods", exercise="Draft a sampling plan", path=vault
+    )
+    classroom.device_heartbeat(enrolled["token"], {
+        "app": "Steam", "title": "Private window title", "source_ref": "agent:raw"
+    }, path=vault)
+    future = datetime.now(timezone.utc) + timedelta(days=101)
+    result = classroom.apply_retention(now=future, path=vault)
+    assert result["raw_evidence_redacted"] == 1
+    assert result["events_expired"] == 1
+    report = classroom.session_report(status["active_session"]["id"], path=vault)
+    assert report["session"]["exercise"] == "Draft a sampling plan"
+    assert report["events"] == []

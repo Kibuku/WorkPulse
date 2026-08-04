@@ -14,6 +14,7 @@ from urllib.parse import urlparse
 
 from workpulse import __version__
 from workpulse.common import ROOT
+from workpulse import product as product_identity
 
 DEFAULT_MANIFEST_URL = (
     "https://njiani-flame.vercel.app/update.json"
@@ -47,7 +48,15 @@ def check(*, manifest_url: str = DEFAULT_MANIFEST_URL,
         manifest = json.load(response)
 
     key = platform_key()
-    artifact = (manifest.get("platforms") or {}).get(key) if key else None
+    channel = product_identity.release_channel()
+    products = manifest.get("products") or {}
+    selected = products.get(channel) if products else manifest
+    # Old manifests describe the retired generic/Personal package. Never offer
+    # one to an Institution or Learning installation because that could silently
+    # change its role or data boundary.
+    compatible = bool(products)
+    artifact = ((selected or {}).get("platforms") or {}).get(key) \
+        if key and compatible else None
     latest = str(manifest.get("version") or "")
     available = bool(
         artifact and latest
@@ -59,9 +68,12 @@ def check(*, manifest_url: str = DEFAULT_MANIFEST_URL,
         "update_available": available,
         "supported": key is not None,
         "platform": key,
+        "channel": channel,
+        "product": product_identity.current().public_dict(),
         "notes": manifest.get("notes") or "",
         "published_at": manifest.get("published_at"),
         "artifact": artifact if available else None,
+        "manifest_supports_product": bool(products),
     }
 
 

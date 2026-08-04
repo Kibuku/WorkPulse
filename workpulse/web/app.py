@@ -59,14 +59,52 @@ def _is_noise(path_str: str) -> bool:
 
 import psutil
 import uvicorn
-from fastapi import FastAPI, Request, Response
-from fastapi.responses import FileResponse, JSONResponse
+from fastapi import FastAPI, HTTPException, Request, Response
+from fastapi.responses import FileResponse, JSONResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 
 from workpulse.common import load_config, resolve
 from workpulse.core import classroom as classroom_core
+from workpulse import product as product_identity
 
 app = FastAPI(title="WorkPulse", docs_url=None, redoc_url=None)
+
+
+def _require_local_console(request: Request) -> None:
+    """Facilitator-only actions never cross the LAN gateway.
+
+    The product dashboard is bound to loopback. This guard prevents an
+    accidental future host change from exposing reports or control actions to
+    the shared classroom network. Enrolled devices use the separate gateway
+    and bearer-authenticated endpoints instead.
+    """
+    import ipaddress
+    host = request.client.host if request.client else ""
+    if host == "testclient":
+        return
+    try:
+        local = ipaddress.ip_address(host).is_loopback
+    except ValueError:
+        local = host == "localhost"
+    if not local:
+        raise HTTPException(status_code=403, detail="facilitator console is local only")
+
+
+def _require_capability(capability: str) -> None:
+    """Enforce the installed product boundary, independent of browser URL."""
+    if not product_identity.has(capability):
+        raise HTTPException(
+            status_code=403,
+            detail=f"this installation does not provide {capability}",
+        )
+
+
+def _require_facilitator(request: Request | None = None) -> None:
+    # `None` is used only by direct unit-level function calls. FastAPI always
+    # supplies a Request for the network route.
+    if request is not None:
+        _require_local_console(request)
+    _require_capability("learning.facilitator")
 
 # Dashboard assets (HTML/CSS/JS) live in web/static/, served verbatim; all
 # dynamic data reaches the page through the /api/* endpoints below.
@@ -117,6 +155,21 @@ def _python() -> str:
     return str(Path(sys.executable))
 
 
+def _sensor_cmd(module: str) -> list[str]:
+    """Argv to launch a sensor (``module`` is 'watcher' or 'activity') as its
+    own process. Correct for BOTH builds:
+      • frozen desktop  → the bundled exe understands ``--agent <module>``
+      • source install  → ``python -m workpulse.signals.<module>``
+    The old code ran ``[sys.executable, web/<module>.py]``, but that script does
+    not exist, so in the frozen build ``WorkPulse.exe <missing.py>`` fell
+    through to launching another TRAY and no sensor ever ran (no capture)."""
+    exe = str(Path(sys.executable))
+    mod = f"workpulse.signals.{module}"
+    if getattr(sys, "frozen", False):
+        return [exe, "--agent", mod]
+    return [exe, "-m", mod]
+
+
 def _watcher_script() -> str:
     return str(Path(__file__).resolve().parent / "watcher.py")
 
@@ -150,7 +203,7 @@ def start_watcher() -> bool:
     if is_watcher_running():
         return False
     _watcher_proc = subprocess.Popen(
-        [_python(), _watcher_script()],
+        _sensor_cmd("watcher"),
         stdout=subprocess.DEVNULL,
         stderr=subprocess.DEVNULL,
     )
@@ -195,7 +248,7 @@ def start_activity() -> bool:
     if is_activity_running():
         return False
     _activity_proc = subprocess.Popen(
-        [_python(), _activity_script()],
+        _sensor_cmd("activity"),
         stdout=subprocess.DEVNULL,
         stderr=subprocess.DEVNULL,
     )
@@ -1986,7 +2039,8 @@ _ALLOWED_SECRETS = {"anthropic_key", "smtp_password", "smtp_user", "smtp_to"}
 # ── Classroom: Session Console and managed-device policy service ─────────────
 
 @app.get("/api/v2/classroom/status")
-def api_classroom_status():
+def api_classroom_status(request: Request = None):
+    _require_facilitator(request)
     status = classroom_core.session_status()
     devices = classroom_core.devices()
     device_ids = {device["id"] for device in devices}
@@ -2011,7 +2065,8 @@ def api_classroom_status():
 
 
 @app.get("/api/v2/classroom/policy")
-def api_classroom_policy(mode: str = "class"):
+def api_classroom_policy(request: Request, mode: str = "class"):
+    _require_facilitator(request)
     try:
         return classroom_core.get_policy(mode)
     except ValueError as exc:
@@ -2020,6 +2075,7 @@ def api_classroom_policy(mode: str = "class"):
 
 @app.post("/api/v2/classroom/policy")
 async def api_classroom_policy_save(request: Request):
+    _require_facilitator(request)
     payload = await request.json()
     try:
         return classroom_core.save_policy(
@@ -2031,6 +2087,7 @@ async def api_classroom_policy_save(request: Request):
 
 @app.post("/api/v2/classroom/pairing")
 def api_classroom_pairing(request: Request):
+    _require_facilitator(request)
     import ipaddress
     import socket
     import threading
@@ -2082,12 +2139,14 @@ def _validate_classroom_server(server: str) -> str:
 
 @app.get("/api/v2/classroom/local-agent")
 def api_classroom_local_agent():
+    _require_capability("learning.device")
     from workpulse import classroom_agent
     return classroom_agent.local_status()
 
 
 @app.post("/api/v2/classroom/local-agent/join")
 async def api_classroom_local_agent_join(request: Request):
+    _require_capability("learning.device")
     from workpulse import classroom_agent
     payload = await request.json()
     try:
@@ -2146,6 +2205,7 @@ async def api_classroom_agent_heartbeat(request: Request):
 
 @app.post("/api/v2/classroom/session/start")
 async def api_classroom_start(request: Request):
+    _require_facilitator(request)
     payload = await request.json()
     try:
         status = classroom_core.start_session(
@@ -2154,6 +2214,9 @@ async def api_classroom_start(request: Request):
             duration_minutes=int(payload.get("duration_minutes") or 60),
             policy=payload.get("policy"),
             starts_at=payload.get("starts_at"),
+            exercise=str(payload.get("exercise") or ""),
+            learning_goal=str(payload.get("learning_goal") or ""),
+            ai_use=str(payload.get("ai_use") or "approved_only"),
         )
     except (TypeError, ValueError) as exc:
         return JSONResponse({"error": str(exc)}, status_code=400)
@@ -2163,21 +2226,53 @@ async def api_classroom_start(request: Request):
 
 
 @app.post("/api/v2/classroom/session/end")
-def api_classroom_end():
+def api_classroom_end(request: Request):
+    _require_facilitator(request)
     status = classroom_core.end_session()
     status["devices"] = classroom_core.devices()
     status["latest_signal"] = None
     return status
 
 
+@app.post("/api/v2/classroom/intervention")
+async def api_classroom_intervention(request: Request):
+    _require_facilitator(request)
+    payload = await request.json()
+    try:
+        return classroom_core.send_intervention(
+            str(payload.get("device_id") or ""),
+            str(payload.get("message") or ""),
+            kind=str(payload.get("kind") or "support"),
+        )
+    except ValueError as exc:
+        return JSONResponse({"error": str(exc)}, status_code=400)
+
+
+@app.post("/api/v2/classroom/agent/intervention/{intervention_id}/ack")
+def api_classroom_intervention_ack(intervention_id: str, request: Request):
+    try:
+        return classroom_core.acknowledge_intervention(
+            _classroom_bearer(request), intervention_id
+        )
+    except ValueError as exc:
+        return JSONResponse({"error": str(exc)}, status_code=401)
+
+
+@app.get("/api/v2/classroom/report")
+def api_classroom_report(request: Request, session_id: str | None = None):
+    _require_facilitator(request)
+    return classroom_core.session_report(session_id)
+
+
 @app.post("/api/v2/classroom/evaluate")
 async def api_classroom_evaluate(request: Request):
+    _require_facilitator(request)
     payload = await request.json()
     signal = payload.get("signal") if isinstance(payload, dict) else None
     if not signal:
-        return api_classroom_status()
+        return api_classroom_status(request)
     result = classroom_core.evaluate_signal(signal=signal)
-    status = api_classroom_status()
+    status = api_classroom_status(request)
     status["latest_signal"] = result.get("signal")
     status["latest_decision"] = result
     return status
@@ -2231,6 +2326,38 @@ async def api_set_email(payload: dict):
 
 @app.get("/")
 def dashboard():
+    return RedirectResponse(product_identity.current().entry_path, status_code=307)
+
+
+@app.get("/api/product")
+def api_product():
+    return product_identity.current().public_dict()
+
+
+@app.get("/personal")
+def personal_product():
+    _require_capability("personal.view")
+    return FileResponse(STATIC_DIR / "index.html", media_type="text/html")
+
+
+@app.get("/institution")
+def institution_product():
+    _require_capability("institution.member")
+    return FileResponse(STATIC_DIR / "index.html", media_type="text/html")
+
+
+@app.get("/learning")
+def learning_product():
+    selected = product_identity.current()
+    if selected.has("learning.device"):
+        return RedirectResponse("/learning/device", status_code=307)
+    _require_capability("learning.facilitator")
+    return FileResponse(STATIC_DIR / "index.html", media_type="text/html")
+
+
+@app.get("/learning/device")
+def learning_device_product():
+    _require_capability("learning.device")
     return FileResponse(STATIC_DIR / "index.html", media_type="text/html")
 
 

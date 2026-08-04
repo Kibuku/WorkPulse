@@ -58,6 +58,7 @@ _load_user_env_vars()
 from workpulse.web.app import app as fastapi_app, PORT
 from workpulse.web.app import is_watcher_running, start_watcher, stop_watcher
 from workpulse.web.app import is_activity_running, start_activity, stop_activity
+from workpulse.product import current as current_product
 
 # ── crash-proof logging ───────────────────────────────────────────────────────
 # pythonw.exe has no console; without a log we never see startup exceptions.
@@ -120,7 +121,7 @@ def _start_server():
 # ── tray menu actions ─────────────────────────────────────────────────────────
 
 def _open_dashboard(icon, item):
-    webbrowser.open(f"http://127.0.0.1:{PORT}")
+    webbrowser.open(f"http://127.0.0.1:{PORT}{current_product().entry_path}")
 
 
 def _toggle_watcher(icon, item):

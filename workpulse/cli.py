@@ -18,6 +18,9 @@ from __future__ import annotations
 
 import argparse
 import copy
+import datetime
+import json
+import os
 import shutil
 import subprocess
 import sys
@@ -86,14 +89,140 @@ def _init_db() -> None:
         con.close()
 
 
+# Data folders the older clone/robocopy install flow put beside the code in the
+# user's home, instead of the pinned per-user directory the desktop build uses.
+_LEGACY_CONFIG = ("projects.yaml", "config.yaml", "calendar.url",
+                  "identity.yaml", "secrets.json")
+_LEGACY_DIRS = ("brain", "reports", "consolidation", "captures", "vault", "vaults")
+
+
+def _legacy_homes(root: Path) -> list[Path]:
+    """Candidate data dirs left by the older install flow, which stored code and
+    data together under the user's home. Never returns `root` itself (a source
+    checkout run from ~/WorkPulse would otherwise try to adopt from itself)."""
+    cands: list[Path] = []
+    if sys.platform == "darwin":
+        cands.append(Path.home() / "WorkPulse")
+    elif sys.platform == "win32":
+        up = os.environ.get("USERPROFILE")
+        if up:
+            cands.append(Path(up) / "WorkPulse")
+    root_r = root.resolve()
+    return [c for c in cands if c.exists() and c.resolve() != root_r]
+
+
+def _session_count(db_file: Path) -> int:
+    """Rows in `session`, or 0 if the DB is absent/unreadable. Opened read-only
+    so we never mutate a database we may be about to copy verbatim."""
+    if not db_file.exists():
+        return 0
+    import sqlite3
+    try:
+        con = sqlite3.connect(f"file:{db_file}?mode=ro", uri=True)
+        try:
+            return int(con.execute("select count(*) from session").fetchone()[0])
+        finally:
+            con.close()
+    except Exception:  # noqa: BLE001 — a bad read must never block install
+        return 0
+
+
+def _adopt_legacy_home(root: Path) -> bool:
+    """Fold a legacy install's data into the pinned per-user directory ONCE, so
+    an update never lands on an empty home while the user's history sits in the
+    old location. Idempotent: a marker in the legacy folder blocks re-adoption,
+    and we only adopt when the legacy dir has more sessions than this one (so we
+    never clobber real data with old data). Mirrors the manual DB+taxonomy copy
+    a first-time desktop install would otherwise force by hand."""
+    pinned_db = root / "workpulse.db"
+    pinned_n = _session_count(pinned_db)
+    for legacy in _legacy_homes(root):
+        marker = legacy / ".workpulse-adopted"
+        if marker.exists():
+            continue
+        legacy_n = _session_count(legacy / "workpulse.db")
+        if legacy_n == 0 or legacy_n <= pinned_n:
+            continue
+        print(f"  adopt     earlier WorkPulse data found at {legacy}")
+        print(f"            importing it once ({legacy_n:,} sessions here "
+              f"vs {pinned_n:,} in this install)")
+        root.mkdir(parents=True, exist_ok=True)
+        # Preserve whatever's already here (an empty starter DB + its WAL) first.
+        if pinned_db.exists():
+            stamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+            bk = root / "backups" / f"pre-adopt-{stamp}"
+            bk.mkdir(parents=True, exist_ok=True)
+            for f in root.glob("workpulse.db*"):
+                shutil.copy2(f, bk / f.name)
+            print(f"            backed up existing data to {bk}")
+        # Remove the stale DB + WAL/SHM so the copied DB isn't corrupted by them.
+        for f in root.glob("workpulse.db*"):
+            f.unlink()
+        for name in ("workpulse.db", "workpulse.db-wal", "workpulse.db-shm"):
+            src = legacy / name
+            if src.exists():
+                shutil.copy2(src, root / name)
+        (root / "config").mkdir(parents=True, exist_ok=True)
+        for name in _LEGACY_CONFIG:
+            src = legacy / "config" / name
+            if src.exists():
+                shutil.copy2(src, root / "config" / name)
+        for d in _LEGACY_DIRS:
+            src = legacy / d
+            if src.is_dir():
+                shutil.copytree(src, root / d, dirs_exist_ok=True)
+        marker.write_text(
+            f"Adopted into {root} on "
+            f"{datetime.datetime.now():%Y-%m-%d %H:%M:%S}.\n"
+            "This is a retired WorkPulse install; its data now lives in the\n"
+            "per-user application directory. Safe to delete once you have\n"
+            "confirmed your history and streams are present in the app.\n",
+            encoding="utf-8")
+        print(f"            done — {legacy} retired")
+        return True
+    return False
+
+
 def cmd_install(args: argparse.Namespace) -> int:
     print("WorkPulse — install")
     print("=" * 52)
+    # Only the frozen desktop build adopts a prior install's data dir. A source
+    # or dev checkout keeps its own data beside the code and must never reach
+    # into ~/WorkPulse (that would hijack another install on the same machine).
+    if getattr(sys, "frozen", False):
+        _adopt_legacy_home(ROOT)
+    from workpulse import product
+    requested_product = getattr(args, "product", None)
+    requested_role = getattr(args, "role", None)
+    if requested_product or requested_role:
+        if not (requested_product and requested_role):
+            print("  product   both --product and --role are required", file=sys.stderr)
+            return 2
+        try:
+            selected = product.configure(requested_product, requested_role)
+        except ValueError as exc:
+            print(f"  product   {exc}", file=sys.stderr)
+            return 2
+    else:
+        selected = product.current()
+        # Freeze the safe legacy default on first desktop install. Source
+        # checkouts retain their developer identity unless explicitly selected.
+        if getattr(sys, "frozen", False) and not selected.configured:
+            selected = product.configure("developer", "lab")
+    print(f"  product   {selected.label} ({selected.channel})")
     _ensure_config()
     _init_db()
     from workpulse.ops import scheduler
+    if sys.platform == "win32":
+        scheduler._win_install_log(
+            f"=== install {__version__} at "
+            f"{datetime.datetime.now():%Y-%m-%d %H:%M:%S} home={ROOT} ===")
     print("  agents    installing background agents:")
     rc = scheduler.install_all()
+    retired = scheduler.remove_legacy_windows_tasks()
+    if retired:
+        print(f"  cleanup   retired {len(retired)} legacy task(s): "
+              f"{', '.join(retired)}")
     print()
     if rc == 0:
         print("Done. Next steps:")
@@ -151,7 +280,15 @@ def cmd_web(args: argparse.Namespace) -> int:
 
 
 def cmd_version(args: argparse.Namespace) -> int:
-    print(f"WorkPulse {__version__}")
+    from workpulse import product
+    selected = product.current()
+    print(f"WorkPulse {__version__} — {selected.label} [{selected.channel}]")
+    return 0
+
+
+def cmd_product(args: argparse.Namespace) -> int:
+    from workpulse import product
+    print(json.dumps(product.current().public_dict(), indent=2))
     return 0
 
 
@@ -216,6 +353,7 @@ _COMMANDS = {
     "doctor":    cmd_doctor,
     "web":       cmd_web,
     "version":   cmd_version,
+    "product":   cmd_product,
     "classroom-agent": cmd_classroom_agent,
     "classroom-gateway": cmd_classroom_gateway,
 }
@@ -226,12 +364,15 @@ def main(argv: list[str] | None = None) -> int:
     p = argparse.ArgumentParser(prog="workpulse",
                                 description="WorkPulse — a local-first attention brain.")
     sub = p.add_subparsers(dest="cmd")
-    sub.add_parser("install",   help="set up config, database, and background agents")
+    install = sub.add_parser("install", help="set up config, database, and background agents")
+    install.add_argument("--product", choices=("institution", "learning", "developer"))
+    install.add_argument("--role", choices=("member", "lab", "facilitator", "device", "learning_device"))
     sub.add_parser("uninstall", help="remove the background agents")
     sub.add_parser("update",    help="pull the latest version from GitHub and apply it")
     sub.add_parser("status",    help="show agents + a health summary")
     sub.add_parser("doctor",    help="run the health checks")
     sub.add_parser("version",   help="print the installed version")
+    sub.add_parser("product",   help="show this installation's product and role")
     ca = sub.add_parser("classroom-agent",
                         help="enrol or run this computer as a Classroom device")
     ca.add_argument("agent_args", nargs=argparse.REMAINDER)

@@ -7,7 +7,11 @@ if [ -z "$CONSOLE_USER" ] || [ "$CONSOLE_USER" = "root" ]; then
 fi
 USER_ID="$(id -u "$CONSOLE_USER")"
 USER_HOME="$(dscl . -read "/Users/$CONSOLE_USER" NFSHomeDirectory | awk '{print $2}')"
-BIN="/Applications/WorkPulse.app/Contents/MacOS/WorkPulse"
+APP_NAME="@APP_NAME@"
+PRODUCT="@PRODUCT@"
+ROLE="@ROLE@"
+ENTRY_PATH="@ENTRY_PATH@"
+BIN="/Applications/$APP_NAME.app/Contents/MacOS/WorkPulse"
 LOG="/tmp/workpulse-install.log"
 
 if [ ! -x "$BIN" ]; then
@@ -16,13 +20,13 @@ if [ ! -x "$BIN" ]; then
 fi
 
 launchctl asuser "$USER_ID" sudo -u "$CONSOLE_USER" \
-  env HOME="$USER_HOME" "$BIN" --cli install >>"$LOG" 2>&1
+  env HOME="$USER_HOME" "$BIN" --cli install --product "$PRODUCT" --role "$ROLE" >>"$LOG" 2>&1
 launchctl asuser "$USER_ID" sudo -u "$CONSOLE_USER" \
-  env HOME="$USER_HOME" open -a WorkPulse || true
+  env HOME="$USER_HOME" open -a "$APP_NAME" || true
 
 # Never open a dead localhost page. Give launchd's dashboard agent up to 30
 # seconds to bind the port, then open it in the user's browser only when ready.
-DASHBOARD="http://127.0.0.1:5700"
+DASHBOARD="http://127.0.0.1:5700$ENTRY_PATH"
 READY=0
 for _ in $(seq 1 60); do
   if curl -fsS --max-time 1 "$DASHBOARD" >/dev/null 2>&1; then

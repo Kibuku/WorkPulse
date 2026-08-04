@@ -302,7 +302,10 @@ def test_jobs_for_platform_filters_gui_agents(monkeypatch):
     monkeypatch.setattr(scheduler.sys, "platform", "win32")
     win = {j["slug"] for j in scheduler._jobs_for_platform()}
     assert "dashboard" not in win and "menubar" not in win
-    assert "activity" in win                             # sensors still register
+    # activity + watcher are tray-owned on Windows (start_activity/start_watcher),
+    # NOT scheduled tasks — registering both double-manages and breaks capture.
+    assert "activity" not in win and "watcher" not in win
+    assert {"nightly", "dream-refresh", "calendar-sync", "doctor"} <= win
 
 
 def test_dashboard_agent_runs_the_web_server():

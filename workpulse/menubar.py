@@ -18,18 +18,24 @@ from __future__ import annotations
 import subprocess
 import urllib.request
 
+from workpulse.product import current as current_product
+
 try:
     import rumps
 except ImportError:  # only importable on a mac with the [mac] extra installed
     rumps = None
 
-DASH_URL = "http://127.0.0.1:5700"
+DASH_BASE_URL = "http://127.0.0.1:5700"
+
+
+def dashboard_url() -> str:
+    return f"{DASH_BASE_URL}{current_product().entry_path}"
 
 
 def _server_up(timeout: float = 1.5) -> bool:
     """True when the dashboard answers on 5700 (sensors + web are alive)."""
     try:
-        with urllib.request.urlopen(DASH_URL, timeout=timeout) as r:
+        with urllib.request.urlopen(DASH_BASE_URL, timeout=timeout) as r:
             return getattr(r, "status", 200) == 200
     except Exception:
         return False
@@ -38,9 +44,9 @@ def _server_up(timeout: float = 1.5) -> bool:
 def _open_dashboard(_=None) -> None:
     # Chrome per house preference; fall back to the default browser.
     try:
-        subprocess.Popen(["open", "-a", "Google Chrome", DASH_URL])
+        subprocess.Popen(["open", "-a", "Google Chrome", dashboard_url()])
     except Exception:
-        subprocess.Popen(["open", DASH_URL])
+        subprocess.Popen(["open", dashboard_url()])
 
 
 if rumps is not None:

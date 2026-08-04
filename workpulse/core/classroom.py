@@ -1,4 +1,4 @@
-"""WorkPulse Classroom policy, session and enrolled-device engine.
+"""LearningPulse policy, session and enrolled-device engine.
 
 The Classroom vault is physically separate from the Personal WorkPulse atom
 store.  The engine reads one explicit, minimal projection of the latest local
@@ -21,6 +21,9 @@ from workpulse.common import ROOT, ensure_dir
 from workpulse.core import db as atom_db
 
 
+# Keep the existing on-disk location through the product-name transition so an
+# upgrade does not orphan enrolled devices or session history. A later explicit
+# migration may rename the directory after verifying and backing up the vault.
 DEFAULT_VAULT = ROOT / "vaults" / "classroom-prototype" / "classroom.db"
 
 DEFAULT_NORMAL_POLICY = {
@@ -93,7 +96,10 @@ def connect(path: Path | None = None) -> sqlite3.Connection:
           ends_at          TEXT NOT NULL,
           ended_at         TEXT,
           status           TEXT NOT NULL,
-          policy_json      TEXT NOT NULL
+          policy_json      TEXT NOT NULL,
+          exercise         TEXT NOT NULL DEFAULT '',
+          learning_goal    TEXT NOT NULL DEFAULT '',
+          ai_use           TEXT NOT NULL DEFAULT 'approved_only'
         );
         CREATE TABLE IF NOT EXISTS classroom_event (
           id               TEXT PRIMARY KEY,
@@ -136,6 +142,27 @@ def connect(path: Path | None = None) -> sqlite3.Connection:
           last_title       TEXT,
           last_domain      TEXT
         );
+        CREATE TABLE IF NOT EXISTS classroom_intervention (
+          id               TEXT PRIMARY KEY,
+          session_id       TEXT NOT NULL,
+          device_id        TEXT NOT NULL,
+          kind             TEXT NOT NULL,
+          message          TEXT NOT NULL,
+          created_at       TEXT NOT NULL,
+          acknowledged_at  TEXT,
+          FOREIGN KEY(session_id) REFERENCES classroom_session(id),
+          FOREIGN KEY(device_id) REFERENCES classroom_device(id)
+        );
+        CREATE TABLE IF NOT EXISTS classroom_session_device (
+          session_id       TEXT NOT NULL,
+          device_id        TEXT NOT NULL,
+          first_seen       TEXT NOT NULL,
+          last_seen        TEXT NOT NULL,
+          heartbeat_count  INTEGER NOT NULL DEFAULT 1,
+          PRIMARY KEY(session_id, device_id),
+          FOREIGN KEY(session_id) REFERENCES classroom_session(id),
+          FOREIGN KEY(device_id) REFERENCES classroom_device(id)
+        );
         """
     )
     event_columns = {
@@ -152,6 +179,16 @@ def connect(path: Path | None = None) -> sqlite3.Connection:
     if "last_seen" not in event_columns:
         con.execute("ALTER TABLE classroom_event ADD COLUMN last_seen TEXT")
         con.execute("UPDATE classroom_event SET last_seen=ts WHERE last_seen IS NULL")
+    session_columns = {
+        row["name"] for row in con.execute("PRAGMA table_info(classroom_session)").fetchall()
+    }
+    for name, declaration in (
+        ("exercise", "TEXT NOT NULL DEFAULT ''"),
+        ("learning_goal", "TEXT NOT NULL DEFAULT ''"),
+        ("ai_use", "TEXT NOT NULL DEFAULT 'approved_only'"),
+    ):
+        if name not in session_columns:
+            con.execute(f"ALTER TABLE classroom_session ADD COLUMN {name} {declaration}")
     con.execute(
         "INSERT OR IGNORE INTO classroom_state(id, mode, updated_at) VALUES (1, 'normal', ?)",
         (_now(),),
@@ -306,8 +343,31 @@ def device_heartbeat(
     finally:
         con.close()
     decision = evaluate_signal(projected, path=path)
+    status = agent_policy(path=path)
+    active = status.get("active_session")
+    if active:
+        seen = _now()
+        con = connect(path)
+        try:
+            con.execute(
+                """
+                INSERT INTO classroom_session_device
+                  (session_id, device_id, first_seen, last_seen, heartbeat_count)
+                VALUES (?, ?, ?, ?, 1)
+                ON CONFLICT(session_id, device_id) DO UPDATE SET
+                  last_seen=excluded.last_seen,
+                  heartbeat_count=classroom_session_device.heartbeat_count+1
+                """,
+                (active["id"], device["id"], seen, seen),
+            )
+            con.commit()
+        finally:
+            con.close()
+    status["interventions"] = pending_interventions(
+        device["id"], active["id"] if active else None, path=path
+    )
     return {"ok": True, "device_id": device["id"], "decision": decision,
-            "status": agent_policy(path=path)}
+            "status": status}
 
 
 def devices(*, path: Path | None = None) -> list[dict[str, Any]]:
@@ -334,6 +394,103 @@ def agent_policy(*, path: Path | None = None) -> dict[str, Any]:
     }
 
 
+def send_intervention(
+    device_id: str,
+    message: str,
+    *,
+    kind: str = "support",
+    path: Path | None = None,
+) -> dict[str, Any]:
+    """Persist a facilitator action for one real enrolled device."""
+    clean_message = message.strip()
+    if not clean_message:
+        raise ValueError("message is required")
+    if kind not in {"support", "resource", "policy_update"}:
+        raise ValueError("unknown intervention type")
+    con = connect(path)
+    try:
+        active = _active_session(con)
+        if not active:
+            raise ValueError("an active learning session is required")
+        device = con.execute(
+            "SELECT id, name FROM classroom_device WHERE id=?", (device_id,)
+        ).fetchone()
+        if not device:
+            raise ValueError("device is not enrolled")
+        item = {
+            "id": uuid.uuid4().hex,
+            "session_id": active["id"],
+            "device_id": device["id"],
+            "device_name": device["name"],
+            "kind": kind,
+            "message": clean_message,
+            "created_at": _now(),
+            "acknowledged_at": None,
+        }
+        con.execute(
+            """
+            INSERT INTO classroom_intervention
+              (id, session_id, device_id, kind, message, created_at, acknowledged_at)
+            VALUES (?, ?, ?, ?, ?, ?, NULL)
+            """,
+            (item["id"], item["session_id"], item["device_id"], item["kind"],
+             item["message"], item["created_at"]),
+        )
+        con.commit()
+        return item
+    finally:
+        con.close()
+
+
+def pending_interventions(
+    device_id: str,
+    session_id: str | None = None,
+    *,
+    path: Path | None = None,
+) -> list[dict[str, Any]]:
+    if not session_id:
+        return []
+    con = connect(path)
+    try:
+        rows = con.execute(
+            """
+            SELECT id, session_id, device_id, kind, message, created_at
+            FROM classroom_intervention
+            WHERE session_id=? AND device_id=? AND acknowledged_at IS NULL
+            ORDER BY created_at
+            """,
+            (session_id, device_id),
+        ).fetchall()
+        return [dict(row) for row in rows]
+    finally:
+        con.close()
+
+
+def acknowledge_intervention(
+    token: str, intervention_id: str, *, path: Path | None = None
+) -> dict[str, Any]:
+    device = authenticate_device(token, path=path)
+    if not device:
+        raise ValueError("device token is invalid")
+    con = connect(path)
+    try:
+        row = con.execute(
+            "SELECT * FROM classroom_intervention WHERE id=? AND device_id=?",
+            (intervention_id, device["id"]),
+        ).fetchone()
+        if not row:
+            raise ValueError("intervention was not found for this device")
+        acknowledged = row["acknowledged_at"] or _now()
+        con.execute(
+            "UPDATE classroom_intervention SET acknowledged_at=? WHERE id=?",
+            (acknowledged, intervention_id),
+        )
+        con.commit()
+        return {"ok": True, "id": intervention_id, "acknowledged_at": acknowledged}
+    finally:
+        con.close()
+
+
 def start_session(
     *,
     mode: str,
@@ -341,10 +498,15 @@ def start_session(
     duration_minutes: int = 60,
     policy: dict[str, Any] | None = None,
     starts_at: str | None = None,
+    exercise: str = "",
+    learning_goal: str = "",
+    ai_use: str = "approved_only",
     path: Path | None = None,
 ) -> dict[str, Any]:
     if mode not in {"class", "exam"}:
         raise ValueError("mode must be class or exam")
+    if ai_use not in {"prohibited", "approved_only", "brainstorm", "attributed", "open"}:
+        raise ValueError("unknown AI-use rule")
     duration = max(1, min(int(duration_minutes), 480))
     now = datetime.now(timezone.utc)
     started = datetime.fromisoformat(starts_at) if starts_at else now
@@ -368,11 +530,13 @@ def start_session(
         con.execute(
             """
             INSERT INTO classroom_session
-              (id, mode, title, started_at, ends_at, ended_at, status, policy_json)
-            VALUES (?, ?, ?, ?, ?, NULL, ?, ?)
+              (id, mode, title, started_at, ends_at, ended_at, status, policy_json,
+               exercise, learning_goal, ai_use)
+            VALUES (?, ?, ?, ?, ?, NULL, ?, ?, ?, ?, ?)
             """,
             (sid, mode, title.strip() or f"{mode.title()} session",
-             started.isoformat(), ends.isoformat(), session_state, json.dumps(actual_policy)),
+             started.isoformat(), ends.isoformat(), session_state, json.dumps(actual_policy),
+             exercise.strip(), learning_goal.strip(), ai_use),
         )
         state_mode = mode if session_state == "active" else "normal"
         con.execute("UPDATE classroom_state SET mode=?, updated_at=? WHERE id=1", (state_mode, _now()))
@@ -465,6 +629,144 @@ def session_status(*, path: Path | None = None) -> dict[str, Any]:
         con.close()
 
 
+def session_report(session_id: str | None = None, *, path: Path | None = None) -> dict[str, Any]:
+    """Return factual session evidence. No learner score or misconduct claim."""
+    con = connect(path)
+    try:
+        if session_id:
+            session = con.execute(
+                "SELECT * FROM classroom_session WHERE id=?", (session_id,)
+            ).fetchone()
+        else:
+            session = con.execute(
+                """
+                SELECT * FROM classroom_session
+                ORDER BY CASE status WHEN 'active' THEN 0 WHEN 'ended' THEN 1 ELSE 2 END,
+                         started_at DESC LIMIT 1
+                """
+            ).fetchone()
+        if not session:
+            return {"session": None, "events": [], "interventions": [], "devices": []}
+        session_data = dict(session)
+        session_data["policy"] = json.loads(session_data.pop("policy_json"))
+        events = [dict(row) for row in con.execute(
+            """
+            SELECT device_id, app, domain, rule, severity,
+                   SUM(occurrence_count) AS occurrences,
+                   MIN(ts) AS first_seen, MAX(COALESCE(last_seen, ts)) AS last_seen
+            FROM classroom_event WHERE session_id=?
+            GROUP BY device_id, app, domain, rule, severity
+            ORDER BY last_seen DESC
+            """,
+            (session["id"],),
+        ).fetchall()]
+        interventions = [dict(row) for row in con.execute(
+            """
+            SELECT i.id, i.device_id, d.name AS device_name, i.kind, i.message,
+                   i.created_at, i.acknowledged_at
+            FROM classroom_intervention i
+            JOIN classroom_device d ON d.id=i.device_id
+            WHERE i.session_id=? ORDER BY i.created_at
+            """,
+            (session["id"],),
+        ).fetchall()]
+        devices = [dict(row) for row in con.execute(
+            """
+            SELECT d.id, d.name, d.platform, sd.first_seen, sd.last_seen,
+                   sd.heartbeat_count
+            FROM classroom_session_device sd
+            JOIN classroom_device d ON d.id=sd.device_id
+            WHERE sd.session_id=? ORDER BY d.name
+            """,
+            (session["id"],),
+        ).fetchall()]
+        return {
+            "session": session_data,
+            "events": events,
+            "interventions": interventions,
+            "devices": devices,
+            "summary": {
+                "devices_observed": len(devices),
+                "policy_exceptions": sum(int(item["occurrences"] or 0) for item in events),
+                "facilitator_actions": len(interventions),
+                "acknowledged_actions": sum(bool(item["acknowledged_at"]) for item in interventions),
+            },
+        }
+    finally:
+        con.close()
+
+
+def apply_retention(
+    *,
+    now: datetime | None = None,
+    raw_hours: int = 24,
+    detail_days: int = 100,
+    path: Path | None = None,
+) -> dict[str, int]:
+    """Expire heavy learning evidence while keeping declared session markers.
+
+    Window titles and source references are transient. Detailed exceptions,
+    participation heartbeats, and facilitator messages have a bounded review
+    period. The session declaration (exercise, goal, AI rule, policy and times)
+    remains as the compact institutional marker.
+    """
+    if raw_hours < 1 or detail_days < 1:
+        raise ValueError("retention windows must be positive")
+    current = now or datetime.now(timezone.utc)
+    raw_cutoff = (current - timedelta(hours=raw_hours)).isoformat()
+    detail_cutoff = (current - timedelta(days=detail_days)).isoformat()
+    con = connect(path)
+    try:
+        raw = con.execute(
+            """
+            SELECT COUNT(*) FROM classroom_event
+            WHERE COALESCE(last_seen, ts) < ? AND (title != '' OR source_ref != '')
+            """, (raw_cutoff,),
+        ).fetchone()[0]
+        event_count = con.execute(
+            "SELECT COUNT(*) FROM classroom_event WHERE COALESCE(last_seen, ts) < ?",
+            (detail_cutoff,),
+        ).fetchone()[0]
+        intervention_count = con.execute(
+            "SELECT COUNT(*) FROM classroom_intervention WHERE created_at < ?",
+            (detail_cutoff,),
+        ).fetchone()[0]
+        participation_count = con.execute(
+            "SELECT COUNT(*) FROM classroom_session_device WHERE last_seen < ?",
+            (detail_cutoff,),
+        ).fetchone()[0]
+        con.execute("BEGIN")
+        con.execute(
+            "UPDATE classroom_event SET title='', source_ref='' WHERE COALESCE(last_seen, ts) < ?",
+            (raw_cutoff,),
+        )
+        con.execute(
+            "DELETE FROM classroom_event WHERE COALESCE(last_seen, ts) < ?",
+            (detail_cutoff,),
+        )
+        con.execute(
+            "DELETE FROM classroom_intervention WHERE created_at < ?",
+            (detail_cutoff,),
+        )
+        con.execute(
+            "DELETE FROM classroom_session_device WHERE last_seen < ?",
+            (detail_cutoff,),
+        )
+        con.execute("DELETE FROM classroom_pairing WHERE expires_at < ?", (current.isoformat(),))
+        con.execute("COMMIT")
+        return {
+            "raw_evidence_redacted": int(raw),
+            "events_expired": int(event_count),
+            "interventions_expired": int(intervention_count),
+            "participation_expired": int(participation_count),
+        }
+    except Exception:
+        con.execute("ROLLBACK")
+        raise
+    finally:
+        con.close()
+
+
 def latest_signal() -> dict[str, Any] | None:
     """Return the freshest minimal signal projection from Personal atoms."""
     con = atom_db.connect()
@@ -543,8 +845,14 @@ def evaluate_signal(
     blocked_domains = policy.get("blocked_domains", [])
     allowed_apps = policy.get("allowed_apps", [])
     allowed_domains = policy.get("allowed_domains", [])
+    ai_domains = ("chatgpt.com", "claude.ai", "gemini.google.com", "copilot.microsoft.com",
+                  "deepseek.com", "mistral.ai")
+    ai_use = str((active or {}).get("ai_use") or "approved_only")
 
-    if any(app.lower() == x.lower() for x in blocked_apps):
+    if domain and ai_use == "prohibited" and any(_domain_matches(domain, x) for x in ai_domains):
+        decision, severity, rule = "policy_event", "attention", \
+            f"AI use is not permitted for this exercise ({domain})"
+    elif any(app.lower() == x.lower() for x in blocked_apps):
         decision, severity, rule = "policy_event", "attention", f"Application {app} is restricted"
     elif domain and any(_domain_matches(domain, x) for x in blocked_domains):
         decision, severity, rule = "policy_event", "attention", f"Domain {domain} is restricted"

@@ -19,10 +19,10 @@ class _Response(io.BytesIO):
         self.close()
 
 
-def _manifest(version="9.0.0", content=b"installer"):
+def _manifest(version="9.0.0", content=b"installer", *, product_aware=False):
     suffix = "pkg" if sys.platform == "darwin" else "exe"
     key = updater.platform_key() or "macos"
-    return {
+    manifest = {
         "version": version,
         "notes": "A safer update.",
         "platforms": {
@@ -33,12 +33,19 @@ def _manifest(version="9.0.0", content=b"installer"):
             }
         },
     }
+    if product_aware:
+        manifest["products"] = {
+            "workpulse-institution": {"platforms": manifest.pop("platforms")},
+        }
+    return manifest
 
 
 def test_check_reports_newer_verified_release(monkeypatch):
-    payload = json.dumps(_manifest()).encode()
+    payload = json.dumps(_manifest(product_aware=True)).encode()
     monkeypatch.setattr(updater.urllib.request, "urlopen",
                         lambda *a, **k: _Response(payload))
+    monkeypatch.setattr(updater.product_identity, "release_channel",
+                        lambda: "workpulse-institution")
 
     result = updater.check()
 
@@ -48,11 +55,51 @@ def test_check_reports_newer_verified_release(monkeypatch):
 
 
 def test_check_does_not_offer_same_version(monkeypatch):
-    payload = json.dumps(_manifest(updater.__version__)).encode()
+    payload = json.dumps(_manifest(updater.__version__, product_aware=True)).encode()
     monkeypatch.setattr(updater.urllib.request, "urlopen",
                         lambda *a, **k: _Response(payload))
+    monkeypatch.setattr(updater.product_identity, "release_channel",
+                        lambda: "workpulse-institution")
 
     assert updater.check()["update_available"] is False
+
+
+def test_check_selects_installed_product_channel(monkeypatch):
+    manifest = _manifest(product_aware=True)
+    institution_platforms = manifest["products"]["workpulse-institution"]["platforms"]
+    manifest["products"]["learning-device"] = {
+        "platforms": {
+            key: {**artifact, "filename": artifact["filename"].replace(
+                "WorkPulse", "LearningPulse-Device")}
+            for key, artifact in institution_platforms.items()
+        }
+    }
+    payload = json.dumps(manifest).encode()
+    monkeypatch.setattr(updater.urllib.request, "urlopen",
+                        lambda *a, **k: _Response(payload))
+    monkeypatch.setattr(updater.product_identity, "release_channel",
+                        lambda: "learning-device")
+    monkeypatch.setattr(
+        updater.product_identity, "current",
+        lambda: type("P", (), {"public_dict": lambda self: {
+            "product": "learning", "role": "device"}})(),
+    )
+
+    result = updater.check()
+    assert result["channel"] == "learning-device"
+    assert result["artifact"]["filename"].startswith("LearningPulse-Device")
+
+
+def test_legacy_manifest_is_not_offered_to_learning_install(monkeypatch):
+    payload = json.dumps(_manifest()).encode()
+    monkeypatch.setattr(updater.urllib.request, "urlopen",
+                        lambda *a, **k: _Response(payload))
+    monkeypatch.setattr(updater.product_identity, "release_channel",
+                        lambda: "learning-facilitator")
+
+    result = updater.check()
+    assert result["update_available"] is False
+    assert result["artifact"] is None
 
 
 def test_download_rejects_checksum_mismatch(tmp_path, monkeypatch):
