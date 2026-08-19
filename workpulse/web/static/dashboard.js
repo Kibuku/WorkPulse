@@ -1385,12 +1385,16 @@ async function fetchWorkflowLearning() {
   const card = document.getElementById('workflow-card');
   const panel = document.getElementById('workflow-panel');
   try {
-    const r = await fetch('/api/v2/workflows/proposal');
-    const d = await r.json();
-    if (!d.enabled) {
-      card.style.display = 'none';
+    const r = await fetch('/api/v2/workflows/learned');
+    const result = await r.json();
+    if (!result.enabled || !(result.methods || []).length) {
+      workflowLearningState = null;
+      card.style.display = '';
+      panel.innerHTML = `<div class="workflow-demo-head"><div><span class="permission-state local">Learning locally</span></div><span>${result.learning?.journeys_seen || 0} multi-stage journeys</span></div>
+        <div class="empty">No repeated personal method yet. WorkPulse will show one only after it observes at least ${result.learning?.minimum_journeys || 2} separate multi-stage journeys in the same stream.</div>`;
       return;
     }
+    const d = result.methods[0];
     workflowLearningState = d;
     card.style.display = '';
     const heldOutStages = d.held_out?.stages || [];
@@ -1410,7 +1414,7 @@ async function fetchWorkflowLearning() {
         </div>
         <div class="workflow-nudge">
           <span class="showcase-label">CONTEXTUAL NUDGE</span>
-          <strong>${escapeHtml(d.held_out?.label || 'Held-out proposal journey')}</strong>
+          <strong>${escapeHtml(d.held_out?.label || 'Latest observed journey')}</strong>
           <p>${escapeHtml(d.nudge || d.gap)}</p>
         </div>
       </div>
@@ -1470,7 +1474,7 @@ function openWorkflowModal() {
   body.innerHTML = `
     <span class="permission-state local">Learned from real local evidence</span>
     <h2 id="workflow-modal-title">${escapeHtml(d.name)}</h2>
-    <div class="sub">${escapeHtml(d.privacy)} Client names and filenames are not shown in this demonstration.</div>
+    <div class="sub">${escapeHtml(d.privacy)} This is inferred from this user's repeated journeys, not a seeded example.</div>
     <div class="workflow-evidence-grid">
       <div><span class="showcase-label">OBSERVED EXAMPLES</span>${d.examples.map(ex =>
         `<article><strong>${escapeHtml(ex.label)}</strong><small>${escapeHtml(ex.period)} · ${ex.evidence_markers} distinct evidence markers</small><small>${ex.stages.map(s => escapeHtml(s.replace(/_/g,' '))).join(' → ')}</small></article>`
@@ -1499,7 +1503,7 @@ async function confirmLearnedWorkflow() {
   btn.disabled = true;
   btn.textContent = 'Confirming locally…';
   try {
-    const r = await fetch('/api/v2/workflows/proposal/confirm', {method: 'POST'});
+    const r = await fetch('/api/v2/workflows/learned/' + encodeURIComponent(workflowLearningState.method_id) + '/confirm', {method: 'POST'});
     if (!r.ok) throw new Error('confirmation failed');
     const d = await r.json();
     workflowLearningState = d.workflow;

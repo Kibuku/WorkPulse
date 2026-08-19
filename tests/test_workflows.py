@@ -55,3 +55,48 @@ def test_proposal_method_is_learned_from_observed_journeys(tmp_path, monkeypatch
         "SELECT is_demo FROM workflow_method WHERE id=?",
         (workflows.PROPOSAL_METHOD_ID,),
     ).fetchone()[0] == 0
+
+
+def test_generic_method_is_induced_from_repeated_real_sequences(tmp_path, monkeypatch):
+    monkeypatch.setattr(db, "db_path", lambda cfg=None: tmp_path / "wp.db")
+    con = db.connect(cfg={"paths": {}})
+    con.execute("INSERT INTO stream(key,label) VALUES ('client-delivery','Client Delivery')")
+    now = datetime.now(timezone.utc)
+    for journey, days_ago in enumerate((4, 2, 0), 1):
+        day = (now - timedelta(days=days_ago)).date().isoformat()
+        for position, stage in enumerate(("research", "drafting", "review"), 1):
+            ts = f"{day}T{8 + position:02d}:00:00+00:00"
+            con.execute("""INSERT INTO semantic_observation
+            (id,observed_date,kind,semantic_key,stream,summary,confidence,evidence_count,
+             source_types,first_seen,last_seen,is_private,status,created_at,updated_at)
+            VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+            (f"j{journey}-{stage}", day, "stage", stage, "client-delivery",
+             "generic summary", .8, 3, '["session"]', ts, ts, 0, "proposed", ts, ts))
+    con.commit()
+
+    learned = workflows.learn_repeated_methods(con)
+    assert learned["enabled"] is True
+    method = learned["methods"][0]
+    assert method["name"] == "Your observed Client Delivery method"
+    assert [s["action_type"] for s in method["steps"]] == ["research", "drafting", "review"]
+    assert len(method["examples"]) == 3
+    assert "proposal" not in str(method).lower()
+
+    confirmed = workflows.confirm_repeated_method(con, method["method_id"])
+    assert confirmed["status"] == "confirmed"
+
+
+def test_generic_learner_refuses_single_journey(tmp_path, monkeypatch):
+    monkeypatch.setattr(db, "db_path", lambda cfg=None: tmp_path / "wp.db")
+    con = db.connect(cfg={"paths": {}})
+    day = datetime.now(timezone.utc).date().isoformat()
+    for position, stage in enumerate(("planning", "analysis"), 1):
+        ts = f"{day}T{position + 8:02d}:00:00+00:00"
+        con.execute("""INSERT INTO semantic_observation
+        (id,observed_date,kind,semantic_key,summary,confidence,evidence_count,
+         source_types,first_seen,last_seen,is_private,status,created_at,updated_at)
+        VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+        (stage, day, "stage", stage, "generic", .8, 2, '[]', ts, ts, 0,
+         "proposed", ts, ts))
+    con.commit()
+    assert workflows.learn_repeated_methods(con)["enabled"] is False

@@ -556,6 +556,25 @@ def api_v2_workflow_proposal():
     return wp_workflows.learn_proposal_method(wp_db.connect(cfg))
 
 
+@app.get("/api/v2/workflows/learned")
+def api_v2_workflows_learned():
+    """Methods induced from repeated real journeys; no seeded examples."""
+    _require_capability("personal.view")
+    from workpulse.core import db as wp_db, workflows as wp_workflows
+    return wp_workflows.learn_repeated_methods(wp_db.connect(load_config()))
+
+
+@app.post("/api/v2/workflows/learned/{method_id}/confirm")
+def api_v2_workflows_learned_confirm(method_id: str):
+    _require_capability("personal.view")
+    from workpulse.core import db as wp_db, workflows as wp_workflows
+    try:
+        return {"ok": True, "workflow": wp_workflows.confirm_repeated_method(
+            wp_db.connect(load_config()), method_id)}
+    except ValueError as exc:
+        return JSONResponse({"error": str(exc)}, status_code=400)
+
+
 @app.post("/api/v2/workflows/proposal/confirm")
 def api_v2_workflow_proposal_confirm():
     """Promote the observed candidate to confirmed personal method memory."""
@@ -1960,13 +1979,13 @@ async def api_ask(payload: dict, request: Request):
     backend = wp_llm.active_backend(cfg)
 
     if kind == "workflow":
-        result = wp_workflows.answer_proposal_question(con)
+        result = wp_workflows.answer_repeated_method_question(con, question)
         learned = result["workflow"]
         return {
             "kind": "workflow",
             "backend": "workflow-memory",
             "model": None,
-            "fallback": False,
+            "fallback": learned is None,
             "answer": result["answer"],
             "gap": result["gap"],
             "evidence": [
@@ -1977,7 +1996,7 @@ async def api_ask(payload: dict, request: Request):
                     "markers": example["evidence_markers"],
                     "stages": example["stages"],
                 }
-                for example in learned["examples"]
+                for example in (learned["examples"] if learned else [])
             ],
         }
 

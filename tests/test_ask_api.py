@@ -114,10 +114,10 @@ def test_ask_proposal_method_uses_workflow_memory(client):
     body = r.json()
     assert body["kind"] == "workflow"
     assert body["backend"] == "workflow-memory"
-    assert "candidate pattern" in body["answer"]
-    assert "proposal journeys" in body["answer"]
+    assert "not observed" in body["answer"]
+    assert body["fallback"] is True
     assert "56 hours" not in body["answer"]
-    assert body["evidence"]
+    assert body["evidence"] == []
 
     natural = client.post(
         "/api/ask",
