@@ -35,3 +35,11 @@ def test_institution_runtime_has_isolated_home(monkeypatch):
         "/Applications/WorkPulse Institution.app/Contents/MacOS/WorkPulse",
     )
     assert desktop._runtime_flavour([]) == ("institution", "member")
+
+
+def test_normal_mac_launch_detects_managed_menubar(monkeypatch):
+    class Result:
+        returncode = 0
+
+    monkeypatch.setattr(desktop.subprocess, "run", lambda *args, **kwargs: Result())
+    assert desktop._macos_menubar_loaded() is True

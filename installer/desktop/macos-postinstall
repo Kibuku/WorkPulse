@@ -37,9 +37,6 @@ if [ "$PRODUCT" = "personal" ] && [ "$APP_NAME" != "WorkPulse" ] \
   chown -R "$CONSOLE_USER":staff "$LEGACY_DEST"
   echo "  cleanup   retired earlier app to $LEGACY_DEST" >>"$LOG"
 fi
-launchctl asuser "$USER_ID" sudo -u "$CONSOLE_USER" \
-  env HOME="$USER_HOME" open -a "$APP_NAME" || true
-
 # Never open a dead localhost page. Give launchd's dashboard agent up to 30
 # seconds to bind the port, then open it in the user's browser only when ready.
 DASHBOARD="http://127.0.0.1:5700$ENTRY_PATH"

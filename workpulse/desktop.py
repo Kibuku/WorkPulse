@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import os
 import runpy
+import subprocess
 import sys
 from pathlib import Path
 
@@ -76,6 +77,19 @@ def _run_agent(module: str, args: list[str]) -> int:
     return 0
 
 
+def _macos_menubar_loaded() -> bool:
+    """Avoid a second menu companion when Finder opens the application.
+
+    The installer owns one KeepAlive launchd instance. A normal app launch is
+    therefore an "open dashboard" action, not permission to create another
+    rumps application and Dock process.
+    """
+    return subprocess.run(
+        ["launchctl", "list", "com.workpulse.menubar"],
+        capture_output=True,
+    ).returncode == 0
+
+
 def main(argv: list[str] | None = None) -> int:
     argv = list(sys.argv[1:] if argv is None else argv)
     _prepare_home(argv)
@@ -87,7 +101,10 @@ def main(argv: list[str] | None = None) -> int:
         from workpulse.cli import main as cli_main
         return cli_main(argv[1:])
     if sys.platform == "darwin":
-        from workpulse.menubar import run
+        from workpulse.menubar import _open_dashboard, run
+        if _macos_menubar_loaded():
+            _open_dashboard()
+            return 0
         run()
         return 0
     if sys.platform == "win32":
