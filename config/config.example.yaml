@@ -167,6 +167,14 @@ ai_logger:
 retention:
   raw_days: 100
 
+# Optional content-level coaching. OFF until the owner enables it in Settings.
+# Screenshots are processed locally and deleted immediately after OCR.
+content_capture:
+  enabled: false
+  allow_apps: ["Google Chrome", "Microsoft Word", "Excel", "PowerPoint"]
+  deny_terms: ["banking", "healthcare", "payroll", "incognito"]
+  redaction_terms: []
+
 # Product feedback is local-first and only transmits after the user presses
 # Send. Leave blank until your own HTTPS feedback receiver is configured.
 feedback:

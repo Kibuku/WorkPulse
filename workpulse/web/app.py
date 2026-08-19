@@ -592,6 +592,42 @@ async def api_v2_semantics_status(observation_id: str, payload: dict):
         return JSONResponse({"error": str(exc)}, status_code=400)
 
 
+@app.get("/api/v2/content-capture/status")
+def api_v2_content_capture_status():
+    _require_capability("personal.view")
+    cfg = load_config()
+    settings = cfg.get("content_capture") or {}
+    import shutil
+    return {"enabled": bool(settings.get("enabled", False)),
+            "local_ocr_ready": bool(shutil.which("tesseract")),
+            "allow_apps": settings.get("allow_apps") or [],
+            "deny_terms": settings.get("deny_terms") or []}
+
+
+@app.post("/api/v2/content-capture/settings")
+async def api_v2_content_capture_settings(payload: dict):
+    _require_capability("personal.view")
+    cfg, path = _load_streams_config()
+    current = cfg.setdefault("content_capture", {})
+    current["enabled"] = bool(payload.get("enabled", False))
+    for key in ("allow_apps", "deny_terms", "redaction_terms"):
+        if key in payload:
+            current[key] = [str(x).strip() for x in payload[key] if str(x).strip()]
+    _write_config(cfg, path)
+    return {"ok": True, "enabled": current["enabled"]}
+
+
+@app.post("/api/v2/content-capture/now")
+def api_v2_content_capture_now():
+    _require_capability("personal.view")
+    from workpulse.core import content_capture, db as wp_db
+    result = content_capture.capture_once(load_config())
+    if not result.get("ok"):
+        return JSONResponse(result, status_code=409)
+    saved = content_capture.persist(wp_db.connect(load_config()), result)
+    return {"ok": True, **saved, "privacy": result["privacy"]}
+
+
 # ── Streams: create / edit / delete from the UI (writes config.yaml) ──────────
 # The taxonomy wizard is the pilot's onboarding surface — users build their
 # stream tree here instead of hand-editing YAML. config.yaml is the source of

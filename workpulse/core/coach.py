@@ -202,6 +202,31 @@ def _pick_message(findings: dict, p: dict) -> dict | None:
     return None
 
 
+def _content_message(con: sqlite3.Connection, today: date) -> dict | None:
+    """A cautious coaching prompt from the owner's latest redacted capture."""
+    row = con.execute(
+        "SELECT id,stage,redacted_text FROM content_capture WHERE substr(ts,1,10)=? "
+        "ORDER BY ts DESC LIMIT 1", (today.isoformat(),)
+    ).fetchone()
+    if not row:
+        return None
+    text = row["redacted_text"] or ""
+    low = text.casefold()
+    if any(term in low for term in ("todo", "tbd", "to be confirmed", "missing", "placeholder")):
+        prompt = "The active draft still contains an unresolved placeholder. Would you like to turn it into a concrete next action before moving on?"
+        kind = "content-placeholder"
+    elif row["stage"] == "review":
+        prompt = "You appear to be reviewing an output. Is the next decision to revise it, approve it, or request clarification?"
+        kind = "content-review"
+    elif row["stage"] == "drafting":
+        prompt = "You appear to be drafting an output. What requirement should this section satisfy before you consider it complete?"
+        kind = "content-drafting"
+    else:
+        return None
+    return {"kind": kind, "text": prompt, "atom": row["id"],
+            "facts": {"stage": row["stage"], "source": "redacted-local-content"}}
+
+
 # ── public: next_message + status ───────────────────────────────────────────
 
 def next_message(con: sqlite3.Connection, *,
@@ -221,7 +246,7 @@ def next_message(con: sqlite3.Connection, *,
     if _already_spoken_today(con, today):
         return None
     findings = consolidate.findings(con, as_of=today, cfg=cfg)
-    msg = _pick_message(findings, p)
+    msg = _content_message(con, today) or _pick_message(findings, p)
     if msg is None:
         return None
 
@@ -273,7 +298,7 @@ def status(con: sqlite3.Connection, *,
     if _already_spoken_today(con, today):
         return {"params": p, "gate": gate_info, "would_say": None,
                 "reason": "already spoken today (max_messages_per_day=1)"}
-    msg = _pick_message(findings, p)
+    msg = _content_message(con, today) or _pick_message(findings, p)
     if msg is None:
         return {"params": p, "gate": gate_info, "would_say": None,
                 "reason": "no finding cleared its floor"}

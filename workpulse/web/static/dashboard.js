@@ -1954,6 +1954,12 @@ function openSettings() {
       'status-dot' + (cfg.secrets.smtp_password.configured ? '' : ' off');
     document.getElementById('email-enabled').checked = !!cfg.email_enabled;
   });
+  fetch('/api/v2/content-capture/status').then(r => r.json()).then(s => {
+    document.getElementById('content-capture-enabled').checked = !!s.enabled;
+    document.getElementById('content-capture-deny').value = (s.deny_terms || []).join(', ');
+    document.getElementById('content-capture-readiness').textContent = s.local_ocr_ready
+      ? 'Local OCR ready.' : 'Local OCR is not installed; capture will remain unavailable.';
+  });
 }
 function closeSettings() {
   document.getElementById('settings-modal').classList.remove('open');
@@ -1983,6 +1989,13 @@ async function saveSettings() {
     method:'POST', headers:{'Content-Type':'application/json'},
     body: JSON.stringify(emailPayload)
   }));
+  ops.push(fetch('/api/v2/content-capture/settings', {
+    method:'POST', headers:{'Content-Type':'application/json'},
+    body: JSON.stringify({
+      enabled: document.getElementById('content-capture-enabled').checked,
+      deny_terms: document.getElementById('content-capture-deny').value.split(',').map(x => x.trim()).filter(Boolean)
+    })
+  }));
 
   try {
     const results = await Promise.all(ops);
@@ -1999,6 +2012,14 @@ async function saveSettings() {
   } catch (e) {
     showToast('Save failed: ' + e.message);
   }
+}
+
+async function captureContentNow() {
+  showToast('Capturing the active window locally…');
+  const r = await fetch('/api/v2/content-capture/now', {method:'POST'});
+  const d = await r.json();
+  showToast(r.ok ? `Content captured locally${d.stage ? ' · '+d.stage : ''}. Screenshot deleted.`
+                 : (d.reason || 'Content capture unavailable'));
 }
 
 // ── Trust, organization preview, and product feedback ─────────────────────

@@ -803,6 +803,20 @@
       </label>
     </div>
 
+    <div class="modal-row toggle-row">
+      <div>
+        <label style="margin:0">Content-level coaching</label>
+        <div class="help">Off by default. Captures only the active window, performs local OCR, redacts sensitive text, then immediately deletes the screenshot.</div>
+        <div id="content-capture-readiness" class="help"></div>
+      </div>
+      <label class="switch"><input type="checkbox" id="content-capture-enabled" /></label>
+    </div>
+    <div class="modal-row">
+      <label>Never capture when the window contains</label>
+      <input id="content-capture-deny" placeholder="banking, healthcare, payroll" />
+      <button class="btn-ghost" type="button" onclick="captureContentNow()">Test capture now</button>
+    </div>
+
     <div class="modal-actions">
       <button class="btn-ghost" onclick="closeSettings()">Cancel</button>
       <button class="btn-primary" onclick="saveSettings()">Save</button>
