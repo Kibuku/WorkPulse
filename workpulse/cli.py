@@ -103,6 +103,8 @@ def _legacy_homes(root: Path) -> list[Path]:
     cands: list[Path] = []
     if sys.platform == "darwin":
         cands.append(Path.home() / "WorkPulse")
+        cands.append(Path.home() / "Library" / "Application Support" /
+                     "Pulse" / "DeveloperLab")
     elif sys.platform == "win32":
         up = os.environ.get("USERPROFILE")
         if up:

@@ -18,6 +18,7 @@ from pathlib import Path
 
 
 _HOME_NAMES = {
+    ("personal", "individual"): "Personal",
     ("institution", "member"): "Institution",
     ("developer", "lab"): "DeveloperLab",
     ("learning", "facilitator"): "LearningFacilitator",
@@ -49,7 +50,7 @@ def _runtime_flavour(argv: list[str]) -> tuple[str, str]:
         return "learning", "facilitator"
     if "learningpulsedevice" in runtime or "learningpulse device" in runtime:
         return "learning", "device"
-    return "developer", "lab"
+    return "personal", "individual"
 
 
 def _default_home(flavour: tuple[str, str]) -> Path:

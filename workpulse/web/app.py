@@ -616,9 +616,10 @@ def api_v2_content_capture_status():
     _require_capability("personal.view")
     cfg = load_config()
     settings = cfg.get("content_capture") or {}
-    import shutil
+    from workpulse.core import content_capture
+    ready, engine = content_capture.ocr_ready()
     return {"enabled": bool(settings.get("enabled", False)),
-            "local_ocr_ready": bool(shutil.which("tesseract")),
+            "local_ocr_ready": ready, "ocr_engine": engine,
             "allow_apps": settings.get("allow_apps") or [],
             "deny_terms": settings.get("deny_terms") or []}
 

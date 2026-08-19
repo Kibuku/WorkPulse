@@ -26,13 +26,14 @@ fi
 VERSION="$($PYTHON -c 'from workpulse import __version__; print(__version__)')"
 BUILD="$ROOT/installer/desktop/build-mac-$VERSION"
 ARTIFACTS="$ROOT/release-artifacts"
+FLAVOR="${1:-all}"
 
 $PYTHON -m pip install --upgrade pip
 $PYTHON -m pip install -e '.[mac]' pyinstaller pystray pillow
 rm -rf "$BUILD"
 mkdir -p "$BUILD" "$ARTIFACTS"
-# Do not upload every historical package as the artifact for this run.
-find "$ARTIFACTS" -maxdepth 1 -type f -name '*macOS.pkg' -delete
+# A local build must not erase historical release packages. The selected
+# output filename is replaced atomically by pkgbuild when its version matches.
 
 $PYTHON -m PyInstaller --noconfirm --clean --windowed \
   --name WorkPulse \
@@ -52,6 +53,16 @@ build_flavor() {
   local scripts="$BUILD/$slug/scripts" component="$BUILD/$slug/component.plist"
   mkdir -p "$payload/Applications" "$scripts"
   cp -R "$BUILD/dist/WorkPulse.app" "$payload/Applications/$app_name.app"
+  local info="$payload/Applications/$app_name.app/Contents/Info.plist"
+  /usr/libexec/PlistBuddy -c "Set :CFBundleDisplayName $app_name" "$info"
+  /usr/libexec/PlistBuddy -c "Set :CFBundleName $app_name" "$info"
+  /usr/libexec/PlistBuddy -c "Set :CFBundleIdentifier $identifier" "$info"
+  /usr/libexec/PlistBuddy -c "Set :CFBundleShortVersionString $VERSION" "$info"
+  /usr/libexec/PlistBuddy -c "Add :CFBundleVersion string $VERSION" "$info" 2>/dev/null \
+    || /usr/libexec/PlistBuddy -c "Set :CFBundleVersion $VERSION" "$info"
+  # Updating Info.plist invalidates PyInstaller's ad-hoc signature. Re-sign the
+  # complete local bundle so macOS can verify it before packaging.
+  codesign --force --deep --sign - "$payload/Applications/$app_name.app"
   sed -e "s|@APP_NAME@|$app_name|g" -e "s|@PRODUCT@|$product|g" \
       -e "s|@ROLE@|$role|g" -e "s|@ENTRY_PATH@|$entry|g" \
       "$ROOT/installer/desktop/macos-postinstall" > "$scripts/postinstall"
@@ -63,7 +74,6 @@ build_flavor() {
     "$ARTIFACTS/${slug}-${VERSION}-macOS.pkg"
 }
 
-FLAVOR="${1:-all}"
 case "$FLAVOR" in
   personal)
     build_flavor "PersonalWorkPulse" "Personal WorkPulse" "personal" "individual" "/personal" "earth.njiani.workpulse.personal"

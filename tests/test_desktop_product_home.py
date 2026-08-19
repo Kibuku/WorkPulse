@@ -15,9 +15,18 @@ def test_install_arguments_select_learning_device_home(monkeypatch):
     assert desktop._default_home(flavour).parts[-2:] == ("Pulse", "LearningDevice")
 
 
-def test_legacy_runtime_defaults_to_private_developer_lab(monkeypatch):
+def test_legacy_runtime_defaults_to_personal_home(monkeypatch):
     monkeypatch.setattr(desktop.sys, "executable", "/Applications/WorkPulse.app/x")
-    assert desktop._runtime_flavour([]) == ("developer", "lab")
+    assert desktop._runtime_flavour([]) == ("personal", "individual")
+
+
+def test_personal_install_arguments_select_personal_home(monkeypatch):
+    monkeypatch.setattr(desktop.sys, "platform", "darwin")
+    flavour = desktop._runtime_flavour([
+        "--cli", "install", "--product", "personal", "--role", "individual",
+    ])
+    assert flavour == ("personal", "individual")
+    assert desktop._default_home(flavour).parts[-2:] == ("Pulse", "Personal")
 
 
 def test_institution_runtime_has_isolated_home(monkeypatch):

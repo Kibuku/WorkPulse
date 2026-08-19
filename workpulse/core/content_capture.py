@@ -105,7 +105,7 @@ def _capture_image(path: Path, pid: int) -> None:
 def _ocr(path: Path) -> tuple[str, str]:
     # Tesseract is a local process. Installers can bundle/provision it without
     # changing this privacy boundary.
-    exe = shutil.which("tesseract")
+    exe = _tesseract_path()
     if not exe:
         raise RuntimeError("local OCR engine is not installed")
     result = subprocess.run([exe, str(path), "stdout", "--psm", "6"],
@@ -113,6 +113,22 @@ def _ocr(path: Path) -> tuple[str, str]:
     if result.returncode:
         raise RuntimeError("local OCR failed")
     return result.stdout, "tesseract-local"
+
+
+def ocr_ready() -> tuple[bool, str | None]:
+    if _tesseract_path():
+        return True, "tesseract-local"
+    return False, None
+
+
+def _tesseract_path() -> str | None:
+    found = shutil.which("tesseract")
+    if found:
+        return found
+    for candidate in ("/opt/homebrew/bin/tesseract", "/usr/local/bin/tesseract"):
+        if Path(candidate).is_file() and os.access(candidate, os.X_OK):
+            return candidate
+    return None
 
 
 def capture_once(cfg: dict, *, capture_image=_capture_image, ocr=_ocr) -> dict:
