@@ -4,7 +4,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Pulse</title>
-  <link rel="stylesheet" href="/static/dashboard.css?v=20260730a">
+  <link rel="stylesheet" href="/static/dashboard.css?v=__WORKPULSE_ASSET_VERSION__">
 </head>
 <body>
 
@@ -37,17 +37,23 @@
       <button class="workspace-nav-item" data-classroom-console="report" onclick="showClassroomConsole('report')"><span class="nav-icon">▥</span><span>Report</span></button>
     </nav>
   </div>
+  <!-- CAPABILITY:workspace.extensions:START -->
   <div class="sidebar-label optional-label">WorkPulse spaces</div>
+  <!-- CAPABILITY:workspace.extensions:END -->
   <nav class="workspace-nav optional-nav">
+    <!-- CAPABILITY:institution.member:START -->
     <button class="workspace-nav-item optional-connection" data-workspace-target="organization" onclick="showWorkspace('organization')">
       <span class="nav-icon">◇</span>
       <span class="optional-connection-copy"><span>Organisation</span><small>Not connected</small></span>
       <span class="opt-in-pill">Opt in</span>
     </button>
+    <!-- CAPABILITY:institution.member:END -->
+    <!-- CAPABILITY:learning.facilitator:START -->
     <button class="workspace-nav-item optional-connection" data-workspace-target="classroom" onclick="showWorkspace('classroom')">
       <span class="nav-icon">▣</span>
       <span class="optional-connection-copy"><span>Classroom</span><small>University pilot</small></span>
     </button>
+    <!-- CAPABILITY:learning.facilitator:END -->
   </nav>
   <div class="sidebar-bottom">
     <button class="sidebar-health" onclick="openHealthModal(event)">
@@ -371,6 +377,7 @@
     </details>
   </div>
 
+  <!-- CAPABILITY:institution.member:START -->
   <section id="organization-workspace" class="span-12 workspace-surface workspace-hidden" data-workspace="organization">
     <div class="section-intro organization-consent-intro">
       <div>
@@ -417,7 +424,9 @@
       </article>
     </div>
   </section>
+  <!-- CAPABILITY:institution.member:END -->
 
+  <!-- CAPABILITY:learning.view:START -->
   <section id="classroom-workspace" class="span-12 workspace-surface workspace-hidden" data-workspace="classroom">
     <div class="classroom-context-bar">
       <div>
@@ -593,6 +602,7 @@
       </article>
     </div>
   </section>
+  <!-- CAPABILITY:learning.view:END -->
 
   <section id="privacy-workspace" class="span-12 workspace-surface workspace-hidden" data-workspace="privacy">
     <div class="section-intro">
@@ -870,6 +880,6 @@
 
 <div class="toast" id="toast"></div>
 
-  <script src="/static/dashboard.js?v=20260729d"></script>
+  <script src="/static/dashboard.js?v=__WORKPULSE_ASSET_VERSION__"></script>
 </body>
 </html>

@@ -14,6 +14,9 @@ def _client(tmp_path, monkeypatch):
     monkeypatch.setattr(feedback, "ROOT", tmp_path)
     monkeypatch.setattr(appmod, "_manager_context_path",
                         lambda: tmp_path / "manager_context.json")
+    institution = appmod.product_identity._make("institution", "member")
+    monkeypatch.setattr(appmod.product_identity, "current", lambda: institution)
+    monkeypatch.setattr(appmod.product_identity, "has", institution.has)
     return TestClient(appmod.app), cfg
 
 

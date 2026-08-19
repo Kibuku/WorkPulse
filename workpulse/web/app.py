@@ -60,12 +60,13 @@ def _is_noise(path_str: str) -> bool:
 import psutil
 import uvicorn
 from fastapi import FastAPI, HTTPException, Request, Response
-from fastapi.responses import FileResponse, JSONResponse, RedirectResponse
+from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 
 from workpulse.common import load_config, resolve
 from workpulse.core import classroom as classroom_core
 from workpulse import product as product_identity
+from workpulse import __version__
 
 app = FastAPI(title="WorkPulse", docs_url=None, redoc_url=None)
 
@@ -106,10 +107,45 @@ def _require_facilitator(request: Request | None = None) -> None:
         _require_local_console(request)
     _require_capability("learning.facilitator")
 
-# Dashboard assets (HTML/CSS/JS) live in web/static/, served verbatim; all
-# dynamic data reaches the page through the /api/* endpoints below.
+# Dashboard assets (HTML/CSS/JS) live in web/static/. HTML is always served by
+# the product-aware route below; it must not be reachable as a raw static file.
 STATIC_DIR = Path(__file__).resolve().parent / "static"
-app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
+
+
+class _DashboardAssets(StaticFiles):
+    async def get_response(self, path: str, scope):
+        if path.lower().endswith((".html", ".htm")):
+            return Response(status_code=404)
+        return await super().get_response(path, scope)
+
+
+app.mount("/static", _DashboardAssets(directory=str(STATIC_DIR)), name="static")
+
+_CAPABILITY_BLOCK = re.compile(
+    r"\s*<!-- CAPABILITY:([a-z0-9.]+):START -->(.*?)"
+    r"<!-- CAPABILITY:\1:END -->",
+    re.DOTALL,
+)
+
+
+def _dashboard_response() -> HTMLResponse:
+    """Serve only the surfaces allowed by this installed product.
+
+    Product separation happens before HTML reaches the browser. JavaScript and
+    CSS are still shared implementation assets, but an old cached script can
+    no longer reveal a panel that was omitted from the response.
+    """
+    html = (STATIC_DIR / "index.html").read_text(encoding="utf-8")
+
+    def allowed(match: re.Match) -> str:
+        return match.group(2) if product_identity.has(match.group(1)) else ""
+
+    html = _CAPABILITY_BLOCK.sub(allowed, html)
+    html = html.replace("__WORKPULSE_ASSET_VERSION__", __version__)
+    return HTMLResponse(
+        html,
+        headers={"Cache-Control": "no-store"},
+    )
 
 PORT = 5700
 
@@ -1847,6 +1883,7 @@ def api_organization_preview(request: Request, date: Optional[str] = None):  # n
     Raw app/window sessions, file paths, browser history, captures, and private
     streams are deliberately absent.  This is a preview, not an upload.
     """
+    _require_capability("institution.member")
     today = api_v2_today(request, date=date)
     if isinstance(today, Response):
         return today
@@ -1869,6 +1906,7 @@ def _manager_context_path() -> Path:
 
 @app.get("/api/v2/organization/context")
 def api_organization_context():
+    _require_capability("institution.member")
     p = _manager_context_path()
     if not p.exists():
         return {"priorities": "", "expected_outcomes": "", "feedback": "",
@@ -1884,6 +1922,7 @@ def api_organization_context():
 @app.post("/api/v2/organization/context")
 async def api_set_organization_context(payload: dict):
     """Demo the manager-to-user context channel locally; no manager link yet."""
+    _require_capability("institution.member")
     data = {k: str(payload.get(k) or "").strip()[:4000]
             for k in ("priorities", "expected_outcomes", "feedback")}
     data["updated_at"] = datetime.now(timezone.utc).isoformat()
@@ -2256,6 +2295,7 @@ async def api_classroom_local_agent_join(request: Request):
 
 @app.post("/api/v2/classroom/agent/enroll")
 async def api_classroom_agent_enroll(request: Request):
+    _require_capability("learning.gateway")
     payload = await request.json()
     try:
         return classroom_core.enroll_device(
@@ -2274,6 +2314,7 @@ def _classroom_bearer(request: Request) -> str:
 
 @app.get("/api/v2/classroom/agent/policy")
 def api_classroom_agent_policy(request: Request):
+    _require_capability("learning.gateway")
     if not classroom_core.authenticate_device(_classroom_bearer(request)):
         return JSONResponse({"error": "unauthorized"}, status_code=401)
     return classroom_core.agent_policy()
@@ -2281,6 +2322,7 @@ def api_classroom_agent_policy(request: Request):
 
 @app.post("/api/v2/classroom/agent/heartbeat")
 async def api_classroom_agent_heartbeat(request: Request):
+    _require_capability("learning.gateway")
     payload = await request.json()
     try:
         return classroom_core.device_heartbeat(
@@ -2337,6 +2379,7 @@ async def api_classroom_intervention(request: Request):
 
 @app.post("/api/v2/classroom/agent/intervention/{intervention_id}/ack")
 def api_classroom_intervention_ack(intervention_id: str, request: Request):
+    _require_capability("learning.gateway")
     try:
         return classroom_core.acknowledge_intervention(
             _classroom_bearer(request), intervention_id
@@ -2424,13 +2467,13 @@ def api_product():
 @app.get("/personal")
 def personal_product():
     _require_capability("personal.view")
-    return FileResponse(STATIC_DIR / "index.html", media_type="text/html")
+    return _dashboard_response()
 
 
 @app.get("/institution")
 def institution_product():
     _require_capability("institution.member")
-    return FileResponse(STATIC_DIR / "index.html", media_type="text/html")
+    return _dashboard_response()
 
 
 @app.get("/learning")
@@ -2439,13 +2482,13 @@ def learning_product():
     if selected.has("learning.device"):
         return RedirectResponse("/learning/device", status_code=307)
     _require_capability("learning.facilitator")
-    return FileResponse(STATIC_DIR / "index.html", media_type="text/html")
+    return _dashboard_response()
 
 
 @app.get("/learning/device")
 def learning_device_product():
     _require_capability("learning.device")
-    return FileResponse(STATIC_DIR / "index.html", media_type="text/html")
+    return _dashboard_response()
 
 
 # ── entry point ───────────────────────────────────────────────────────────────
@@ -2453,12 +2496,13 @@ def learning_device_product():
 def run(host: str = "127.0.0.1", port: int = PORT, start_watcher_on_launch: bool = False):
     if start_watcher_on_launch:
         start_watcher()
-    try:
-        from workpulse import classroom_agent
-        if classroom_agent.local_status()["enrolled"]:
-            classroom_agent.start_background()
-    except (RuntimeError, OSError, ValueError):
-        pass
+    if product_identity.has("learning.device"):
+        try:
+            from workpulse import classroom_agent
+            if classroom_agent.local_status()["enrolled"]:
+                classroom_agent.start_background()
+        except (RuntimeError, OSError, ValueError):
+            pass
     uvicorn.run(app, host=host, port=port, log_level="warning")
 
 

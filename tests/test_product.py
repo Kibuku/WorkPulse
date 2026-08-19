@@ -90,3 +90,62 @@ def test_facilitator_cannot_open_local_device_enrolment(monkeypatch):
     assert client.get("/learning").status_code == 200
     assert client.get("/learning/device").status_code == 403
     assert client.get("/api/v2/classroom/local-agent").status_code == 403
+
+
+def test_personal_html_omits_institution_and_classroom_surfaces(monkeypatch):
+    personal = product._make("personal", "individual")
+    monkeypatch.setattr(appmod.product_identity, "current", lambda: personal)
+    monkeypatch.setattr(appmod.product_identity, "has", personal.has)
+    client = TestClient(appmod.app)
+
+    response = client.get("/personal")
+    assert response.status_code == 200
+    assert response.headers["cache-control"] == "no-store"
+    assert 'data-workspace-target="organization"' not in response.text
+    assert 'data-workspace-target="classroom"' not in response.text
+    assert 'id="organization-workspace"' not in response.text
+    assert 'id="classroom-workspace"' not in response.text
+    assert "WorkPulse spaces" not in response.text
+    assert "__WORKPULSE_ASSET_VERSION__" not in response.text
+    assert f"dashboard.js?v={appmod.__version__}" in response.text
+    assert client.get("/static/index.html").status_code == 404
+
+
+def test_personal_rejects_institution_and_learning_apis(monkeypatch):
+    personal = product._make("personal", "individual")
+    monkeypatch.setattr(appmod.product_identity, "current", lambda: personal)
+    monkeypatch.setattr(appmod.product_identity, "has", personal.has)
+    client = TestClient(appmod.app)
+
+    assert client.get("/api/v2/organization/preview").status_code == 403
+    assert client.get("/api/v2/organization/context").status_code == 403
+    assert client.get("/api/v2/classroom/status").status_code == 403
+    assert client.post("/api/v2/classroom/agent/enroll", json={}).status_code == 403
+
+
+def test_learning_roles_receive_shared_learning_surface(monkeypatch):
+    for role, path in (("facilitator", "/learning"), ("device", "/learning/device")):
+        selected = product._make("learning", role)
+        monkeypatch.setattr(appmod.product_identity, "current", lambda: selected)
+        monkeypatch.setattr(appmod.product_identity, "has", selected.has)
+        response = TestClient(appmod.app).get(path)
+        assert response.status_code == 200
+        assert 'id="classroom-workspace"' in response.text
+
+
+def test_institution_and_learning_navigation_do_not_collide(monkeypatch):
+    institution = product._make("institution", "member")
+    monkeypatch.setattr(appmod.product_identity, "current", lambda: institution)
+    monkeypatch.setattr(appmod.product_identity, "has", institution.has)
+    institution_html = TestClient(appmod.app).get("/institution").text
+    assert 'data-workspace-target="organization"' in institution_html
+    assert 'data-workspace-target="classroom"' not in institution_html
+    assert 'id="classroom-workspace"' not in institution_html
+
+    facilitator = product._make("learning", "facilitator")
+    monkeypatch.setattr(appmod.product_identity, "current", lambda: facilitator)
+    monkeypatch.setattr(appmod.product_identity, "has", facilitator.has)
+    learning_html = TestClient(appmod.app).get("/learning").text
+    assert 'data-workspace-target="organization"' not in learning_html
+    assert 'data-workspace-target="classroom"' in learning_html
+    assert 'id="organization-workspace"' not in learning_html

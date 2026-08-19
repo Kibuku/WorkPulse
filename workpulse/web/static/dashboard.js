@@ -101,11 +101,6 @@ async function fetchSystem() {
   const detail = document.getElementById('ai-banner-detail');
   if (aiEnabled) {
     banner.style.display = 'none';
-  } else if (PRODUCT_MODE === 'personal') {
-    document.title = 'Personal WorkPulse';
-    document.body.dataset.product = 'personal';
-    if (brand) brand.textContent = 'Personal WorkPulse';
-    if (topbar) topbar.textContent = 'Personal WorkPulse';
   } else {
     banner.style.display = 'flex';
     const llm = d.llm || {};
@@ -2723,6 +2718,11 @@ function configureProductMode() {
       if (contextSource) contextSource.textContent = 'This learning device';
       showClassroomConsole('student');
     }
+  } else if (PRODUCT_MODE === 'personal') {
+    document.title = 'Personal WorkPulse';
+    document.body.dataset.product = 'personal';
+    if (brand) brand.textContent = 'Personal WorkPulse';
+    if (topbar) topbar.textContent = 'Personal WorkPulse';
   } else if (PRODUCT_MODE === 'institution') {
     document.title = 'WorkPulse Institution';
     document.body.dataset.product = 'institution';

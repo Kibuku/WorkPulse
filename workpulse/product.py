@@ -28,7 +28,7 @@ _FLAVOURS = {
     ("institution", "member"): {
         "channel": "workpulse-institution",
         "entry_path": "/institution",
-        "capabilities": ("institution.member", "personal.view"),
+        "capabilities": ("workspace.extensions", "institution.member", "personal.view"),
         "label": "WorkPulse Institution",
     },
     ("developer", "lab"): {
@@ -40,13 +40,13 @@ _FLAVOURS = {
     ("learning", "facilitator"): {
         "channel": "learning-facilitator",
         "entry_path": "/learning",
-        "capabilities": ("learning.facilitator", "learning.gateway"),
+        "capabilities": ("workspace.extensions", "learning.view", "learning.facilitator", "learning.gateway"),
         "label": "LearningPulse Facilitator",
     },
     ("learning", "device"): {
         "channel": "learning-device",
         "entry_path": "/learning?role=device",
-        "capabilities": ("learning.device",),
+        "capabilities": ("learning.view", "learning.device"),
         "label": "LearningPulse Device",
     },
 }
