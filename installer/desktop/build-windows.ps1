@@ -10,6 +10,14 @@ if ($LASTEXITCODE -ne 0) { throw "WorkPulse requires Python 3.11 or newer to bui
 $Version = (& $Python -c "from workpulse import __version__; print(__version__)").Trim()
 $Build = Join-Path $PSScriptRoot "build"
 $Artifacts = Join-Path $Root "release-artifacts"
+$Tesseract = @(
+  (Join-Path $env:ProgramFiles "Tesseract-OCR"),
+  (Join-Path ${env:ProgramFiles(x86)} "Tesseract-OCR")
+) | Where-Object { $_ -and (Test-Path (Join-Path $_ "tesseract.exe")) } |
+  Select-Object -First 1
+if (-not $Tesseract) {
+  throw "Tesseract OCR is required to build a semantic-capture Windows installer"
+}
 
 & $Python -m pip install --upgrade pip
 & $Python -m pip install -e "${Root}[win]" pyinstaller pystray pillow
@@ -29,6 +37,7 @@ Get-ChildItem $Artifacts -Filter "*Windows.exe" -ErrorAction SilentlyContinue |
   --collect-all sqlite_vec `
   --hidden-import pystray._win32 `
   --add-data "$Root\config\config.example.yaml;config" `
+  --add-binary "$Tesseract;tesseract" `
   "$Root\workpulse\desktop.py"
 
 $ISCC = @(

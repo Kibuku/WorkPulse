@@ -20,6 +20,19 @@ def test_capture_is_opt_in_and_deny_listed(monkeypatch):
     assert result["blocked"]
 
 
+def test_windows_frozen_build_finds_bundled_ocr(monkeypatch, tmp_path):
+    executable = tmp_path / "tesseract" / "tesseract.exe"
+    executable.parent.mkdir()
+    executable.write_bytes(b"pilot OCR")
+    executable.chmod(0o755)
+    monkeypatch.setattr(content_capture.shutil, "which", lambda _name: None)
+    monkeypatch.setattr(content_capture.sys, "platform", "win32")
+    monkeypatch.setattr(content_capture.sys, "_MEIPASS", str(tmp_path), raising=False)
+
+    assert content_capture._tesseract_path() == str(executable)
+    assert content_capture.ocr_ready() == (True, "tesseract-local")
+
+
 def test_ephemeral_capture_is_deleted_and_persists_only_redacted_text(tmp_path, monkeypatch):
     monkeypatch.setattr(content_capture, "_foreground",
                         lambda: ("Proposal draft", 12, "Microsoft Word"))

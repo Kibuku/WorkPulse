@@ -22,7 +22,7 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
-      - run: choco install innosetup -y --no-progress
+      - run: choco install innosetup tesseract -y --no-progress
       - shell: powershell
         run: .\installer\desktop\build-windows.ps1 -Flavor personal
       - uses: actions/upload-artifact@v4

@@ -125,6 +125,12 @@ def _tesseract_path() -> str | None:
     found = shutil.which("tesseract")
     if found:
         return found
+    bundle_root = getattr(sys, "_MEIPASS", None)
+    if bundle_root:
+        bundled_name = "tesseract.exe" if sys.platform == "win32" else "tesseract"
+        bundled = Path(bundle_root) / "tesseract" / bundled_name
+        if bundled.is_file() and os.access(bundled, os.X_OK):
+            return str(bundled)
     for candidate in ("/opt/homebrew/bin/tesseract", "/usr/local/bin/tesseract"):
         if Path(candidate).is_file() and os.access(candidate, os.X_OK):
             return candidate
