@@ -63,11 +63,11 @@ def test_public_installer_workflow_builds_only_personal():
     workflow = (ROOT / ".github" / "workflows" / "desktop-installers.yml").read_text()
     assert "build-windows.ps1 -Flavor personal" in workflow
     assert "build-macos.sh personal" in workflow
-    manifest_section = workflow.split("flavors = {", 1)[1].split("}", 1)[0]
-    assert "personal-workpulse" in manifest_section
-    assert "workpulse-institution" not in manifest_section
-    assert "learning-facilitator" not in manifest_section
-    assert "learning-device" not in manifest_section
+    assert "PersonalWorkPulseSetup-$Version-Windows.exe" in workflow
+    assert "PersonalWorkPulse-$VERSION-macOS.pkg" in workflow
+    assert "WorkPulseInstitution" not in workflow
+    assert "LearningPulseFacilitator" not in workflow
+    assert "LearningPulseDevice" not in workflow
 
 
 def test_device_url_cannot_grant_facilitator_api(monkeypatch):

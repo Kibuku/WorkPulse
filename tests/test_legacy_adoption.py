@@ -46,3 +46,18 @@ def test_mac_legacy_candidates_include_previous_desktop_home(monkeypatch, tmp_pa
     monkeypatch.setattr(cli.Path, "home", classmethod(lambda cls: home))
 
     assert cli._legacy_homes(home / "new-personal") == [old_source, old_desktop]
+
+
+def test_stale_marker_for_another_destination_does_not_block_adoption(monkeypatch, tmp_path):
+    home = tmp_path / "user"
+    legacy = home / "WorkPulse"
+    personal = home / "Library" / "Application Support" / "Pulse" / "Personal"
+    _database(legacy / "workpulse.db", 7)
+    (legacy / ".workpulse-adopted").write_text(
+        "Adopted into /tmp/a-test-folder on 2026-01-01 00:00:00.\n"
+    )
+    monkeypatch.setattr(cli.sys, "platform", "darwin")
+    monkeypatch.setattr(cli.Path, "home", classmethod(lambda cls: home))
+
+    assert cli._adopt_legacy_home(personal) is True
+    assert cli._session_count(personal / "workpulse.db") == 7

@@ -141,7 +141,15 @@ def _adopt_legacy_home(root: Path) -> bool:
     for legacy in _legacy_homes(root):
         marker = legacy / ".workpulse-adopted"
         if marker.exists():
-            continue
+            # Only trust a marker that names this exact destination. A marker
+            # accidentally written by a test or an older install must never
+            # strand a richer real database in the legacy directory.
+            try:
+                marker_text = marker.read_text(encoding="utf-8")
+            except OSError:
+                marker_text = ""
+            if f"Adopted into {root}" in marker_text:
+                continue
         legacy_n = _session_count(legacy / "workpulse.db")
         if legacy_n == 0 or legacy_n <= pinned_n:
             continue

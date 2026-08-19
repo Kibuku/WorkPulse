@@ -21,6 +21,22 @@ fi
 
 launchctl asuser "$USER_ID" sudo -u "$CONSOLE_USER" \
   env HOME="$USER_HOME" "$BIN" --cli install --product "$PRODUCT" --role "$ROLE" >>"$LOG" 2>&1
+
+# Personal WorkPulse supersedes the original generic WorkPulse desktop app.
+# Retire that bundle only after migration and agent installation succeeded,
+# and keep it recoverably outside /Applications rather than deleting it.
+if [ "$PRODUCT" = "personal" ] && [ "$APP_NAME" != "WorkPulse" ] \
+   && [ -d "/Applications/WorkPulse.app" ]; then
+  LEGACY_DIR="$USER_HOME/Library/Application Support/Pulse/Legacy Apps"
+  mkdir -p "$LEGACY_DIR"
+  LEGACY_DEST="$LEGACY_DIR/WorkPulse-before-Personal.app"
+  if [ -e "$LEGACY_DEST" ]; then
+    LEGACY_DEST="$LEGACY_DIR/WorkPulse-before-Personal-$(date +%Y%m%d_%H%M%S).app"
+  fi
+  mv "/Applications/WorkPulse.app" "$LEGACY_DEST"
+  chown -R "$CONSOLE_USER":staff "$LEGACY_DEST"
+  echo "  cleanup   retired earlier app to $LEGACY_DEST" >>"$LOG"
+fi
 launchctl asuser "$USER_ID" sudo -u "$CONSOLE_USER" \
   env HOME="$USER_HOME" open -a "$APP_NAME" || true
 
