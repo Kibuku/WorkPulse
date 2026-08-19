@@ -19,6 +19,12 @@ from workpulse.common import ROOT
 MANIFEST_PATH = ROOT / "config" / "product.json"
 
 _FLAVOURS = {
+    ("personal", "individual"): {
+        "channel": "personal-workpulse",
+        "entry_path": "/personal",
+        "capabilities": ("personal.view",),
+        "label": "Personal WorkPulse",
+    },
     ("institution", "member"): {
         "channel": "workpulse-institution",
         "entry_path": "/institution",
@@ -69,8 +75,7 @@ def _normalise(product: str, role: str) -> tuple[str, str]:
     product = str(product or "").strip().lower().replace("_", "-")
     role = str(role or "").strip().lower().replace("_", "-")
     aliases = {
-        ("personal", "personal"): ("developer", "lab"),
-        ("personal", "individual"): ("developer", "lab"),
+        ("personal", "personal"): ("personal", "individual"),
         ("organization", "member"): ("institution", "member"),
         ("organisation", "member"): ("institution", "member"),
         ("learning", "learning-device"): ("learning", "device"),

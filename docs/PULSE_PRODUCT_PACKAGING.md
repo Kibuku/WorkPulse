@@ -8,7 +8,14 @@ Updated: 2026-08-04
 Pulse Core is shared code. It is not sold or presented as an everything
 dashboard. Each buyer installs or enters the product they selected.
 
-## Commercial products
+## Product availability
+
+### Personal WorkPulse — public
+
+- Entry URL: `/personal`
+- Release channel: `personal-workpulse`.
+- Public installer cards for macOS and Windows.
+- Runs locally without requiring an account or organisation connection.
 
 ### WorkPulse Institution
 
@@ -17,6 +24,7 @@ dashboard. Each buyer installs or enters the product they selected.
   purpose-bound team projections, and organizational reporting.
 - Raw evidence remains separated from institutional projections.
 - Installer label: **WorkPulse Institution**.
+- Status: building/design-partner phase; no public installer link.
 
 ### LearningPulse
 
@@ -26,6 +34,8 @@ dashboard. Each buyer installs or enters the product they selected.
   facilitator actions, and factual session reports.
 - Uses the isolated learning vault and never reads the Personal vault.
 - Installer labels: **LearningPulse Facilitator** and **LearningPulse Device**.
+- Status: private development; no public installer link until explicit release
+  approval is given.
 
 The first packaged release may contain the same signed executable payload, but
 the installer flavour writes a product configuration and creates only the
@@ -57,14 +67,14 @@ LAN gateway but keeps report and control endpoints on loopback.
 
 ## Release channels
 
-Njiani should offer separate cards and downloads:
+Njiani currently offers one public download card:
 
-1. WorkPulse Institution for macOS/Windows
-2. LearningPulse Facilitator for macOS/Windows
-3. LearningPulse Device for macOS/Windows
+1. Personal WorkPulse for macOS/Windows (`personal-workpulse`).
 
-The school pilot receives only LearningPulse links. The Developer Lab is never
-listed publicly or bundled as an optional product.
+WorkPulse Institution may be described as building but has no download.
+LearningPulse may be described or demonstrated privately but has no public
+installer or update channel until the owner gives explicit release approval.
+The Developer Lab is never listed publicly or bundled as an optional product.
 
 ## Security boundary
 

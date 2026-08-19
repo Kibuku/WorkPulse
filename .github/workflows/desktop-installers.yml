@@ -24,11 +24,11 @@ jobs:
           python-version: "3.12"
       - run: choco install innosetup -y --no-progress
       - shell: powershell
-        run: .\installer\desktop\build-windows.ps1
+        run: .\installer\desktop\build-windows.ps1 -Flavor personal
       - uses: actions/upload-artifact@v4
         with:
           name: windows-installers
-          path: release-artifacts/*Windows.exe
+          path: release-artifacts/PersonalWorkPulseSetup-*-Windows.exe
 
   macos:
     runs-on: macos-14
@@ -38,11 +38,11 @@ jobs:
         with:
           python-version: "3.12"
       - run: chmod +x installer/desktop/build-macos.sh installer/desktop/macos-postinstall
-      - run: ./installer/desktop/build-macos.sh
+      - run: ./installer/desktop/build-macos.sh personal
       - uses: actions/upload-artifact@v4
         with:
           name: macos-installers
-          path: release-artifacts/*macOS.pkg
+          path: release-artifacts/PersonalWorkPulse-*-macOS.pkg
 
   publish-to-repo:
     needs: [windows, macos]
@@ -70,9 +70,7 @@ jobs:
                   "sha256": hashlib.sha256(path.read_bytes()).hexdigest(),
               }
           flavors = {
-              "workpulse-institution": ("WorkPulseInstitution", "WorkPulseInstitutionSetup"),
-              "learning-facilitator": ("LearningPulseFacilitator", "LearningPulseFacilitatorSetup"),
-              "learning-device": ("LearningPulseDevice", "LearningPulseDeviceSetup"),
+              "personal-workpulse": ("PersonalWorkPulse", "PersonalWorkPulseSetup"),
           }
           products = {}
           for channel, (mac_name, win_name) in flavors.items():

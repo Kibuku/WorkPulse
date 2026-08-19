@@ -63,6 +63,28 @@ build_flavor() {
     "$ARTIFACTS/${slug}-${VERSION}-macOS.pkg"
 }
 
-build_flavor "WorkPulseInstitution" "WorkPulse Institution" "institution" "member" "/institution" "earth.njiani.workpulse.institution"
-build_flavor "LearningPulseFacilitator" "LearningPulse Facilitator" "learning" "facilitator" "/learning" "earth.njiani.pulse.learning.facilitator"
-build_flavor "LearningPulseDevice" "LearningPulse Device" "learning" "device" "/learning/device" "earth.njiani.pulse.learning.device"
+FLAVOR="${1:-all}"
+case "$FLAVOR" in
+  personal)
+    build_flavor "PersonalWorkPulse" "Personal WorkPulse" "personal" "individual" "/personal" "earth.njiani.workpulse.personal"
+    ;;
+  all)
+    build_flavor "PersonalWorkPulse" "Personal WorkPulse" "personal" "individual" "/personal" "earth.njiani.workpulse.personal"
+    build_flavor "WorkPulseInstitution" "WorkPulse Institution" "institution" "member" "/institution" "earth.njiani.workpulse.institution"
+    build_flavor "LearningPulseFacilitator" "LearningPulse Facilitator" "learning" "facilitator" "/learning" "earth.njiani.pulse.learning.facilitator"
+    build_flavor "LearningPulseDevice" "LearningPulse Device" "learning" "device" "/learning/device" "earth.njiani.pulse.learning.device"
+    ;;
+  institution)
+    build_flavor "WorkPulseInstitution" "WorkPulse Institution" "institution" "member" "/institution" "earth.njiani.workpulse.institution"
+    ;;
+  facilitator)
+    build_flavor "LearningPulseFacilitator" "LearningPulse Facilitator" "learning" "facilitator" "/learning" "earth.njiani.pulse.learning.facilitator"
+    ;;
+  device)
+    build_flavor "LearningPulseDevice" "LearningPulse Device" "learning" "device" "/learning/device" "earth.njiani.pulse.learning.device"
+    ;;
+  *)
+    echo "usage: $0 [all|personal|institution|facilitator|device]" >&2
+    exit 2
+    ;;
+esac

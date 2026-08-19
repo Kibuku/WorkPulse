@@ -1,12 +1,16 @@
 from __future__ import annotations
 
 import json
+from pathlib import Path
 
 import pytest
 from fastapi.testclient import TestClient
 
 from workpulse import product
 from workpulse.web import app as appmod
+
+
+ROOT = Path(__file__).resolve().parents[1]
 
 
 def test_configure_persists_release_channel(tmp_path):
@@ -47,10 +51,23 @@ def test_institution_is_the_commercial_workpulse_product(tmp_path, monkeypatch):
     assert not selected.has("learning.facilitator")
 
 
-def test_legacy_personal_maps_to_private_developer_lab():
+def test_personal_is_the_public_individual_product():
     selected = product._make("personal", "individual")
-    assert selected.channel == "developer-lab"
-    assert selected.has("developer.lab")
+    assert selected.channel == "personal-workpulse"
+    assert selected.entry_path == "/personal"
+    assert selected.has("personal.view")
+    assert not selected.has("developer.lab")
+
+
+def test_public_installer_workflow_builds_only_personal():
+    workflow = (ROOT / ".github" / "workflows" / "desktop-installers.yml").read_text()
+    assert "build-windows.ps1 -Flavor personal" in workflow
+    assert "build-macos.sh personal" in workflow
+    manifest_section = workflow.split("flavors = {", 1)[1].split("}", 1)[0]
+    assert "personal-workpulse" in manifest_section
+    assert "workpulse-institution" not in manifest_section
+    assert "learning-facilitator" not in manifest_section
+    assert "learning-device" not in manifest_section
 
 
 def test_device_url_cannot_grant_facilitator_api(monkeypatch):

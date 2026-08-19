@@ -1,5 +1,5 @@
 param(
-  [ValidateSet("all", "institution", "facilitator", "device")]
+  [ValidateSet("all", "personal", "institution", "facilitator", "device")]
   [string]$Flavor = "all"
 )
 $ErrorActionPreference = "Stop"
@@ -38,11 +38,12 @@ $ISCC = @(
 ) | Where-Object { Test-Path $_ } | Select-Object -First 1
 if (-not $ISCC) { throw "Inno Setup 6 is not installed" }
 $Flavors = @{
+  personal = @{ Product="personal"; Role="individual"; Label="Personal WorkPulse"; Slug="PersonalWorkPulse"; Guid="0F82399D-03E7-40BC-BD4D-AF46293918AF" }
   institution = @{ Product="institution"; Role="member"; Label="WorkPulse Institution"; Slug="WorkPulseInstitution"; Guid="B6E2A1C4-7F3A-4E18-9A0B-7C2D5F8E4A11" }
   facilitator = @{ Product="learning"; Role="facilitator"; Label="LearningPulse Facilitator"; Slug="LearningPulseFacilitator"; Guid="8B2F11D9-8830-4DF8-99D1-047E3BE58718" }
   device = @{ Product="learning"; Role="device"; Label="LearningPulse Device"; Slug="LearningPulseDevice"; Guid="509DD493-6AD5-456B-93EA-B6200217C9E6" }
 }
-$Targets = if ($Flavor -eq "all") { @("institution", "facilitator", "device") } else { @($Flavor) }
+$Targets = if ($Flavor -eq "all") { @("personal", "institution", "facilitator", "device") } else { @($Flavor) }
 foreach ($Name in $Targets) {
   $F = $Flavors[$Name]
   & $ISCC "/DAppVersion=$Version" "/DProduct=$($F.Product)" `

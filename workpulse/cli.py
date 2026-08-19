@@ -208,7 +208,7 @@ def cmd_install(args: argparse.Namespace) -> int:
         # Freeze the safe legacy default on first desktop install. Source
         # checkouts retain their developer identity unless explicitly selected.
         if getattr(sys, "frozen", False) and not selected.configured:
-            selected = product.configure("developer", "lab")
+            selected = product.configure("personal", "individual")
     print(f"  product   {selected.label} ({selected.channel})")
     _ensure_config()
     _init_db()
@@ -365,8 +365,10 @@ def main(argv: list[str] | None = None) -> int:
                                 description="WorkPulse — a local-first attention brain.")
     sub = p.add_subparsers(dest="cmd")
     install = sub.add_parser("install", help="set up config, database, and background agents")
-    install.add_argument("--product", choices=("institution", "learning", "developer"))
-    install.add_argument("--role", choices=("member", "lab", "facilitator", "device", "learning_device"))
+    install.add_argument(
+        "--product", choices=("personal", "institution", "learning", "developer"))
+    install.add_argument(
+        "--role", choices=("individual", "member", "lab", "facilitator", "device", "learning_device"))
     sub.add_parser("uninstall", help="remove the background agents")
     sub.add_parser("update",    help="pull the latest version from GitHub and apply it")
     sub.add_parser("status",    help="show agents + a health summary")

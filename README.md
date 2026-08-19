@@ -1,17 +1,16 @@
 # WorkPulse
 
-A local-first institutional work-intelligence engine. It passively tracks how
-digital work moves from activity to output, then synthesizes app focus, file
-changes, calendar, and browser signals into attributable organizational
-intelligence while preserving explicit data boundaries.
+A local-first personal attention and work-memory companion. It passively turns
+app focus, file changes, calendar, and browser signals into a private account of
+what you worked on, how work moved, and what deserves attention next.
 
 Everything runs on your machine. Nothing leaves it unless you choose to sync.
 
-The commercial products are **WorkPulse Institution** and **LearningPulse**.
-The former Personal surface remains an internal Developer Lab for improving the
-shared Pulse Core; it is not publicly packaged or sold. Institution sign-in and
-tenant enrollment are reserved for the shared capabilities that need them. See
-[`docs/PRODUCT_DECISIONS_AND_ROADMAP.md`](docs/PRODUCT_DECISIONS_AND_ROADMAP.md).
+**Personal WorkPulse is the public edition available today.** WorkPulse
+Institution remains in its design-partner/building phase. LearningPulse remains
+private until it has been explicitly approved for release. All three share the
+same Pulse Core, but public availability is controlled per product rather than
+exposing unfinished installers.
 
 The dashboard explains every tracking mechanism in plain language. It also
 includes an employee-controlled organization-update preview that excludes raw
@@ -62,11 +61,13 @@ access first. To add a pilot user:
 
 ## First-time install (one command)
 
-For non-technical users, use the native installer from the Njiani download
-page: `WorkPulseSetup-<version>-Windows.exe` on Windows or
-`WorkPulse-<version>-macOS.pkg` on macOS. Each carries its own Python runtime;
-the user does not install Python or run a terminal command. The source-based
-steps below remain available for developers.
+For non-technical users, use the **Personal WorkPulse** native installer from
+the [Njiani download page](https://njiani-flame.vercel.app):
+`PersonalWorkPulseSetup-<version>-Windows.exe` on Windows or
+`PersonalWorkPulse-<version>-macOS.pkg` on macOS. Each carries its own Python
+runtime; the user does not install Python or run a terminal command. WorkPulse
+Institution and LearningPulse are not public downloads. The source-based steps
+below remain available for developers.
 
 This is the entry point for a machine that does **not** have WorkPulse yet. Clone
 the repo, then run the setup script from inside the folder:

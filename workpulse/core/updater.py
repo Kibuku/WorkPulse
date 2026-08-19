@@ -51,9 +51,8 @@ def check(*, manifest_url: str = DEFAULT_MANIFEST_URL,
     channel = product_identity.release_channel()
     products = manifest.get("products") or {}
     selected = products.get(channel) if products else manifest
-    # Old manifests describe the retired generic/Personal package. Never offer
-    # one to an Institution or Learning installation because that could silently
-    # change its role or data boundary.
+    # Product-aware manifests prevent Personal, Institution, and Learning
+    # installations from ever crossing release channels during an update.
     compatible = bool(products)
     artifact = ((selected or {}).get("platforms") or {}).get(key) \
         if key and compatible else None
