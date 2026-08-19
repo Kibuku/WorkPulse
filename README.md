@@ -32,7 +32,7 @@ receiver; failed deliveries remain saved locally rather than being discarded.
 workpulse/
   core/       the brain — pure Python, cross-platform (db, atoms, the three
               verbs capture/search/think, clustering, categorizer, reports,
-              profile, projects, privacy)
+              profile, projects, privacy, local semantic observations)
   signals/    data sources (activity, watcher, browser, calendar) + OS backends
   ops/        lifecycle (scheduler, nightly rollups, dream-refresh, doctor, tray)
   web/        the dashboard

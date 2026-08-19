@@ -1071,6 +1071,16 @@ footer { margin-top: 64px; padding-top: 24px; border-top: 1px solid var(--border
   border-bottom:1px solid var(--border);
 }
 .workflow-observations article:last-of-type { border-bottom:0; }
+.semantic-list { display:grid; gap:10px; margin-top:12px; }
+.semantic-item { display:grid; grid-template-columns:1fr auto; gap:12px; padding:12px;
+  border:1px solid var(--border); border-radius:10px; background:var(--surface); }
+.semantic-item h4 { margin:0 0 4px; font-size:14px; }
+.semantic-item p { margin:0; color:var(--text-soft); font-size:12px; line-height:1.45; }
+.semantic-actions { display:flex; gap:6px; align-items:center; }
+.semantic-actions button { border:1px solid var(--border); border-radius:7px; padding:5px 8px;
+  background:transparent; color:var(--text-soft); cursor:pointer; font-size:11px; }
+.semantic-actions button:first-child { color:#0f766e; border-color:#99d5cc; }
+.semantic-trust { margin-top:12px; font-size:11px; color:var(--text-soft); }
 .workflow-observations small,
 .workflow-observations p {
   color:var(--text-soft); font-size:12px; line-height:1.5;

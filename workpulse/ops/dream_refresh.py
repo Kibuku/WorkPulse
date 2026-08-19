@@ -29,6 +29,7 @@ from pathlib import Path
 from workpulse.core import categorize as cat, cluster as wp_cluster
 from workpulse.core import db
 from workpulse.core import name_clusters as nc
+from workpulse.core import semantics
 from workpulse.common import load_config
 
 
@@ -52,6 +53,11 @@ def refresh_all(*, force_categorize: bool = False, cfg: dict | None = None) -> d
     cat_counts = cat.assign_all(con, force=force_categorize, cfg=cfg)
     t_cat = time.monotonic()
 
+    # 4) Derive cautious workflow-stage and friction hypotheses from the
+    # existing local evidence. This is offline and idempotent.
+    semantic_counts = semantics.refresh(con)
+    t_semantics = time.monotonic()
+
     return {
         "cluster_refresh": {
             "clusters":          cluster_counts.get("clusters", 0),
@@ -69,7 +75,11 @@ def refresh_all(*, force_categorize: bool = False, cfg: dict | None = None) -> d
             "fallback":       cat_counts["fallback"],
             "ms":             round((t_cat - t_name) * 1000, 1),
         },
-        "total_ms": round((t_cat - t0) * 1000, 1),
+        "semantics": {
+            **semantic_counts,
+            "ms": round((t_semantics - t_cat) * 1000, 1),
+        },
+        "total_ms": round((t_semantics - t0) * 1000, 1),
     }
 
 

@@ -138,6 +138,12 @@ The first-run experience must teach this sequence:
 7. Organisation membership is disconnected by default and requires a separate,
    reviewable permission contract.
 
+Personal WorkPulse also derives local semantic observations from those signals:
+workflow stages, repeated rework and possible context-switching friction. These
+remain hypotheses with confidence and provenance, never proof of intent. Raw
+titles, paths and URLs do not enter the semantic observation table, and the
+owner can confirm or dismiss each proposal.
+
 The tour must never imply that WorkPulse records keystrokes, continuously
 captures screenshots, understands intent from one app name, or grants an
 organisation access merely because the software is installed.

@@ -110,6 +110,7 @@ Still required before external packaging:
 - signed Windows and notarised macOS packages;
 - facilitator identity and institution sign-in for any non-local deployment;
 - real browser-policy enforcement extension;
-- semantic stage/friction capture beyond metadata indicators;
+- deeper content semantics (optional document-body extraction/OCR) beyond the
+  shipped local metadata-based stage and friction observations;
 - retention execution and deletion receipts for learning evidence; and
 - mixed-device load test in a real course.

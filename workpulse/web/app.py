@@ -568,6 +568,30 @@ def api_v2_workflow_proposal_confirm():
         return JSONResponse({"error": str(exc)}, status_code=400)
 
 
+@app.get("/api/v2/semantics")
+def api_v2_semantics(request: Request, days: int = 7):
+    """Local semantic-stage and friction hypotheses for Personal WorkPulse."""
+    _require_capability("personal.view")
+    from workpulse.core import db as wp_db, semantics
+    cfg = load_config()
+    con = wp_db.connect(cfg)
+    semantics.refresh(con, days=max(1, min(days, 30)))
+    return semantics.observations(
+        con, days=days, include_private=_personal_unlocked(request))
+
+
+@app.patch("/api/v2/semantics/{observation_id}")
+async def api_v2_semantics_status(observation_id: str, payload: dict):
+    """Let the owner confirm or dismiss a hypothesis; corrections stay local."""
+    _require_capability("personal.view")
+    from workpulse.core import db as wp_db, semantics
+    try:
+        return semantics.set_status(
+            wp_db.connect(load_config()), observation_id, str(payload.get("status", "")))
+    except ValueError as exc:
+        return JSONResponse({"error": str(exc)}, status_code=400)
+
+
 # ── Streams: create / edit / delete from the UI (writes config.yaml) ──────────
 # The taxonomy wizard is the pilot's onboarding surface — users build their
 # stream tree here instead of hand-editing YAML. config.yaml is the source of

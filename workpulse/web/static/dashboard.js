@@ -5,7 +5,8 @@ let currentDate = null;       // YYYY-MM-DD; null = today
 let availableStreams = [];    // [{key, label, color}]
 let todayISO = null;
 const PRODUCT_MODE = location.pathname.startsWith('/learning') ? 'learning' :
-  (location.pathname.startsWith('/institution') ? 'institution' : 'developer');
+  (location.pathname.startsWith('/institution') ? 'institution' :
+   (location.pathname.startsWith('/personal') ? 'personal' : 'developer'));
 const LEARNING_ROLE = (location.pathname.endsWith('/device') ||
   new URLSearchParams(location.search).get('role') === 'device')
   ? 'device' : 'facilitator';
@@ -100,6 +101,11 @@ async function fetchSystem() {
   const detail = document.getElementById('ai-banner-detail');
   if (aiEnabled) {
     banner.style.display = 'none';
+  } else if (PRODUCT_MODE === 'personal') {
+    document.title = 'Personal WorkPulse';
+    document.body.dataset.product = 'personal';
+    if (brand) brand.textContent = 'Personal WorkPulse';
+    if (topbar) topbar.textContent = 'Personal WorkPulse';
   } else {
     banner.style.display = 'flex';
     const llm = d.llm || {};
@@ -1414,6 +1420,49 @@ async function fetchWorkflowLearning() {
   }
 }
 
+async function fetchSemanticObservations() {
+  const panel = document.getElementById('semantics-panel');
+  const summary = document.getElementById('semantics-summary');
+  const meta = document.getElementById('semantics-meta');
+  if (!panel) return;
+  try {
+    const r = await fetch('/api/v2/semantics?days=7');
+    if (!r.ok) { document.getElementById('semantics-card').style.display = 'none'; return; }
+    const d = await r.json();
+    const items = d.items || [];
+    if (meta) meta.textContent = `${items.length} local ${items.length === 1 ? 'hypothesis' : 'hypotheses'}`;
+    if (summary) summary.textContent = items.length
+      ? 'WorkPulse found workflow stages and possible friction worth reviewing.'
+      : 'WorkPulse is learning stages from your window, Chrome and file metadata.';
+    if (!items.length) {
+      panel.innerHTML = `<div class="empty">Not enough repeated evidence yet. Keep WorkPulse running while you work; no manual capture is required.</div><div class="semantic-trust">${escapeHtml(d.privacy)}</div>`;
+      return;
+    }
+    panel.innerHTML = `<div class="semantic-list">${items.map(item => `
+      <article class="semantic-item">
+        <div><h4>${item.kind === 'friction' ? 'Needs reflection: ' : 'Observed stage: '}${escapeHtml(item.summary)}</h4>
+        <p>${escapeHtml(item.stream_label || 'Across your work')} · ${Math.round(item.confidence * 100)}% confidence · ${item.evidence_count} metadata signals · ${escapeHtml(item.observed_date)}</p></div>
+        <div class="semantic-actions">
+          <button onclick="setSemanticStatus('${jsAttr(item.id)}','confirmed')">That’s right</button>
+          <button onclick="setSemanticStatus('${jsAttr(item.id)}','dismissed')">Not useful</button>
+        </div>
+      </article>`).join('')}</div>
+      <div class="semantic-trust">${escapeHtml(d.privacy)} ${escapeHtml(d.limitations)}</div>`;
+  } catch (_) {
+    panel.innerHTML = '<div class="empty">Semantic observations are temporarily unavailable.</div>';
+  }
+}
+
+async function setSemanticStatus(id, status) {
+  const r = await fetch('/api/v2/semantics/' + encodeURIComponent(id), {
+    method: 'PATCH', headers: {'Content-Type':'application/json'}, body: JSON.stringify({status})
+  });
+  if (r.ok) {
+    showToast(status === 'confirmed' ? 'Confirmed - WorkPulse will retain this teaching signal' : 'Dismissed');
+    await fetchSemanticObservations();
+  }
+}
+
 function openWorkflowModal() {
   if (!workflowLearningState) return;
   const d = workflowLearningState;
@@ -2117,7 +2166,7 @@ async function fetchMeetings() {
 
 // ── Refresh orchestration ──────────────────────────────────────────────────
 async function refreshDayPanels() {
-  await Promise.all([fetchHealth(), fetchPersonal(), fetchProfile(), fetchWorkflowLearning(), fetchToday(), fetchV2Timeline(), fetchLastActive(), fetchAI(), fetchMeetings()]);
+  await Promise.all([fetchHealth(), fetchPersonal(), fetchProfile(), fetchWorkflowLearning(), fetchSemanticObservations(), fetchToday(), fetchV2Timeline(), fetchLastActive(), fetchAI(), fetchMeetings()]);
   await fetchRealWork();  // Today is the fallback source when legacy activity is empty.
   await fetchReview();    // replaces the legacy title list with teachable decisions
   await fetchHeatmap();   // re-render so selected day highlights

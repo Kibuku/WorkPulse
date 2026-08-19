@@ -259,6 +259,20 @@
     <div id="workflow-panel"><div class="empty">Loading method…</div></div>
   </div>
 
+  <div class="card span-12 collapsible" id="semantics-card" data-card="semantics" data-card-label="What WorkPulse inferred" style="border-left:3px solid #0f766e;">
+    <div class="eyebrow card-header" onclick="toggleCard('semantics')">
+      <span class="card-toggle">▾</span>
+      <div class="card-header-text">
+        <span>What WorkPulse inferred</span>
+        <span id="semantics-meta" class="card-header-meta">Local hypotheses</span>
+      </div>
+    </div>
+    <div class="card-summary" id="semantics-summary"></div>
+    <div class="card-body">
+      <div id="semantics-panel"><div class="empty">Reading local evidence…</div></div>
+    </div>
+  </div>
+
   <!-- Weekly heatmap -->
   <div class="card span-12 collapsible" data-card="heatmap" data-card-label="Last 14 days">
     <div class="eyebrow card-header" onclick="toggleCard('heatmap')">
@@ -649,6 +663,7 @@
       <div class="trust-item"><b>Idle time</b><span>Stops treating time as active after 60 seconds without keyboard or mouse input.</span></div>
       <div class="trust-item"><b>File changes</b><span>Notices files created, changed, moved, or deleted in selected work folders. It records metadata, not every document's contents.</span></div>
       <div class="trust-item"><b>Browser and calendar context</b><span>Reads supported active browser tabs when permission allows and uses an optional calendar feed to understand meetings.</span></div>
+      <div class="trust-item"><b>Semantic observations</b><span>Locally proposes workflow stages and possible friction from repeated metadata patterns. You can confirm or dismiss every hypothesis.</span></div>
     </div>
     <div class="privacy-contract">
       <b>Your personal layer stays yours.</b>
