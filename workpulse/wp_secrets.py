@@ -31,6 +31,7 @@ _PATH = _ROOT / "config" / "secrets.json"
 # secret name -> env var name
 _ENV_MAP = {
     "anthropic_key":  "ANTHROPIC_API_KEY",
+    "gemini_key":     "GEMINI_API_KEY",
     "smtp_password":  "WORKPULSE_SMTP_PASSWORD",
     "smtp_user":      "WORKPULSE_SMTP_USER",
     "smtp_to":        "WORKPULSE_SMTP_TO",

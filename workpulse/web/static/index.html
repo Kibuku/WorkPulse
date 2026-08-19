@@ -766,6 +766,16 @@
 
     <div class="modal-row">
       <label>
+        <span id="gemini-status" class="status-dot off"></span>
+        Gemini API key <span style="color:var(--text-faint);font-weight:400">(free pilot or paid Google tier)</span>
+      </label>
+      <input type="password" id="gemini-input" placeholder="AIza…" autocomplete="off" />
+      <div class="help">Free-tier requests may be used by Google to improve its products. Use only redacted pilot evidence. Move organizational data to paid Gemini/Vertex AI.</div>
+      <a href="https://aistudio.google.com/app/apikey" target="_blank" rel="noopener">Get a Gemini key →</a>
+    </div>
+
+    <div class="modal-row">
+      <label>
         <span id="anthropic-status" class="status-dot off"></span>
         Anthropic API key <span style="color:var(--text-faint);font-weight:400">(cloud, best quality, pay per call)</span>
       </label>

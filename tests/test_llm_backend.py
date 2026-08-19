@@ -10,6 +10,7 @@ Run: python -m pytest tests/test_llm_backend.py
 from __future__ import annotations
 
 from workpulse.core import llm
+import json
 
 
 # ── loose JSON extraction (matters most for local models) ─────────────────────
@@ -26,18 +27,21 @@ def test_parse_json_loose_variants():
 # ── backend selection ─────────────────────────────────────────────────────────
 
 def test_auto_prefers_anthropic_when_key(monkeypatch):
+    monkeypatch.setattr(llm, "_gemini_key", lambda cfg=None: None)
     monkeypatch.setattr(llm, "_anthropic_key", lambda cfg=None: "sk-test")
     monkeypatch.setattr(llm, "_ollama_ready", lambda cfg: True)
     assert llm.active_backend({"llm": {"backend": "auto"}}) == "anthropic"
 
 
 def test_auto_falls_to_ollama_without_key(monkeypatch):
+    monkeypatch.setattr(llm, "_gemini_key", lambda cfg=None: None)
     monkeypatch.setattr(llm, "_anthropic_key", lambda cfg=None: None)
     monkeypatch.setattr(llm, "_ollama_ready", lambda cfg: True)
     assert llm.active_backend({"llm": {"backend": "auto"}}) == "ollama"
 
 
 def test_auto_none_when_nothing_available(monkeypatch):
+    monkeypatch.setattr(llm, "_gemini_key", lambda cfg=None: None)
     monkeypatch.setattr(llm, "_anthropic_key", lambda cfg=None: None)
     monkeypatch.setattr(llm, "_ollama_ready", lambda cfg: False)
     assert llm.active_backend({"llm": {"backend": "auto"}}) == "none"
@@ -59,6 +63,13 @@ def test_explicit_none(monkeypatch):
     assert llm.active_backend({"llm": {"backend": "none"}}) == "none"
 
 
+def test_auto_prefers_gemini(monkeypatch):
+    monkeypatch.setattr(llm, "_gemini_key", lambda cfg=None: "gem-test")
+    monkeypatch.setattr(llm, "_anthropic_key", lambda cfg=None: "sk-test")
+    monkeypatch.setattr(llm, "_ollama_ready", lambda cfg: True)
+    assert llm.active_backend({"llm": {"backend": "auto"}}) == "gemini"
+
+
 # ── ask_* with no backend degrades gracefully ─────────────────────────────────
 
 def test_ask_text_none_backend_returns_none(monkeypatch):
@@ -78,13 +89,37 @@ def test_ask_json_none_backend_returns_none(monkeypatch):
 # ── status shape stays back-compatible with the dashboard ─────────────────────
 
 def test_backend_status_shape(monkeypatch):
+    monkeypatch.setattr(llm, "_gemini_key", lambda cfg=None: None)
     monkeypatch.setattr(llm, "_anthropic_key", lambda cfg=None: None)
     monkeypatch.setattr(llm, "_probe_ollama",
                         lambda cfg=None, force=False:
                         {"ts": 0.0, "up": False, "models": [], "error": None})
     st = llm.backend_status({"llm": {}})
-    assert set(st) == {"active", "anthropic", "ollama"}
+    assert set(st) == {"active", "gemini", "anthropic", "ollama"}
     assert st["active"] == "none"
     assert set(st["ollama"]) == {"installed", "models", "want_model",
                                  "model_ready", "url", "error"}
     assert st["anthropic"]["available"] is False
+
+
+def test_gemini_json_request_and_usage(monkeypatch):
+    monkeypatch.setattr(llm, "_gemini_key", lambda cfg=None: "gem-test")
+    captured = {}
+    class Response:
+        def __enter__(self): return self
+        def __exit__(self, *args): return None
+        def read(self):
+            return json.dumps({
+                "candidates": [{"content": {"parts": [{"text": '{"stage":"drafting"}'}]}}],
+                "usageMetadata": {"promptTokenCount": 11, "candidatesTokenCount": 4},
+            }).encode()
+    def open_(request, timeout):
+        captured["request"] = request
+        captured["timeout"] = timeout
+        return Response()
+    monkeypatch.setattr("urllib.request.urlopen", open_)
+    result, meta = llm.ask_json("classify", cfg={"llm": {"backend": "gemini"}})
+    assert result == {"stage": "drafting"}
+    assert meta["model"] == "gemini-2.5-flash-lite"
+    assert meta["input_tokens"] == 11 and meta["output_tokens"] == 4
+    assert captured["request"].get_header("X-goog-api-key") == "gem-test"

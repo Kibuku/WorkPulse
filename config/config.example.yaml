@@ -111,10 +111,13 @@ llm:
   #   anthropic -> hosted Claude only
   #   ollama    -> local Ollama only (free, private, runs on your machine)
   #   none      -> no AI; deterministic/templated answers only
-  backend: "auto"
+  backend: "auto"                       # Gemini first, then Anthropic, then local Ollama
   # Haiku is the economical hosted default. Move to Sonnet later only when
   # a task proves it needs stronger reasoning.
   model: "claude-haiku-4-5"           # hosted (Anthropic)
+  gemini:
+    model: "gemini-2.5-flash-lite"     # stable, economical, structured outputs
+    timeout_s: 35
   ollama:                              # free local backend (https://ollama.com)
     url: "http://127.0.0.1:11434"
     model: "llama3.2:3b"              # pull once with:  ollama pull llama3.2:3b

@@ -2093,7 +2093,7 @@ async def api_ask(payload: dict, request: Request):
 
 # ── Settings: in-app secret + email config (no terminal needed) ──────────────
 
-_ALLOWED_SECRETS = {"anthropic_key", "smtp_password", "smtp_user", "smtp_to"}
+_ALLOWED_SECRETS = {"anthropic_key", "gemini_key", "smtp_password", "smtp_user", "smtp_to"}
 
 
 # ── Classroom: Session Console and managed-device policy service ─────────────

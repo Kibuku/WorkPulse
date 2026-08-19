@@ -1937,6 +1937,8 @@ function openSettings() {
                       : active === 'ollama'    ? `Local (Ollama, ${ol.want_model || ''})`
                       :                          'OFF — no backend configured';
     lines.push(`<div><strong>Active:</strong> ${activeLabel}</div>`);
+    const gem = llm.gemini || {};
+    lines.push(`<div><strong>Gemini:</strong> ${gem.available ? 'key configured · '+escapeHtml(gem.model || '') : 'not configured'}</div>`);
     lines.push(`<div style="margin-top:6px"><strong>Anthropic:</strong> ${anth.available ? 'key configured' : 'not configured'}</div>`);
     if (ol.installed) {
       const m = (ol.models || []).length;
@@ -1950,6 +1952,8 @@ function openSettings() {
     document.getElementById('backend-summary').innerHTML = lines.join('');
     document.getElementById('anthropic-status').className =
       'status-dot' + (cfg.secrets.anthropic_key.configured ? '' : ' off');
+    document.getElementById('gemini-status').className =
+      'status-dot' + (cfg.secrets.gemini_key && cfg.secrets.gemini_key.configured ? '' : ' off');
     document.getElementById('smtp-status').className =
       'status-dot' + (cfg.secrets.smtp_password.configured ? '' : ' off');
     document.getElementById('email-enabled').checked = !!cfg.email_enabled;
@@ -1965,11 +1969,13 @@ function closeSettings() {
   document.getElementById('settings-modal').classList.remove('open');
   // Clear inputs so secrets aren't sitting in DOM
   document.getElementById('anthropic-input').value = '';
+  document.getElementById('gemini-input').value = '';
   document.getElementById('smtp-input').value = '';
 }
 
 async function saveSettings() {
   const anth = document.getElementById('anthropic-input').value.trim();
+  const gemini = document.getElementById('gemini-input').value.trim();
   const smtp = document.getElementById('smtp-input').value.trim();
   const smtpUser = document.getElementById('smtp-user-input').value.trim();
   const emailOn = document.getElementById('email-enabled').checked;
@@ -1978,6 +1984,10 @@ async function saveSettings() {
   if (anth) ops.push(fetch('/api/settings/secret', {
     method:'POST', headers:{'Content-Type':'application/json'},
     body: JSON.stringify({ name:'anthropic_key', value: anth })
+  }));
+  if (gemini) ops.push(fetch('/api/settings/secret', {
+    method:'POST', headers:{'Content-Type':'application/json'},
+    body: JSON.stringify({ name:'gemini_key', value: gemini })
   }));
   if (smtp) ops.push(fetch('/api/settings/secret', {
     method:'POST', headers:{'Content-Type':'application/json'},
