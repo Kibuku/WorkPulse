@@ -25,10 +25,17 @@ jobs:
       - run: choco install innosetup tesseract -y --no-progress
       - shell: powershell
         run: .\installer\desktop\build-windows.ps1 -Flavor personal
-      - uses: actions/upload-artifact@v4
-        with:
-          name: windows-installers
-          path: release-artifacts/PersonalWorkPulseSetup-*-Windows.exe
+      - name: Publish Windows pilot installer
+        shell: powershell
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $Version = (& python -c "from workpulse import __version__; print(__version__)").Trim()
+          gh release view "v$Version" 2>$null
+          if ($LASTEXITCODE -ne 0) {
+            gh release create "v$Version" --prerelease --title "Personal WorkPulse $Version pilot" --notes "Pilot release for controlled macOS and Windows testing. Installers are not yet publicly code-signed."
+          }
+          gh release upload "v$Version" "release-artifacts/PersonalWorkPulseSetup-$Version-Windows.exe" --clobber
 
   macos:
     runs-on: macos-14
@@ -39,58 +46,14 @@ jobs:
           python-version: "3.12"
       - run: chmod +x installer/desktop/build-macos.sh installer/desktop/macos-postinstall
       - run: ./installer/desktop/build-macos.sh personal
-      - uses: actions/upload-artifact@v4
-        with:
-          name: macos-installers
-          path: release-artifacts/PersonalWorkPulse-*-macOS.pkg
-
-  publish-to-repo:
-    needs: [windows, macos]
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/download-artifact@v4
-        with:
-          path: release-artifacts
-          merge-multiple: true
-      - name: Write verified update manifest
-        shell: python
+      - name: Publish macOS pilot installer
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
-          import hashlib, json, re
-          from datetime import datetime, timezone
-          from pathlib import Path
-          version = re.search(
-              r'__version__\s*=\s*"([^"]+)"',
-              Path("workpulse/__init__.py").read_text()).group(1)
-          base = "https://njiani-flame.vercel.app/downloads"
-          def item(path):
-              return {
-                  "filename": path.name,
-                  "url": f"{base}/{path.name}",
-                  "sha256": hashlib.sha256(path.read_bytes()).hexdigest(),
-              }
-          flavors = {
-              "personal-workpulse": ("PersonalWorkPulse", "PersonalWorkPulseSetup"),
-          }
-          products = {}
-          for channel, (mac_name, win_name) in flavors.items():
-              mac = Path(f"release-artifacts/{mac_name}-{version}-macOS.pkg")
-              win = Path(f"release-artifacts/{win_name}-{version}-Windows.exe")
-              products[channel] = {"platforms": {
-                  "macos": item(mac), "windows": item(win),
-              }}
-          manifest = {
-              "version": version,
-              "published_at": datetime.now(timezone.utc).isoformat(),
-              "notes": "Reliability, tracking and experience improvements.",
-              "products": products,
-          }
-          Path("release-artifacts/latest.json").write_text(
-              json.dumps(manifest, indent=2) + "\n")
-      - run: |
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add -f release-artifacts/
-          git diff --cached --quiet && exit 0
-          git commit -m "Build desktop installer artifacts"
-          git push
+          VERSION="$(python -c 'from workpulse import __version__; print(__version__)')"
+          gh release view "v$VERSION" >/dev/null 2>&1 || \
+            gh release create "v$VERSION" --prerelease \
+              --title "Personal WorkPulse $VERSION pilot" \
+              --notes "Pilot release for controlled macOS and Windows testing. Installers are not yet publicly code-signed."
+          gh release upload "v$VERSION" \
+            "release-artifacts/PersonalWorkPulse-$VERSION-macOS.pkg" --clobber
