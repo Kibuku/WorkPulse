@@ -1859,7 +1859,7 @@ def api_organization_preview(request: Request, date: Optional[str] = None):  # n
             "total_hours": round(sum(float(p["hours"] or 0) for p in projects), 1),
             "projects": projects,
             "excluded": ["raw window titles", "URLs", "file paths", "personal activity",
-                         "screenshots", "keystrokes"]}
+                         "snapshot images and OCR text", "keystrokes"]}
 
 
 def _manager_context_path() -> Path:

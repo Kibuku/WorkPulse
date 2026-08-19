@@ -142,7 +142,8 @@ Acceptance:
 
 - No employee productivity score.
 - No leaderboard.
-- No screenshots or keystroke language.
+- Describe screenshots precisely: optional foreground-window snapshots only,
+  processed locally and deleted immediately; never imply continuous capture.
 - No manager drill-down into raw personal activity.
 - No more than one dominant question per view.
 - Every inference carries confidence or an uncertainty state.

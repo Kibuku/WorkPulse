@@ -145,7 +145,7 @@ titles, paths and URLs do not enter the semantic observation table, and the
 owner can confirm or dismiss each proposal.
 
 The tour must never imply that WorkPulse records keystrokes, continuously
-captures screenshots, understands intent from one app name, or grants an
+captures screenshots, retains snapshot images, understands intent from one app name, or grants an
 organisation access merely because the software is installed.
 
 The persistent “How it works” contract must disclose:

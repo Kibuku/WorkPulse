@@ -610,6 +610,7 @@
         <ul>
           <li>Window titles, URLs and file paths</li>
           <li>Captures, prompt content and detailed history</li>
+          <li>Opt-in active-window OCR text; source snapshots are deleted immediately</li>
           <li>Personal projects and inferred work memory</li>
           <li>Sensitive categories behind an additional lock</li>
         </ul>
@@ -664,21 +665,24 @@
       <div class="trust-item"><b>File changes</b><span>Notices files created, changed, moved, or deleted in selected work folders. It records metadata, not every document's contents.</span></div>
       <div class="trust-item"><b>Browser and calendar context</b><span>Reads supported active browser tabs when permission allows and uses an optional calendar feed to understand meetings.</span></div>
       <div class="trust-item"><b>Semantic observations</b><span>Locally proposes workflow stages and possible friction from repeated metadata patterns. You can confirm or dismiss every hypothesis.</span></div>
+      <div class="trust-item"><b>Optional active-window snapshots</b><span>When you enable content-level coaching, WorkPulse may snapshot only the foreground window, run local OCR and redaction, then immediately delete the image. It never falls back to capturing the whole desktop.</span></div>
     </div>
     <div class="privacy-contract">
       <b>Your personal layer stays yours.</b>
-      <p>Raw titles, URLs, file paths, personal activity, captures, corrections, and detailed history remain on this machine.</p>
+      <p>Raw titles, URLs, file paths, personal activity, captures, corrections, redacted OCR text, and detailed history remain on this machine. Temporary snapshot images are deleted after local processing.</p>
     </div>
     <div class="permission-layers">
       <div><span class="permission-state local">Always local</span><b>Personal WorkPulse</b><p>Today, Timeline, Brain, raw evidence, private categories, and your correction history.</p></div>
       <div><span class="permission-state optional">Optional</span><b>Browser and calendar context</b><p>Used only when you grant the operating-system or browser permission. WorkPulse continues with less context if you do not.</p></div>
+      <div><span class="permission-state optional">Optional</span><b>Content-level coaching</b><p>Off by default. Requires explicit consent and local OCR. Sensitive windows are excluded, and you can disable it at any time.</p></div>
       <div><span class="permission-state disconnected">Disconnected</span><b>Organisation layer</b><p>No manager can inspect this device. A future connection receives only purpose-bound output fields you have reviewed and allowed.</p></div>
     </div>
     <details class="trust-boundary-details">
       <summary>What WorkPulse does not collect</summary>
       <ul>
         <li>No keystroke logging.</li>
-        <li>No continuous screenshots or screen video.</li>
+        <li>No continuous screenshots, background screen recording, or whole-desktop fallback.</li>
+        <li>No snapshot unless content-level coaching is explicitly enabled.</li>
         <li>No silent upload of raw personal evidence.</li>
         <li>No organisation access simply because WorkPulse is installed.</li>
       </ul>
@@ -711,7 +715,7 @@
       <label>Feedback</label><textarea id="manager-feedback" rows="2"></textarea>
       <button class="btn-ghost" onclick="saveManagerContext()">Save locally</button>
     </details>
-    <div class="privacy-note">Never included: window titles, URLs, file paths, personal activity, screenshots, or keystrokes.</div>
+    <div class="privacy-note">Never shared with the organisation: window titles, URLs, file paths, personal activity, snapshot images, OCR text, or keystrokes.</div>
     <div class="modal-actions">
       <button class="btn-ghost" onclick="closeOrganizationModal()">Close</button>
       <button class="btn-primary" onclick="copyOrganizationUpdate()">Copy update</button>
