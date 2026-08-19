@@ -20,6 +20,16 @@ def test_capture_is_opt_in_and_deny_listed(monkeypatch):
     assert result["blocked"]
 
 
+def test_allow_list_block_names_detected_application(monkeypatch):
+    monkeypatch.setattr(content_capture, "_foreground",
+                        lambda: ("ChatGPT", 12, "ChatGPT"))
+    result = content_capture.capture_once({"content_capture": {
+        "enabled": True, "allow_apps": ["Google Chrome", "Microsoft Word"]}})
+    assert result["blocked"] is True
+    assert result["app"] == "ChatGPT"
+    assert "allow list" in result["reason"]
+
+
 def test_windows_frozen_build_finds_bundled_ocr(monkeypatch, tmp_path):
     executable = tmp_path / "tesseract" / "tesseract.exe"
     executable.parent.mkdir()

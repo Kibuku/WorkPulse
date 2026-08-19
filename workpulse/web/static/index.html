@@ -836,9 +836,14 @@
       <label class="switch"><input type="checkbox" id="content-capture-enabled" /></label>
     </div>
     <div class="modal-row">
+      <label>Capture only in these applications</label>
+      <input id="content-capture-allow" placeholder="Google Chrome, Microsoft Word, Excel, PowerPoint" />
+      <div class="help">Use the application names shown in your Dock or menu bar. Separate them with commas.</div>
+    </div>
+    <div class="modal-row">
       <label>Never capture when the window contains</label>
       <input id="content-capture-deny" placeholder="banking, healthcare, payroll" />
-      <button class="btn-ghost" type="button" onclick="captureContentNow()">Test capture now</button>
+      <button class="btn-ghost" id="content-capture-test" type="button" onclick="captureContentNow()">Test capture with 5-second delay</button>
     </div>
 
     <div class="modal-actions">

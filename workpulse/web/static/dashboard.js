@@ -1959,6 +1959,7 @@ function openSettings() {
   });
   fetch('/api/v2/content-capture/status').then(r => r.json()).then(s => {
     document.getElementById('content-capture-enabled').checked = !!s.enabled;
+    document.getElementById('content-capture-allow').value = (s.allow_apps || []).join(', ');
     document.getElementById('content-capture-deny').value = (s.deny_terms || []).join(', ');
     document.getElementById('content-capture-readiness').textContent = s.local_ocr_ready
       ? 'Local OCR ready.' : 'Local OCR is not installed; capture will remain unavailable.';
@@ -2002,6 +2003,7 @@ async function saveSettings() {
     method:'POST', headers:{'Content-Type':'application/json'},
     body: JSON.stringify({
       enabled: document.getElementById('content-capture-enabled').checked,
+      allow_apps: document.getElementById('content-capture-allow').value.split(',').map(x => x.trim()).filter(Boolean),
       deny_terms: document.getElementById('content-capture-deny').value.split(',').map(x => x.trim()).filter(Boolean)
     })
   }));
@@ -2024,11 +2026,23 @@ async function saveSettings() {
 }
 
 async function captureContentNow() {
-  showToast('Capturing the active window locally…');
+  const button = document.getElementById('content-capture-test');
+  if (button && button.disabled) return;
+  if (button) button.disabled = true;
+  showToast('Switch to the application window you want WorkPulse to read. Capturing in 5 seconds…');
+  for (let seconds = 5; seconds > 0; seconds -= 1) {
+    if (button) button.textContent = `Switch windows · capturing in ${seconds}s`;
+    await new Promise(resolve => setTimeout(resolve, 1000));
+  }
+  if (button) button.textContent = 'Reading active window locally…';
   const r = await fetch('/api/v2/content-capture/now', {method:'POST'});
   const d = await r.json();
   showToast(r.ok ? `Content captured locally${d.stage ? ' · '+d.stage : ''}. Screenshot deleted.`
-                 : (d.reason || 'Content capture unavailable'));
+                 : (d.app ? `${d.app}: ${d.reason}` : (d.reason || 'Content capture unavailable')));
+  if (button) {
+    button.disabled = false;
+    button.textContent = 'Test capture with 5-second delay';
+  }
 }
 
 // ── Trust, organization preview, and product feedback ─────────────────────

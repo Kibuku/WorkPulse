@@ -144,7 +144,7 @@ def capture_once(cfg: dict, *, capture_image=_capture_image, ocr=_ocr) -> dict:
     title, _pid, app = fg
     ok, reason = allowed(app, title, cfg)
     if not ok:
-        return {"ok": False, "reason": reason, "blocked": True}
+        return {"ok": False, "reason": reason, "blocked": True, "app": app}
     temp_dir = Path(tempfile.mkdtemp(prefix="workpulse-content-"))
     try:
         try:
