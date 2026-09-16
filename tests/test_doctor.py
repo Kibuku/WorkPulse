@@ -9,6 +9,7 @@ Run: python -m pytest tests/test_doctor.py
 
 from __future__ import annotations
 
+import os
 import sys
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -170,3 +171,45 @@ def test_agents_healthy_real_failure_still_fails(monkeypatch):
                         lambda slug: (True, 78 if slug == "activity" else 0))
     r = doctor.check_agents_healthy()
     assert r["status"] == "fail" and "activity" in r["message"]
+
+
+# ── stray_data_roots ──────────────────────────────────────────────────────────
+# Regression: the "Pulse" rebrand moved the data root from
+# Application Support/WorkPulse to .../Pulse/Personal and left the old dir
+# populated. Its frozen workpulse.db read as "capture stalled" to anyone
+# inspecting the wrong path. doctor must flag such an abandoned root.
+
+def _make_root(base, name, *, age_days):
+    """Create <base>/<name>/workpulse.db with an mtime aged by age_days."""
+    d = base / name
+    d.mkdir(parents=True, exist_ok=True)
+    p = d / "workpulse.db"
+    p.write_bytes(b"")
+    t = datetime.now().timestamp() - age_days * 86400
+    os.utime(p, (t, t))
+    return p
+
+
+def test_stray_root_warns_when_older_db_exists(env, monkeypatch):
+    _con()  # creates the active db (fresh)
+    monkeypatch.setattr(doctor, "_app_support_base", lambda: env)
+    _make_root(env, "WorkPulse", age_days=28)  # abandoned pre-rebrand root
+    r = doctor.check_stray_data_roots(cfg={"paths": {}})
+    assert r["status"] == doctor.WARN
+    assert "WorkPulse" in r["message"]
+
+
+def test_stray_root_ok_when_none(env, monkeypatch):
+    _con()
+    monkeypatch.setattr(doctor, "_app_support_base", lambda: env)
+    r = doctor.check_stray_data_roots(cfg={"paths": {}})
+    assert r["status"] == doctor.OK
+
+
+def test_stray_root_ignores_fresher_parallel_root(env, monkeypatch):
+    _con()
+    monkeypatch.setattr(doctor, "_app_support_base", lambda: env)
+    # A live parallel profile newer than the active db is not a landmine.
+    _make_root(env, "OtherProfile", age_days=-1)
+    r = doctor.check_stray_data_roots(cfg={"paths": {}})
+    assert r["status"] == doctor.OK

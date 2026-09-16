@@ -213,6 +213,52 @@ def check_nightly_ran(con) -> dict:
             "message": "past 21:00 but today's consolidation hasn't run yet"}
 
 
+def _app_support_base() -> Path:
+    # macOS keeps per-app data roots here. Best-effort: the stray-root hazard
+    # below is the mac "Pulse" rebrand story; on other OSes this path just
+    # won't exist and the check no-ops.
+    return Path.home() / "Library" / "Application Support"
+
+
+def check_stray_data_roots(cfg: dict | None = None) -> dict:
+    """Catch a data root ABANDONED by a rename/rebrand.
+
+    The Pulse rebrand moved the root from Application Support/WorkPulse to
+    .../Pulse/Personal and left the old dir populated. Its frozen
+    workpulse.db reads as "capture died weeks ago" to anyone -- human or tool --
+    who inspects the wrong path; that false alarm already cost a full debug.
+    Warn when another workpulse.db exists whose file is OLDER than the active
+    one, naming the stray dir so nobody is fooled again. A fresher parallel
+    root is a live profile, not a landmine, so it's left alone.
+    """
+    check = "no_stray_roots"
+    try:
+        active = db.db_path(cfg).resolve()
+    except Exception:
+        return {"check": check, "status": OK, "message": "active db path unknown"}
+    base = _app_support_base()
+    if not base.is_dir():
+        return {"check": check, "status": OK, "message": "no data roots to scan"}
+    active_m = active.stat().st_mtime if active.exists() else 0.0
+    stray, seen = [], set()
+    for pat in ("*/workpulse.db", "*/*/workpulse.db"):  # roots live 1-2 levels deep
+        for p in base.glob(pat):
+            try:
+                rp = p.resolve()
+                if rp == active or rp in seen:
+                    continue
+                seen.add(rp)
+                if rp.stat().st_mtime < active_m:  # older == superseded
+                    stray.append(rp.parent)
+            except OSError:
+                continue  # vanished mid-scan; doctor must never crash
+    if not stray:
+        return {"check": check, "status": OK, "message": "no stray data roots"}
+    names = ", ".join(str(p) for p in sorted(stray))
+    return {"check": check, "status": WARN,
+            "message": f"abandoned data root(s), ignore when diagnosing: {names}"}
+
+
 def _table_has_rows(con, table) -> bool:
     try:
         con.execute(f"SELECT 1 FROM {table} LIMIT 1")
@@ -233,6 +279,7 @@ def run_checks(cfg: dict | None = None) -> dict:
         check_agents_healthy(),
         check_data_fresh(con),
         check_nightly_ran(con),
+        check_stray_data_roots(cfg),
     ]
     verdict = OK
     for c in checks:
