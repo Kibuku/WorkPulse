@@ -126,3 +126,37 @@ def attribute_all(con: sqlite3.Connection, cfg: dict | None = None,
         con.execute("ROLLBACK")
         raise
     return {"attributed": attributed, "unattributed": unattributed}
+
+
+def attribute_observations(con: sqlite3.Connection,
+                           *, only_unattributed: bool = True) -> dict:
+    """Attribute semantic_observations from the projects of their evidence
+    sessions (plan U4, R11). An observation takes the dominant project across
+    its session evidence; if none of that evidence is attributed, it stays in
+    the unattributed bucket (R7). only_unattributed leaves already-set rows
+    untouched, so a re-run never overwrites a prior attribution or correction.
+    """
+    where = "WHERE project_id IS NULL" if only_unattributed else ""
+    obs = con.execute(f"SELECT id FROM semantic_observation {where}").fetchall()
+    attributed = unattributed = 0
+    con.execute("BEGIN")
+    try:
+        for o in obs:
+            pids = [r["pid"] for r in con.execute(
+                "SELECT s.project_id AS pid FROM semantic_evidence_local e "
+                "JOIN session s ON s.id = e.source_id "
+                "WHERE e.observation_id = ? AND e.source_kind = 'session' "
+                "  AND s.project_id IS NOT NULL",
+                (o["id"],)).fetchall()]
+            if not pids:
+                unattributed += 1
+                continue
+            best = Counter(pids).most_common(1)[0][0]
+            con.execute("UPDATE semantic_observation SET project_id = ? WHERE id = ?",
+                        (best, o["id"]))
+            attributed += 1
+        con.execute("COMMIT")
+    except Exception:
+        con.execute("ROLLBACK")
+        raise
+    return {"attributed": attributed, "unattributed": unattributed}
