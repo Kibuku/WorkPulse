@@ -22,10 +22,13 @@ Public API:
 
 from __future__ import annotations
 
+import json
 import os
 import sqlite3
 from collections import Counter
+from datetime import datetime, timezone
 
+from workpulse.core import atoms
 from workpulse.core.name_clusters import _tokens
 
 # A match needs at least this much idf-weighted overlap. 0.6 accepts one
@@ -103,7 +106,13 @@ def attribute_all(con: sqlite3.Connection, cfg: dict | None = None,
                   floor: float = _DEFAULT_FLOOR) -> dict:
     projects = _project_token_map(con)
     df = _project_df(projects)
-    where = "WHERE s.project_id IS NULL" if only_unattributed else ""
+    # A user-corrected session is never re-touched by an automatic pass, even a
+    # full (only_unattributed=False) re-run (KTD5, R8).
+    conds = ["s.id NOT IN (SELECT target_id FROM project_correction "
+             "WHERE target_kind = 'session')"]
+    if only_unattributed:
+        conds.append("s.project_id IS NULL")
+    where = "WHERE " + " AND ".join(conds)
     rows = con.execute(
         f"SELECT s.id AS id, sl.raw_title AS t, sl.raw_path AS p "
         f"FROM session s JOIN session_local sl ON sl.session_id = s.id {where}"
@@ -126,6 +135,56 @@ def attribute_all(con: sqlite3.Connection, cfg: dict | None = None,
         con.execute("ROLLBACK")
         raise
     return {"attributed": attributed, "unattributed": unattributed}
+
+
+def correct_session(con: sqlite3.Connection, session_id: str, *,
+                    project_id: str | None = None, client: str | None = None,
+                    name: str | None = None, signals: dict | None = None) -> str:
+    """Record a user reassignment of a session to a project (plan R6, KTD5).
+
+    Pass an existing ``project_id``, or a ``name`` (+ optional ``client``) to
+    reuse or create the target project. The target is confirmed, the session is
+    relinked, and the (from, to) tuple is stored in project_correction so
+    discovery/attribution can learn from it and automatic passes never revert it.
+    Returns the target project id.
+    """
+    if project_id is None and not name:
+        raise ValueError("correct_session needs project_id or name")
+    now = datetime.now(timezone.utc).isoformat()
+    prev = con.execute("SELECT project_id FROM session WHERE id = ?",
+                       (session_id,)).fetchone()
+    from_project = prev["project_id"] if prev else None
+    con.execute("BEGIN")
+    try:
+        if project_id is None:
+            row = con.execute(
+                "SELECT id FROM project WHERE IFNULL(client,'') = IFNULL(?, '') "
+                "AND name = ?", (client, name)).fetchone()
+            if row:
+                project_id = row["id"]
+            else:
+                project_id = atoms.new_id()
+                con.execute(
+                    "INSERT INTO project(id, client, name, status, confidence, "
+                    "created_at, confirmed_at) VALUES (?,?,?,?,?,?,?)",
+                    (project_id, client, name, "confirmed", 1.0, now, now))
+        con.execute(
+            "UPDATE project SET status = 'confirmed', "
+            "confirmed_at = COALESCE(confirmed_at, ?) WHERE id = ?",
+            (now, project_id))
+        con.execute("UPDATE session SET project_id = ? WHERE id = ?",
+                    (project_id, session_id))
+        con.execute(
+            "INSERT INTO project_correction(target_kind, target_id, from_project, "
+            "to_project, confidence_before, corrected_at, signals_snapshot) "
+            "VALUES (?,?,?,?,?,?,?)",
+            ("session", session_id, from_project, project_id, None, now,
+             json.dumps(signals) if signals else None))
+        con.execute("COMMIT")
+    except Exception:
+        con.execute("ROLLBACK")
+        raise
+    return project_id
 
 
 def attribute_observations(con: sqlite3.Connection,
