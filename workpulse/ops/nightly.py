@@ -119,9 +119,15 @@ def run(*, force: bool = False, cfg: dict | None = None) -> dict:
 
     if run_daily:
         from workpulse.core import cleanup, consolidate, report, profile, classroom
-        # Order matters: categorize is already handled by dream-refresh
-        # every 30 min, so clusters are current. Consolidate first (it's
-        # what _ran_today keys on), then the report, then the profile.
+        from workpulse.core import attribution
+        # Attribute activity to projects first so consolidate/report/profile see
+        # project_id. Guarded: the pass is resumable, and a failure here must
+        # never block the daily rollup (R9). Order after: categorize is handled
+        # by dream-refresh every 30 min, so clusters are current.
+        try:
+            did["attribution"] = attribution.run_attribution_pass(con, cfg=cfg)
+        except Exception as e:  # noqa: BLE001 — attribution never blocks the rollup
+            did["attribution"] = {"error": str(e)[:200]}
         consolidate.consolidate(con, cfg=cfg)
         report.daily(con, cfg=cfg, send_email=bool(
             (cfg.get("email") or {}).get("enabled")))

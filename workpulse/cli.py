@@ -276,6 +276,16 @@ def cmd_doctor(args: argparse.Namespace) -> int:
     return 1 if res.get("verdict") == doctor.FAIL else 0
 
 
+def cmd_attribute(args: argparse.Namespace) -> int:
+    from workpulse.core import attribution, db
+    from workpulse.common import load_config
+    con = db.connect(load_config())
+    res = attribution.run_attribution_pass(con)
+    print(f"projects: {res['candidates']} candidates | "
+          f"sessions: {res['sessions']} | observations: {res['observations']}")
+    return 0
+
+
 def cmd_web(args: argparse.Namespace) -> int:
     from workpulse.web import app
     # Source-based Windows test installs commonly launch `workpulse web`
@@ -361,6 +371,7 @@ _COMMANDS = {
     "update":    cmd_update,
     "status":    cmd_status,
     "doctor":    cmd_doctor,
+    "attribute": cmd_attribute,
     "web":       cmd_web,
     "version":   cmd_version,
     "product":   cmd_product,
@@ -383,6 +394,7 @@ def main(argv: list[str] | None = None) -> int:
     sub.add_parser("update",    help="pull the latest version from GitHub and apply it")
     sub.add_parser("status",    help="show agents + a health summary")
     sub.add_parser("doctor",    help="run the health checks")
+    sub.add_parser("attribute", help="run a project-attribution pass over the backlog")
     sub.add_parser("version",   help="print the installed version")
     sub.add_parser("product",   help="show this installation's product and role")
     ca = sub.add_parser("classroom-agent",

@@ -103,7 +103,7 @@ def attribute_session(con: sqlite3.Connection, session_id: str,
 
 def attribute_all(con: sqlite3.Connection, cfg: dict | None = None,
                   *, only_unattributed: bool = True,
-                  floor: float = _DEFAULT_FLOOR) -> dict:
+                  floor: float = _DEFAULT_FLOOR, batch_size: int = 500) -> dict:
     projects = _project_token_map(con)
     df = _project_df(projects)
     # A user-corrected session is never re-touched by an automatic pass, even a
@@ -118,22 +118,25 @@ def attribute_all(con: sqlite3.Connection, cfg: dict | None = None,
         f"FROM session s JOIN session_local sl ON sl.session_id = s.id {where}"
     ).fetchall()
 
+    # Commit per batch so a mid-pass failure keeps prior progress and the next
+    # run resumes from the still-NULL rows (R9/AE5). Each batch is its own txn.
     attributed = unattributed = 0
-    con.execute("BEGIN")
-    try:
-        for r in rows:
-            toks = _session_tokens(r["t"], r["p"])
-            decision = _best(toks, projects, df, floor) if toks else None
-            if decision is None:
-                unattributed += 1
-                continue
-            con.execute("UPDATE session SET project_id = ? WHERE id = ?",
-                        (decision["project_id"], r["id"]))
-            attributed += 1
-        con.execute("COMMIT")
-    except Exception:
-        con.execute("ROLLBACK")
-        raise
+    for start in range(0, len(rows), batch_size):
+        con.execute("BEGIN")
+        try:
+            for r in rows[start:start + batch_size]:
+                toks = _session_tokens(r["t"], r["p"])
+                decision = _best(toks, projects, df, floor) if toks else None
+                if decision is None:
+                    unattributed += 1
+                    continue
+                con.execute("UPDATE session SET project_id = ? WHERE id = ?",
+                            (decision["project_id"], r["id"]))
+                attributed += 1
+            con.execute("COMMIT")
+        except Exception:
+            con.execute("ROLLBACK")
+            raise
     return {"attributed": attributed, "unattributed": unattributed}
 
 
@@ -219,3 +222,23 @@ def attribute_observations(con: sqlite3.Connection,
         con.execute("ROLLBACK")
         raise
     return {"attributed": attributed, "unattributed": unattributed}
+
+
+def run_attribution_pass(con: sqlite3.Connection, cfg: dict | None = None,
+                         *, batch_size: int = 500,
+                         min_evidence: int = 2) -> dict:
+    """One full, idempotent attribution pass (plan U6, R8/R9): refresh the
+    discovered taxonomy, attribute unattributed sessions, then attribute
+    observations. Decoupled from intake (KTD6) — it only reads and writes the DB
+    and never runs in the sensor path. Safe to run over the whole backlog and
+    again: attribute_all commits per batch, so a mid-pass failure leaves the DB
+    consistent and the next pass resumes.
+    """
+    # Imported here to avoid a core import cycle (discovery imports nothing heavy).
+    from workpulse.core import discovery
+    candidates = discovery.discover_projects(con, cfg, min_evidence=min_evidence)
+    sessions = attribute_all(con, cfg, batch_size=batch_size)
+    observations = attribute_observations(con)
+    return {"candidates": len(candidates),
+            "sessions": sessions,
+            "observations": observations}
