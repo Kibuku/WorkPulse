@@ -443,6 +443,41 @@ def api_activity():
     }
 
 
+# ── by-project surfacing (attribution backbone, plan U7/R13) ────────────────
+
+@app.get("/api/projects")
+def api_projects(days: int | None = None):
+    from workpulse.core import db as wp_db, attribution
+    con = wp_db.connect(load_config())
+    return {"projects": attribution.project_time(con, days=days)}
+
+
+@app.get("/api/projects/{project_id}")
+def api_project_detail(project_id: str, days: int | None = None):
+    from workpulse.core import db as wp_db, attribution
+    con = wp_db.connect(load_config())
+    detail = attribution.project_detail(con, project_id, days=days)
+    if detail["project"] is None:
+        raise HTTPException(status_code=404, detail="unknown project")
+    return detail
+
+
+@app.post("/api/projects/correct")
+async def api_project_correct(payload: dict):
+    from workpulse.core import db as wp_db, attribution
+    con = wp_db.connect(load_config())
+    sid = payload.get("session_id")
+    if not sid:
+        return JSONResponse({"error": "missing session_id"}, status_code=400)
+    try:
+        pid = attribution.correct_session(
+            con, sid, project_id=payload.get("project_id"),
+            client=payload.get("client"), name=payload.get("name"))
+    except ValueError as e:
+        return JSONResponse({"error": str(e)}, status_code=400)
+    return {"project_id": pid}
+
+
 # ── v2 brain view (PLAN.md §7 — surfaces the from-first-principles brain) ───
 
 # ── Personal tier: password gate + token-checked privacy filter ─────────────

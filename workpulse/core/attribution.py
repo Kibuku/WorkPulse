@@ -26,7 +26,7 @@ import json
 import os
 import sqlite3
 from collections import Counter
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 from workpulse.core import atoms
 from workpulse.core.name_clusters import _tokens
@@ -222,6 +222,63 @@ def attribute_observations(con: sqlite3.Connection,
         con.execute("ROLLBACK")
         raise
     return {"attributed": attributed, "unattributed": unattributed}
+
+
+def _since(days: int | None) -> str | None:
+    if not days:
+        return None
+    return (datetime.now(timezone.utc) - timedelta(days=days)).isoformat()
+
+
+_MINUTES = ("(julianday(s.ended_at) - julianday(s.started_at)) * 1440")
+
+
+def project_time(con: sqlite3.Connection, *, days: int | None = None) -> list[dict]:
+    """Time and activity grouped by project (plan R13). minutes sums session
+    durations where an end time is known; sessions without one still count.
+    Unattributed sessions (project_id NULL) are excluded by the join.
+    """
+    since = _since(days)
+    where = "WHERE s.started_at >= ?" if since else ""
+    params = (since,) if since else ()
+    rows = con.execute(
+        f"SELECT p.id AS pid, p.client AS client, p.name AS name, p.status AS status, "
+        f"COUNT(*) AS sessions, "
+        f"COALESCE(SUM(CASE WHEN s.ended_at IS NOT NULL THEN {_MINUTES} END), 0) AS minutes "
+        f"FROM session s JOIN project p ON p.id = s.project_id {where} "
+        f"GROUP BY p.id ORDER BY minutes DESC, sessions DESC", params).fetchall()
+    return [{"project_id": r["pid"], "client": r["client"], "name": r["name"],
+             "status": r["status"], "sessions": r["sessions"],
+             "minutes": round(r["minutes"], 1)} for r in rows]
+
+
+def project_detail(con: sqlite3.Connection, project_id: str,
+                   *, days: int | None = None, limit: int = 50) -> dict:
+    """Drill-down for one project: deliverable-level breakdown (by raw title)
+    with session counts and minutes (plan R4). The title is the local deliverable
+    signal; it never leaves the machine.
+    """
+    meta = con.execute(
+        "SELECT id, client, name, status, confidence FROM project WHERE id = ?",
+        (project_id,)).fetchone()
+    since = _since(days)
+    conds = ["s.project_id = ?"]
+    params: list = [project_id]
+    if since:
+        conds.append("s.started_at >= ?")
+        params.append(since)
+    where = "WHERE " + " AND ".join(conds)
+    rows = con.execute(
+        f"SELECT sl.raw_title AS title, COUNT(*) AS sessions, "
+        f"COALESCE(SUM(CASE WHEN s.ended_at IS NOT NULL THEN {_MINUTES} END), 0) AS minutes "
+        f"FROM session s JOIN session_local sl ON sl.session_id = s.id {where} "
+        f"GROUP BY sl.raw_title ORDER BY sessions DESC LIMIT ?",
+        (*params, limit)).fetchall()
+    return {
+        "project": dict(meta) if meta else None,
+        "deliverables": [{"title": r["title"], "sessions": r["sessions"],
+                          "minutes": round(r["minutes"], 1)} for r in rows],
+    }
 
 
 def run_attribution_pass(con: sqlite3.Connection, cfg: dict | None = None,
