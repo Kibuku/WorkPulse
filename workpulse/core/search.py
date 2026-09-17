@@ -59,7 +59,8 @@ _VEC_DIM = 384                  # bge-small / fastembed default
 # (we're searching for "what was the thread", not for full-text recall on raw
 # file paths).
 
-_KINDS = ("session", "capture", "ai_call", "plan_item")
+_KINDS = ("session", "capture", "ai_call", "plan_item",
+         "project", "semantic_observation")
 
 
 def _content_query(kind: str, since: str | None) -> tuple[str, tuple]:
@@ -69,11 +70,19 @@ def _content_query(kind: str, since: str | None) -> tuple[str, tuple]:
     if kind == "session":
         # Join session_local for raw_title; the public table only has the hash.
         # Untagged sessions still get indexed — they're a first-class state.
+        # Also LEFT JOIN project: an attributed session's content gets the
+        # project's client/name appended, so a question naming the project
+        # surfaces the session via ordinary relevance ranking (U2, R3) — an
+        # unattributed session's content is unchanged.
         q = f"""
             SELECT s.id AS atom_id, s.started_at AS ts, s.stream AS stream,
-                   COALESCE(NULLIF(sl.raw_title, ''), s.app) AS content
+                   (COALESCE(NULLIF(sl.raw_title, ''), s.app) ||
+                    CASE WHEN p.id IS NOT NULL
+                         THEN ' [' || COALESCE(p.client || ' - ', '') || p.name || ']'
+                         ELSE '' END) AS content
             FROM session s
             LEFT JOIN session_local sl ON sl.session_id = s.id
+            LEFT JOIN project p ON p.id = s.project_id
             WHERE 1=1 {where_ts.replace("ts", "s.started_at")}
         """
         params = (since,) if since else ()
@@ -103,6 +112,30 @@ def _content_query(kind: str, since: str | None) -> tuple[str, tuple]:
             SELECT id AS atom_id, plan_date AS ts, stream, name AS content
             FROM plan_item
             WHERE 1=1 {where_ts.replace("ts", "plan_date")}
+        """
+        params = (since,) if since else ()
+        return q, params
+
+    if kind == "project":
+        # Only surviving candidates -- a dismissed project is a rejected
+        # duplicate/noise entry and shouldn't be citable content.
+        q = f"""
+            SELECT id AS atom_id, created_at AS ts, NULL AS stream,
+                   (COALESCE(client || ' - ', '') || name) AS content
+            FROM project
+            WHERE status != 'dismissed' {where_ts.replace("ts", "created_at")}
+        """
+        params = (since,) if since else ()
+        return q, params
+
+    if kind == "semantic_observation":
+        # Indexed regardless of project_id -- a project-less observation is
+        # still first-class content (mirrors the untagged-session precedent).
+        q = f"""
+            SELECT id AS atom_id, first_seen AS ts, NULL AS stream,
+                   (kind || ' [' || semantic_key || ']: ' || summary) AS content
+            FROM semantic_observation
+            WHERE 1=1 {where_ts.replace("ts", "first_seen")}
         """
         params = (since,) if since else ()
         return q, params

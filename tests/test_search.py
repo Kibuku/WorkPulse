@@ -69,6 +69,28 @@ def _seed(con):
     return {"s1": s1, "s2": s2, "s3": s3, "c1": c1, "c2": c2, "a1": a1}
 
 
+def _write_project(con, pid, name, *, client=None, status="candidate",
+                   created_at=None):
+    con.execute(
+        "INSERT INTO project(id, client, name, status, confidence, created_at) "
+        "VALUES (?,?,?,?,?,?)",
+        (pid, client, name, status, 0.8, created_at or _iso(datetime.now(timezone.utc))))
+    return pid
+
+
+def _write_observation(con, oid, summary, *, kind="stage", semantic_key="analysis",
+                       first_seen=None):
+    ts = first_seen or _iso(datetime.now(timezone.utc))
+    con.execute(
+        "INSERT INTO semantic_observation(id, observed_date, kind, semantic_key, "
+        "summary, confidence, evidence_count, source_types, first_seen, last_seen, "
+        "is_private, status, created_at, updated_at) "
+        "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+        (oid, ts[:10], kind, semantic_key, summary, 0.9, 1, "[]",
+         ts, ts, 0, "proposed", ts, ts))
+    return oid
+
+
 # ── tests ────────────────────────────────────────────────────────────────────
 
 def test_reindex_populates_fts(env):
@@ -185,3 +207,92 @@ def test_index_atom_incremental(env):
                     stream=None, content="a unique sentinel string")
     results = smod.search(con, "sentinel")
     assert results and results[0]["atom_id"] == "ZZZ"
+
+
+# ── project + semantic_observation atom kinds (U1) ──────────────────────────────
+
+def test_reindex_populates_project_and_observation(env):
+    con = _con()
+    _write_project(con, "p1", "MADDs Kenya/Zambia", client="Verst Carbon")
+    _write_observation(con, "o1", "Frequent context switching")
+    counts = smod.reindex(con)
+    assert counts["project"] == 1
+    assert counts["semantic_observation"] == 1
+
+
+def test_bm25_finds_project_by_name(env):
+    con = _con()
+    _write_project(con, "p1", "MADDs Kenya/Zambia", client="Verst Carbon")
+    smod.reindex(con)
+    results = smod.search(con, "MADDs")
+    assert any(r["atom_kind"] == "project" and r["atom_id"] == "p1" for r in results)
+
+
+def test_bm25_finds_observation_by_summary(env):
+    con = _con()
+    _write_observation(con, "o1", "Frequent context switching interrupted focus")
+    smod.reindex(con)
+    results = smod.search(con, "context switching")
+    assert any(r["atom_kind"] == "semantic_observation" and r["atom_id"] == "o1"
+              for r in results)
+
+
+def test_observation_indexed_without_project_link(env):
+    """A project-less observation is still first-class content (mirrors the
+    untagged-session precedent), not gated on attribution."""
+    con = _con()
+    _write_observation(con, "o1", "Deep work in the mornings")
+    counts = smod.reindex(con)
+    assert counts["semantic_observation"] == 1
+    results = smod.search(con, "mornings")
+    assert any(r["atom_id"] == "o1" for r in results)
+
+
+def test_dismissed_project_not_indexed(env):
+    con = _con()
+    _write_project(con, "p1", "Rejected Candidate", status="dismissed")
+    counts = smod.reindex(con)
+    assert counts["project"] == 0
+    results = smod.search(con, "Rejected Candidate")
+    assert not any(r["atom_id"] == "p1" for r in results)
+
+
+# ── project attribution woven into session content (U2, R3) ─────────────────────
+
+def test_attributed_session_found_by_project_name(env):
+    """Covers AE1: a session attributed to a project is retrieved by a query
+    naming the project, even when that text isn't in the raw title."""
+    con = _con()
+    _write_project(con, "p1", "MADDs Kenya/Zambia", client="Verst Carbon")
+    sid = atoms.write_session(con, app="Word", title="Engagement letter draft",
+                              started_at=_iso(datetime.now(timezone.utc)))
+    con.execute("UPDATE session SET project_id='p1' WHERE id=?", (sid,))
+    smod.reindex(con)
+    results = smod.search(con, "MADDs")
+    assert any(r["atom_kind"] == "session" and r["atom_id"] == sid for r in results)
+
+
+def test_unattributed_session_content_unchanged(env):
+    """Regression guard: an unattributed session indexes exactly as today."""
+    con = _con()
+    sid = atoms.write_session(con, app="Word", title="Plain untagged title",
+                              started_at=_iso(datetime.now(timezone.utc)))
+    smod.reindex(con)
+    row = con.execute(
+        "SELECT content FROM search_fts WHERE atom_kind='session' AND atom_id=?",
+        (sid,)).fetchone()
+    assert row["content"] == "Plain untagged title"
+
+
+def test_reindex_after_new_attribution_picks_up_project(env):
+    """Covers AE3: re-running reindex after a session gets newly attributed
+    makes its project grounding available with no code change."""
+    con = _con()
+    _write_project(con, "p1", "MADDs Kenya/Zambia", client="Verst Carbon")
+    sid = atoms.write_session(con, app="Word", title="Engagement letter draft",
+                              started_at=_iso(datetime.now(timezone.utc)))
+    smod.reindex(con)
+    assert not any(r["atom_id"] == sid for r in smod.search(con, "MADDs"))
+    con.execute("UPDATE session SET project_id='p1' WHERE id=?", (sid,))
+    smod.reindex(con)
+    assert any(r["atom_id"] == sid for r in smod.search(con, "MADDs"))
