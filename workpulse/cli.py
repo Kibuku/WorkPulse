@@ -281,8 +281,12 @@ def cmd_attribute(args: argparse.Namespace) -> int:
     from workpulse.common import load_config
     con = db.connect(load_config())
     res = attribution.run_attribution_pass(con)
+    assist = res.get("assist", {})
     print(f"projects: {res['candidates']} candidates | "
           f"sessions: {res['sessions']} | observations: {res['observations']}")
+    print(f"llm: refine {res.get('refine', {})} | "
+          f"assist {assist.get('attributed', 0)} sessions in "
+          f"{assist.get('llm_calls', 0)} calls")
     return 0
 
 

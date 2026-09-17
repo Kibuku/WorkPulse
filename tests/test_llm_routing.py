@@ -80,3 +80,17 @@ def test_ask_text_no_feature_backcompat(keys):
     # No feature, global none -> unchanged behavior (None).
     text, meta = llm.ask_text("hi", cfg={"llm": {"backend": "none"}})
     assert text is None
+
+
+# ── backend_status reports the per-feature routing (R10) ─────────────────────────
+
+def test_backend_status_reports_features(keys):
+    keys.setattr(llm, "_glm_key", lambda cfg=None: "k")
+    keys.setattr(llm, "_anthropic_key", lambda cfg=None: "k")
+    cfg = {"llm": {"features": {
+        "attribution": {"backend": "glm"},
+        "discovery": {"backend": "anthropic", "model": "claude-sonnet-x"}}}}
+    st = llm.backend_status(cfg)
+    assert st["features"]["attribution"]["backend"] == "glm"
+    assert st["features"]["discovery"]["backend"] == "anthropic"
+    assert st["features"]["discovery"]["model"] == "claude-sonnet-x"

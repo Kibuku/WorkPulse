@@ -219,8 +219,14 @@ def backend_status(cfg: dict | None = None) -> dict:
         cfg = load_config()
     probe = _probe_ollama(cfg)
     wanted = _ollama_model(cfg)
+    feats = _llm_cfg(cfg).get("features") or {}
     return {
         "active": active_backend(cfg),
+        "features": {
+            name: {"backend": _resolve_route(cfg, name)[0],
+                   "model": _resolve_route(cfg, name)[1]}
+            for name in feats
+        },
         "gemini": {
             "available": bool(_gemini_key(cfg)),
             "model": _gemini_model(cfg),

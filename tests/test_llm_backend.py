@@ -97,7 +97,8 @@ def test_backend_status_shape(monkeypatch):
     monkeypatch.setattr(llm, "_glm_key", lambda cfg=None: None)
     monkeypatch.setattr(llm, "_deepseek_key", lambda cfg=None: None)
     st = llm.backend_status({"llm": {}})
-    assert set(st) == {"active", "gemini", "anthropic", "glm", "deepseek", "ollama"}
+    assert set(st) == {"active", "features", "gemini", "anthropic",
+                       "glm", "deepseek", "ollama"}
     assert st["active"] == "none"
     assert set(st["ollama"]) == {"installed", "models", "want_model",
                                  "model_ready", "url", "error"}

@@ -150,3 +150,17 @@ def test_assist_redacts_title(env, monkeypatch):
     attribution.llm_assist_attribution(con, cfg={"llm": {}})
     assert calls and "secret@example.com" not in calls[0]
     assert "REDACTED_MARK" in calls[0]
+
+
+# ── the per-pass call cap bounds cost (R11) ──────────────────────────────────────
+
+def test_assist_respects_max_calls(env, monkeypatch):
+    con = _con()
+    _project(con, "p1", "Verst Carbon Madds")
+    _session(con, "distinct hard one")
+    _session(con, "distinct hard two")
+    _session(con, "distinct hard three")
+    _provider(monkeypatch, {"project_id": "p1"})
+    res = attribution.llm_assist_attribution(con, cfg={"llm": {}}, max_calls=1)
+    assert res["llm_calls"] == 1
+    assert res["attributed"] == 1  # only the one within the cap
