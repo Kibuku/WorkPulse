@@ -40,6 +40,11 @@ _DEFAULT_OLLAMA_URL   = "http://127.0.0.1:11434"
 _DEFAULT_LOCAL_MODEL  = "llama3.2:3b"          # ~2GB, fast on CPU, good at JSON
 _DEFAULT_CLOUD_MODEL  = "claude-haiku-4-5"
 _DEFAULT_GEMINI_MODEL = "gemini-2.5-flash-lite"
+# OpenAI-compatible providers (one adapter serves both, KTD2).
+_DEFAULT_GLM_URL       = "https://open.bigmodel.cn/api/paas/v4"
+_DEFAULT_GLM_MODEL     = "glm-4-flash"
+_DEFAULT_DEEPSEEK_URL  = "https://api.deepseek.com"
+_DEFAULT_DEEPSEEK_MODEL = "deepseek-chat"
 _DEFAULT_INTERACTIVE_TIMEOUT_S = 35
 _OLLAMA_PROBE_CACHE_S = 60
 _ollama_probe = {"ts": 0.0, "up": False, "models": [], "error": None}
@@ -72,6 +77,42 @@ def _anthropic_key(cfg: dict | None = None) -> str | None:
         return get_secret("anthropic_key") or None
     except Exception:
         return None
+
+
+def _secret_key(env_var: str, secret_name: str) -> str | None:
+    key = os.environ.get(env_var)
+    if key:
+        return key
+    try:
+        from workpulse.wp_secrets import get as get_secret  # type: ignore
+        return get_secret(secret_name) or None
+    except Exception:
+        return None
+
+
+def _glm_key(cfg: dict | None = None) -> str | None:
+    return _secret_key("GLM_API_KEY", "glm_key")
+
+
+def _deepseek_key(cfg: dict | None = None) -> str | None:
+    return _secret_key("DEEPSEEK_API_KEY", "deepseek_key")
+
+
+def _glm_url(cfg: dict | None) -> str:
+    return (_llm_cfg(cfg).get("glm") or {}).get("url") or _DEFAULT_GLM_URL
+
+
+def _glm_model(cfg: dict | None, override: str | None = None) -> str:
+    return override or (_llm_cfg(cfg).get("glm") or {}).get("model") or _DEFAULT_GLM_MODEL
+
+
+def _deepseek_url(cfg: dict | None) -> str:
+    return (_llm_cfg(cfg).get("deepseek") or {}).get("url") or _DEFAULT_DEEPSEEK_URL
+
+
+def _deepseek_model(cfg: dict | None, override: str | None = None) -> str:
+    return (override or (_llm_cfg(cfg).get("deepseek") or {}).get("model")
+            or _DEFAULT_DEEPSEEK_MODEL)
 
 
 def _gemini_key(cfg: dict | None = None) -> str | None:
@@ -128,6 +169,10 @@ def active_backend(cfg: dict | None = None) -> str:
         return "gemini" if _gemini_key(cfg) else "none"
     if setting == "anthropic":
         return "anthropic" if _anthropic_key(cfg) else "none"
+    if setting == "glm":
+        return "glm" if _glm_key(cfg) else "none"
+    if setting == "deepseek":
+        return "deepseek" if _deepseek_key(cfg) else "none"
     if setting == "ollama":
         return "ollama" if _ollama_ready(cfg) else "none"
     if setting == "none":
@@ -137,6 +182,10 @@ def active_backend(cfg: dict | None = None) -> str:
         return "gemini"
     if _anthropic_key(cfg):
         return "anthropic"
+    if _glm_key(cfg):
+        return "glm"
+    if _deepseek_key(cfg):
+        return "deepseek"
     if _ollama_ready(cfg):
         return "ollama"
     return "none"
@@ -159,6 +208,14 @@ def backend_status(cfg: dict | None = None) -> dict:
         },
         "anthropic": {
             "available": bool(_anthropic_key(cfg)),
+        },
+        "glm": {
+            "available": bool(_glm_key(cfg)),
+            "model": _glm_model(cfg),
+        },
+        "deepseek": {
+            "available": bool(_deepseek_key(cfg)),
+            "model": _deepseek_model(cfg),
         },
         "ollama": {
             "installed":   probe["up"],
@@ -189,6 +246,10 @@ def ask_text(prompt: str, *, max_tokens: int = 600, cfg: dict | None = None,
         return _gemini_text(prompt, max_tokens, cfg, meta, model)
     if backend == "anthropic":
         return _anthropic_text(prompt, max_tokens, cfg, meta, model)
+    if backend == "glm":
+        return _glm_text(prompt, max_tokens, cfg, meta, model)
+    if backend == "deepseek":
+        return _deepseek_text(prompt, max_tokens, cfg, meta, model)
     if backend == "ollama":
         return _ollama_text(prompt, max_tokens, cfg, meta)
     return None, meta
@@ -206,6 +267,12 @@ def ask_json(prompt: str, *, max_tokens: int = 256, cfg: dict | None = None,
         return _parse_json_loose(text), meta
     if backend == "anthropic":
         text, meta = _anthropic_text(prompt, max_tokens, cfg, meta, model)
+        return _parse_json_loose(text), meta
+    if backend == "glm":
+        text, meta = _glm_text(prompt, max_tokens, cfg, meta, model, as_json=True)
+        return _parse_json_loose(text), meta
+    if backend == "deepseek":
+        text, meta = _deepseek_text(prompt, max_tokens, cfg, meta, model, as_json=True)
         return _parse_json_loose(text), meta
     if backend == "ollama":
         return _ollama_json(prompt, max_tokens, cfg, meta)
@@ -280,6 +347,58 @@ def _anthropic_text(prompt: str, max_tokens: int, cfg: dict, meta: dict,
         log.warning("anthropic call failed: %s", e)
         return None, meta
     return text.strip(), meta
+
+
+# ── OpenAI-compatible backends (GLM, DeepSeek) — KTD2 ───────────────────────────
+
+def _openai_compatible_text(prompt: str, max_tokens: int, cfg: dict, meta: dict,
+                            model: str | None, *, base_url: str, key: str | None,
+                            model_default: str, as_json: bool = False):
+    if not key:
+        return None, meta
+    import urllib.error
+    import urllib.request
+    m = model or model_default
+    meta["model"] = m
+    payload = {
+        "model": m,
+        "max_tokens": max_tokens,
+        "messages": [{"role": "user", "content": prompt}],
+    }
+    if as_json:
+        payload["response_format"] = {"type": "json_object"}
+    req = urllib.request.Request(
+        base_url.rstrip("/") + "/chat/completions",
+        data=json.dumps(payload).encode(),
+        headers={"Authorization": f"Bearer {key}",
+                 "Content-Type": "application/json"},
+        method="POST",
+    )
+    try:
+        t0 = time.monotonic()
+        with urllib.request.urlopen(req, timeout=_DEFAULT_INTERACTIVE_TIMEOUT_S) as resp:
+            data = json.loads(resp.read().decode())
+        meta["duration_s"] = round(time.monotonic() - t0, 3)
+        usage = data.get("usage") or {}
+        meta["input_tokens"]  = int(usage.get("prompt_tokens", 0))
+        meta["output_tokens"] = int(usage.get("completion_tokens", 0))
+        text = (((data.get("choices") or [{}])[0]).get("message") or {}).get("content")
+    except Exception as e:  # noqa: BLE001 — any failure degrades to the floor (KTD5)
+        log.warning("openai-compatible call failed: %s", e)
+        return None, meta
+    return (text.strip() if text else None), meta
+
+
+def _glm_text(prompt, max_tokens, cfg, meta, model, *, as_json=False):
+    return _openai_compatible_text(
+        prompt, max_tokens, cfg, meta, model, base_url=_glm_url(cfg),
+        key=_glm_key(cfg), model_default=_glm_model(cfg), as_json=as_json)
+
+
+def _deepseek_text(prompt, max_tokens, cfg, meta, model, *, as_json=False):
+    return _openai_compatible_text(
+        prompt, max_tokens, cfg, meta, model, base_url=_deepseek_url(cfg),
+        key=_deepseek_key(cfg), model_default=_deepseek_model(cfg), as_json=as_json)
 
 
 # ── ollama backend ────────────────────────────────────────────────────────────
