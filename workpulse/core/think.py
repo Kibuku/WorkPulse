@@ -288,20 +288,23 @@ def think(con: sqlite3.Connection, question: str, *,
     provider = "anthropic"
 
     if not force_fallback:
-        result = _call_anthropic(prompt, model=model, cfg=cfg)
-        if result is not None:
-            raw, in_tok, out_tok, duration_s = result
-            used_model = model
-            provider = "anthropic"
+        # Routed through the shared, per-feature provider layer (KTD3) instead
+        # of a bespoke call — unlocks GLM/DeepSeek/Haiku/Sonnet for Q&A the same
+        # way discovery/attribution already select theirs. _call_anthropic /
+        # _call_ollama stay in this module unchanged: name_clusters.py,
+        # consolidate.py, and report.py still call _call_anthropic directly.
+        from workpulse.core import llm
+        text, meta = llm.ask_text(prompt, max_tokens=1024, model=model,
+                                  cfg=cfg, feature="qa")
+        if text is not None:
+            raw = text
+            in_tok = meta.get("input_tokens", 0)
+            out_tok = meta.get("output_tokens", 0)
+            duration_s = meta.get("duration_s", 0.0)
+            used_model = meta.get("model")
+            provider = meta.get("backend") or "anthropic"
             fallback = False
             status = "ok"
-        else:
-            oll = _call_ollama(prompt, cfg=cfg)
-            if oll is not None:
-                raw, in_tok, out_tok, duration_s, used_model = oll
-                provider = "ollama"
-                fallback = False
-                status = "ok"
 
     if fallback:
         raw = _fallback(question, retrieved)
