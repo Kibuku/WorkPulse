@@ -277,7 +277,13 @@ def think(con: sqlite3.Connection, question: str, *,
             retrieved = _diverse(search.search(
                 con, search_query, limit=limit * 10, since=since,
                 stream=stream, with_vector=with_vector), limit)
-    prompt = _build_prompt(question, retrieved, skill)
+    # The prompt sent to a cloud provider is built from a redacted COPY of the
+    # retrieved atoms (KTD5, R7): `retrieved` itself is never mutated, so the
+    # `atoms` field returned to the caller and _fallback()'s input stay raw.
+    from workpulse.core import content_capture
+    redacted_atoms = [{**a, "content": content_capture.redact(a.get("content") or "")}
+                      for a in retrieved]
+    prompt = _build_prompt(question, redacted_atoms, skill)
 
     raw = ""
     used_model: str | None = None

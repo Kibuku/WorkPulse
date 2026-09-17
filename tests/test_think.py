@@ -215,3 +215,41 @@ def test_skill_file_is_in_prompt(env, monkeypatch):
     assert "## Output contract" in p or "Answer" in p  # the skill content
     assert "USER QUESTION:" in p
     assert "ATOMS" in p
+
+
+# ── redaction before any cloud call (U4, R7) ─────────────────────────────────────
+
+def test_prompt_to_provider_is_redacted(env, monkeypatch):
+    """Covers AE5: a sensitive substring in retrieved content is redacted in
+    the prompt sent to the provider, but the returned atoms stay raw."""
+    con = _con()
+    now = datetime.now(timezone.utc)
+    atoms.write_capture(con, body="ping secret@example.com about the draft",
+                        ts=now.isoformat())
+    search.reindex(con)
+    captured = {}
+
+    def spy(prompt, *, max_tokens=1024, cfg=None, model=None, feature=None):
+        captured["prompt"] = prompt
+        return "## Answer\n\nok\n\n## Gap\n\n-\n", {"backend": "anthropic",
+               "model": "claude-x", "input_tokens": 1, "output_tokens": 1,
+               "duration_s": 0.1}
+
+    import workpulse.core.llm as llm_mod
+    monkeypatch.setattr(llm_mod, "ask_text", spy)
+    r = tmod.think(con, "secret", model="claude-x")
+    assert "secret@example.com" not in captured["prompt"]
+    assert any("secret@example.com" in (a.get("content") or "")
+              for a in r["atoms"])
+
+
+def test_fallback_atoms_are_not_redacted(env):
+    """The zero-key fallback never calls ask_text, so it must see raw
+    content -- redaction only applies on the cloud-call path."""
+    con = _con()
+    now = datetime.now(timezone.utc)
+    atoms.write_capture(con, body="ping secret@example.com about the draft",
+                        ts=now.isoformat())
+    search.reindex(con)
+    r = tmod.think(con, "secret", force_fallback=True)
+    assert "secret@example.com" in r["raw"]
