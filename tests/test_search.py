@@ -255,3 +255,44 @@ def test_dismissed_project_not_indexed(env):
     assert counts["project"] == 0
     results = smod.search(con, "Rejected Candidate")
     assert not any(r["atom_id"] == "p1" for r in results)
+
+
+# ── project attribution woven into session content (U2, R3) ─────────────────────
+
+def test_attributed_session_found_by_project_name(env):
+    """Covers AE1: a session attributed to a project is retrieved by a query
+    naming the project, even when that text isn't in the raw title."""
+    con = _con()
+    _write_project(con, "p1", "MADDs Kenya/Zambia", client="Verst Carbon")
+    sid = atoms.write_session(con, app="Word", title="Engagement letter draft",
+                              started_at=_iso(datetime.now(timezone.utc)))
+    con.execute("UPDATE session SET project_id='p1' WHERE id=?", (sid,))
+    smod.reindex(con)
+    results = smod.search(con, "MADDs")
+    assert any(r["atom_kind"] == "session" and r["atom_id"] == sid for r in results)
+
+
+def test_unattributed_session_content_unchanged(env):
+    """Regression guard: an unattributed session indexes exactly as today."""
+    con = _con()
+    sid = atoms.write_session(con, app="Word", title="Plain untagged title",
+                              started_at=_iso(datetime.now(timezone.utc)))
+    smod.reindex(con)
+    row = con.execute(
+        "SELECT content FROM search_fts WHERE atom_kind='session' AND atom_id=?",
+        (sid,)).fetchone()
+    assert row["content"] == "Plain untagged title"
+
+
+def test_reindex_after_new_attribution_picks_up_project(env):
+    """Covers AE3: re-running reindex after a session gets newly attributed
+    makes its project grounding available with no code change."""
+    con = _con()
+    _write_project(con, "p1", "MADDs Kenya/Zambia", client="Verst Carbon")
+    sid = atoms.write_session(con, app="Word", title="Engagement letter draft",
+                              started_at=_iso(datetime.now(timezone.utc)))
+    smod.reindex(con)
+    assert not any(r["atom_id"] == sid for r in smod.search(con, "MADDs"))
+    con.execute("UPDATE session SET project_id='p1' WHERE id=?", (sid,))
+    smod.reindex(con)
+    assert any(r["atom_id"] == sid for r in smod.search(con, "MADDs"))

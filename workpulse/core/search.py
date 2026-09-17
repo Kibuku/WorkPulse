@@ -70,11 +70,19 @@ def _content_query(kind: str, since: str | None) -> tuple[str, tuple]:
     if kind == "session":
         # Join session_local for raw_title; the public table only has the hash.
         # Untagged sessions still get indexed — they're a first-class state.
+        # Also LEFT JOIN project: an attributed session's content gets the
+        # project's client/name appended, so a question naming the project
+        # surfaces the session via ordinary relevance ranking (U2, R3) — an
+        # unattributed session's content is unchanged.
         q = f"""
             SELECT s.id AS atom_id, s.started_at AS ts, s.stream AS stream,
-                   COALESCE(NULLIF(sl.raw_title, ''), s.app) AS content
+                   (COALESCE(NULLIF(sl.raw_title, ''), s.app) ||
+                    CASE WHEN p.id IS NOT NULL
+                         THEN ' [' || COALESCE(p.client || ' - ', '') || p.name || ']'
+                         ELSE '' END) AS content
             FROM session s
             LEFT JOIN session_local sl ON sl.session_id = s.id
+            LEFT JOIN project p ON p.id = s.project_id
             WHERE 1=1 {where_ts.replace("ts", "s.started_at")}
         """
         params = (since,) if since else ()
