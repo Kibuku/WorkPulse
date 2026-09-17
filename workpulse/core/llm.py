@@ -160,11 +160,9 @@ def _ollama_ready(cfg: dict | None) -> bool:
 
 # ── backend selection ─────────────────────────────────────────────────────────
 
-def active_backend(cfg: dict | None = None) -> str:
-    """The backend ask_* would actually use right now."""
-    if cfg is None:
-        cfg = load_config()
-    setting = (_llm_cfg(cfg).get("backend") or "auto").lower()
+def _backend_if_ready(cfg: dict | None, setting: str) -> str:
+    """Resolve one explicit backend name to itself when its key/daemon is
+    ready, else 'none'."""
     if setting == "gemini":
         return "gemini" if _gemini_key(cfg) else "none"
     if setting == "anthropic":
@@ -175,6 +173,28 @@ def active_backend(cfg: dict | None = None) -> str:
         return "deepseek" if _deepseek_key(cfg) else "none"
     if setting == "ollama":
         return "ollama" if _ollama_ready(cfg) else "none"
+    return "none"
+
+
+def _resolve_route(cfg: dict | None, feature: str | None) -> tuple[str, str | None]:
+    """Pick (backend, model) for a feature: its own config → the global
+    backend → the local floor (KTD1). A feature backend with no key falls
+    through to the global choice, dropping the feature's model with it."""
+    if feature:
+        fc = (_llm_cfg(cfg).get("features") or {}).get(feature) or {}
+        fb = (fc.get("backend") or "").lower()
+        if fb and _backend_if_ready(cfg, fb) != "none":
+            return fb, fc.get("model")
+    return active_backend(cfg), None
+
+
+def active_backend(cfg: dict | None = None) -> str:
+    """The backend ask_* would actually use right now."""
+    if cfg is None:
+        cfg = load_config()
+    setting = (_llm_cfg(cfg).get("backend") or "auto").lower()
+    if setting in ("gemini", "anthropic", "glm", "deepseek", "ollama"):
+        return _backend_if_ready(cfg, setting)
     if setting == "none":
         return "none"
     # auto
@@ -236,11 +256,16 @@ def _new_meta(backend: str) -> dict:
 
 
 def ask_text(prompt: str, *, max_tokens: int = 600, cfg: dict | None = None,
-             model: str | None = None) -> tuple[str | None, dict]:
-    """Single-shot prompt expecting a plain-text reply. (text|None, meta)."""
+             model: str | None = None, feature: str | None = None
+             ) -> tuple[str | None, dict]:
+    """Single-shot prompt expecting a plain-text reply. (text|None, meta).
+
+    ``feature`` routes to a per-feature provider (KTD1); omit it for the global
+    backend (unchanged behavior)."""
     if cfg is None:
         cfg = load_config()
-    backend = active_backend(cfg)
+    backend, route_model = _resolve_route(cfg, feature)
+    model = model or route_model
     meta = _new_meta(backend)
     if backend == "gemini":
         return _gemini_text(prompt, max_tokens, cfg, meta, model)
@@ -256,11 +281,15 @@ def ask_text(prompt: str, *, max_tokens: int = 600, cfg: dict | None = None,
 
 
 def ask_json(prompt: str, *, max_tokens: int = 256, cfg: dict | None = None,
-             model: str | None = None) -> tuple[dict | None, dict]:
-    """Single-shot prompt expecting a JSON object reply. (dict|None, meta)."""
+             model: str | None = None, feature: str | None = None
+             ) -> tuple[dict | None, dict]:
+    """Single-shot prompt expecting a JSON object reply. (dict|None, meta).
+
+    ``feature`` routes to a per-feature provider (KTD1)."""
     if cfg is None:
         cfg = load_config()
-    backend = active_backend(cfg)
+    backend, route_model = _resolve_route(cfg, feature)
+    model = model or route_model
     meta = _new_meta(backend)
     if backend == "gemini":
         text, meta = _gemini_generate(prompt, max_tokens, cfg, meta, model, as_json=True)
