@@ -23,6 +23,7 @@ Public API:
 from __future__ import annotations
 
 import json
+import logging
 import os
 import sqlite3
 from collections import Counter
@@ -30,6 +31,8 @@ from datetime import datetime, timedelta, timezone
 
 from workpulse.core import atoms
 from workpulse.core.name_clusters import _tokens
+
+log = logging.getLogger(__name__)
 
 # A match needs at least this much idf-weighted overlap. 0.6 accepts one
 # project-unique token (weight 1.0) but rejects a single token shared across
@@ -281,9 +284,68 @@ def project_detail(con: sqlite3.Connection, project_id: str,
     }
 
 
+def llm_assist_attribution(con: sqlite3.Connection, cfg: dict | None = None,
+                           *, max_calls: int | None = None) -> dict:
+    """Resolve the sessions the deterministic floor left unattributed, using the
+    `attribution` feature's provider (plan U4, KTD4). Titles are redacted before
+    they leave (R12/KTD7); a within-run cache keys on the normalized title so
+    duplicate titles cost one call, and attributed rows persist so a re-run makes
+    no new calls (R8). Corrected and already-attributed sessions are never sent
+    (R6, R9). No provider -> no-op (R4); a provider error leaves the session in
+    the unattributed bucket (R5/AE5).
+    """
+    from workpulse.core import llm, content_capture
+    backend, _ = llm._resolve_route(cfg, "attribution")
+    if backend == "none":
+        return {"attributed": 0, "llm_calls": 0}
+    projects = con.execute(
+        "SELECT id, client, name FROM project WHERE status != 'dismissed'").fetchall()
+    if not projects:
+        return {"attributed": 0, "llm_calls": 0}
+    valid = {p["id"] for p in projects}
+    catalog = "\n".join(
+        f"{p['id']}: {content_capture.redact((p['client'] or '') + ' | ' + p['name'])}"
+        for p in projects)
+    rows = con.execute(
+        "SELECT s.id AS id, sl.raw_title AS t FROM session s "
+        "JOIN session_local sl ON sl.session_id = s.id "
+        "WHERE s.project_id IS NULL AND s.id NOT IN "
+        "(SELECT target_id FROM project_correction WHERE target_kind = 'session')"
+    ).fetchall()
+
+    cache: dict[str, str | None] = {}
+    attributed = calls = 0
+    for r in rows:
+        title = (r["t"] or "").strip()
+        if not title:
+            continue
+        key = title.lower()
+        if key not in cache:
+            if max_calls is not None and calls >= max_calls:
+                break  # per-pass cap (R11); the rest stay deterministic
+            red = content_capture.redact(title)
+            prompt = ("Projects:\n" + catalog + "\n\nWhich project id does this "
+                      'window best belong to? Reply ONLY JSON {"project_id": <id or null>}.'
+                      f"\nWindow: {red}")
+            try:
+                obj, _meta = llm.ask_json(prompt, feature="attribution", cfg=cfg)
+            except Exception as e:  # noqa: BLE001 — degrade to unattributed (R5)
+                log.warning("attribution LLM call failed: %s", e)
+                obj = None
+            calls += 1
+            pid = obj.get("project_id") if isinstance(obj, dict) else None
+            cache[key] = pid if pid in valid else None
+        pid = cache[key]
+        if pid:
+            con.execute("UPDATE session SET project_id = ? WHERE id = ?", (pid, r["id"]))
+            attributed += 1
+    return {"attributed": attributed, "llm_calls": calls}
+
+
 def run_attribution_pass(con: sqlite3.Connection, cfg: dict | None = None,
                          *, batch_size: int = 500,
-                         min_evidence: int = 2) -> dict:
+                         min_evidence: int = 2,
+                         max_llm_calls: int | None = None) -> dict:
     """One full, idempotent attribution pass (plan U6, R8/R9): refresh the
     discovered taxonomy, attribute unattributed sessions, then attribute
     observations. Decoupled from intake (KTD6) — it only reads and writes the DB
@@ -298,8 +360,12 @@ def run_attribution_pass(con: sqlite3.Connection, cfg: dict | None = None,
     # a provider, so the deterministic pass is unchanged (R4).
     refine = discovery.refine_taxonomy(con, cfg)
     sessions = attribute_all(con, cfg, batch_size=batch_size)
+    # LLM resolves the residual the floor could not place (U4); no-op without a
+    # provider, so the deterministic result is unchanged (R4).
+    assist = llm_assist_attribution(con, cfg, max_calls=max_llm_calls)
     observations = attribute_observations(con)
     return {"candidates": len(candidates),
             "refine": refine,
             "sessions": sessions,
+            "assist": assist,
             "observations": observations}
