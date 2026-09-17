@@ -59,7 +59,8 @@ _VEC_DIM = 384                  # bge-small / fastembed default
 # (we're searching for "what was the thread", not for full-text recall on raw
 # file paths).
 
-_KINDS = ("session", "capture", "ai_call", "plan_item")
+_KINDS = ("session", "capture", "ai_call", "plan_item",
+         "project", "semantic_observation")
 
 
 def _content_query(kind: str, since: str | None) -> tuple[str, tuple]:
@@ -103,6 +104,30 @@ def _content_query(kind: str, since: str | None) -> tuple[str, tuple]:
             SELECT id AS atom_id, plan_date AS ts, stream, name AS content
             FROM plan_item
             WHERE 1=1 {where_ts.replace("ts", "plan_date")}
+        """
+        params = (since,) if since else ()
+        return q, params
+
+    if kind == "project":
+        # Only surviving candidates -- a dismissed project is a rejected
+        # duplicate/noise entry and shouldn't be citable content.
+        q = f"""
+            SELECT id AS atom_id, created_at AS ts, NULL AS stream,
+                   (COALESCE(client || ' - ', '') || name) AS content
+            FROM project
+            WHERE status != 'dismissed' {where_ts.replace("ts", "created_at")}
+        """
+        params = (since,) if since else ()
+        return q, params
+
+    if kind == "semantic_observation":
+        # Indexed regardless of project_id -- a project-less observation is
+        # still first-class content (mirrors the untagged-session precedent).
+        q = f"""
+            SELECT id AS atom_id, first_seen AS ts, NULL AS stream,
+                   (kind || ' [' || semantic_key || ']: ' || summary) AS content
+            FROM semantic_observation
+            WHERE 1=1 {where_ts.replace("ts", "first_seen")}
         """
         params = (since,) if since else ()
         return q, params
