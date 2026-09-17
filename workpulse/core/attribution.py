@@ -294,8 +294,12 @@ def run_attribution_pass(con: sqlite3.Connection, cfg: dict | None = None,
     # Imported here to avoid a core import cycle (discovery imports nothing heavy).
     from workpulse.core import discovery
     candidates = discovery.discover_projects(con, cfg, min_evidence=min_evidence)
+    # LLM taxonomy cleanup between discovery and attribution (U3); no-op without
+    # a provider, so the deterministic pass is unchanged (R4).
+    refine = discovery.refine_taxonomy(con, cfg)
     sessions = attribute_all(con, cfg, batch_size=batch_size)
     observations = attribute_observations(con)
     return {"candidates": len(candidates),
+            "refine": refine,
             "sessions": sessions,
             "observations": observations}

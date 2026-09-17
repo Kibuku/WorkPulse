@@ -134,6 +134,60 @@ def discover_projects(con: sqlite3.Connection, cfg: dict | None = None,
     return candidates
 
 
+def refine_taxonomy(con: sqlite3.Connection, cfg: dict | None = None) -> dict:
+    """LLM cleanup/naming of the candidate taxonomy (plan U3, R7, KTD7).
+
+    Merges duplicate candidates and renames noisy ones using the `discovery`
+    feature's provider. Each name/client is redacted before it leaves the
+    machine (R12). No provider configured -> no-op, deterministic names stand
+    (R4). Only `candidate` rows are ever touched; a bad response is a no-op.
+    """
+    from workpulse.core import llm, content_capture
+    backend, _ = llm._resolve_route(cfg, "discovery")
+    if backend == "none":
+        return {"renamed": 0, "merged": 0}
+    cands = con.execute(
+        "SELECT id, client, name FROM project WHERE status = 'candidate'").fetchall()
+    if not cands:
+        return {"renamed": 0, "merged": 0}
+    lines = [f"{c['id']}: {content_capture.redact((c['client'] or '') + ' | ' + c['name'])}"
+             for c in cands]
+    prompt = (
+        "These are candidate project names auto-discovered from window titles. "
+        "Merge duplicates and give each a clean 'Client - Project' name. Reply "
+        'ONLY as JSON: {"rename":[{"id","name","client"}],"merge":[{"from","into"}]}.\n'
+        + "\n".join(lines))
+    obj, _meta = llm.ask_json(prompt, feature="discovery", cfg=cfg)
+    if not isinstance(obj, dict):
+        return {"renamed": 0, "merged": 0}
+
+    renamed = merged = 0
+    con.execute("BEGIN")
+    try:
+        for r in (obj.get("rename") or []):
+            pid, new = r.get("id"), r.get("name")
+            if not pid or not new:
+                continue
+            cur = con.execute(
+                "UPDATE project SET name = ?, client = ? "
+                "WHERE id = ? AND status = 'candidate'",
+                (new, r.get("client"), pid))
+            renamed += cur.rowcount
+        for m in (obj.get("merge") or []):
+            frm = m.get("from")
+            if not frm:
+                continue
+            cur = con.execute(
+                "UPDATE project SET status = 'dismissed' "
+                "WHERE id = ? AND status = 'candidate'", (frm,))
+            merged += cur.rowcount
+        con.execute("COMMIT")
+    except Exception:
+        con.execute("ROLLBACK")
+        raise
+    return {"renamed": renamed, "merged": merged}
+
+
 def _upsert_candidates(con: sqlite3.Connection, candidates: list[dict]) -> None:
     con.execute("BEGIN")
     try:
