@@ -5,12 +5,17 @@ finally block. Only redacted OCR text and derived meaning may be persisted.
 """
 from __future__ import annotations
 
+import json
 import os
 import re
 import shutil
 import subprocess
 import sys
 import tempfile
+import time
+import urllib.error
+import urllib.request
+import uuid
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -19,6 +24,17 @@ from workpulse.core.atoms import new_id
 
 DEFAULT_DENY_APPS = ("1password", "bitwarden", "keychain", "password", "wallet")
 DEFAULT_DENY_TERMS = ("bank", "medical", "health", "private browsing", "incognito")
+
+# LlamaParse document-parsing API (whole-file OCR, distinct from the local
+# Tesseract screen pipeline below). base URL is cfg-overridable so an endpoint
+# drift is a config fix, not a code change.
+# ponytail: wire shape follows LlamaParse's documented upload/poll/result flow
+# from memory, not a live key. The three HTTP helpers are the calibration knob
+# to tune against a real key; the orchestration + degradation around them is
+# fully tested with those helpers mocked.
+_DEFAULT_LLAMAPARSE_BASE = "https://api.cloud.llamaindex.ai/api/v1/parsing"
+_LLAMAPARSE_POLL_TRIES = 30
+_LLAMAPARSE_POLL_INTERVAL_S = 2.0
 
 _REDACTIONS = (
     (re.compile(r"[\w.+-]+@[\w.-]+\.[A-Za-z]{2,}"), "[EMAIL]"),
@@ -37,6 +53,104 @@ def redact(text: str, extra_patterns: list[str] | None = None) -> str:
         if raw:
             out = re.sub(re.escape(raw), "[PRIVATE]", out, flags=re.I)
     return "\n".join(line.strip() for line in out.splitlines() if line.strip())[:12000]
+
+
+def file_denied(path: str, cfg: dict) -> tuple[bool, str]:
+    """Opt-out deny-gate for LlamaParse file parsing (plan R3/R4, KTD2).
+
+    Mirrors allowed()'s substring/casefold style but is file-scoped. A path
+    matching a configured denied extension or path substring is never sent to
+    LlamaParse. Empty config -> nothing denied (opt-out default).
+    """
+    content = cfg.get("content_capture") or {}
+    p = (path or "").casefold()
+    for ext in content.get("deny_extensions", []):
+        if ext and p.endswith(str(ext).casefold()):
+            return True, f"extension {ext} is denied"
+    for sub in content.get("deny_paths", []):
+        if sub and str(sub).casefold() in p:
+            return True, f"path matches denied '{sub}'"
+    return False, "allowed"
+
+
+def _llamaparse_key(cfg: dict | None = None) -> str | None:
+    key = os.environ.get("LLAMAPARSE_API_KEY")
+    if key:
+        return key
+    try:
+        from workpulse.wp_secrets import get as get_secret  # type: ignore
+        return get_secret("llamaparse_key") or None
+    except Exception:
+        return None
+
+
+def _llamaparse_base(cfg: dict | None) -> str:
+    return (((cfg or {}).get("content_capture") or {}).get("llamaparse_base")
+            or _DEFAULT_LLAMAPARSE_BASE)
+
+
+def _llamaparse_upload(path: str, key: str, base: str) -> str | None:
+    """POST the file as multipart/form-data; return the job id."""
+    boundary = uuid.uuid4().hex
+    data = Path(path).read_bytes()
+    filename = Path(path).name
+    body = b"".join([
+        f"--{boundary}\r\n".encode(),
+        f'Content-Disposition: form-data; name="file"; filename="{filename}"\r\n'.encode(),
+        b"Content-Type: application/octet-stream\r\n\r\n",
+        data, b"\r\n", f"--{boundary}--\r\n".encode(),
+    ])
+    req = urllib.request.Request(
+        f"{base}/upload", data=body, method="POST",
+        headers={"Authorization": f"Bearer {key}",
+                 "Content-Type": f"multipart/form-data; boundary={boundary}"})
+    with urllib.request.urlopen(req, timeout=60) as resp:
+        return (json.loads(resp.read().decode()) or {}).get("id")
+
+
+def _llamaparse_poll(job: str, key: str, base: str) -> bool:
+    """Poll the job until SUCCESS (True) or ERROR/timeout (False). Bounded."""
+    req = urllib.request.Request(
+        f"{base}/job/{job}", headers={"Authorization": f"Bearer {key}"})
+    for _ in range(_LLAMAPARSE_POLL_TRIES):
+        with urllib.request.urlopen(req, timeout=30) as resp:
+            status = (json.loads(resp.read().decode()) or {}).get("status")
+        if status in ("SUCCESS", "COMPLETED"):
+            return True
+        if status in ("ERROR", "FAILED", "CANCELLED"):
+            return False
+        time.sleep(_LLAMAPARSE_POLL_INTERVAL_S)
+    return False
+
+
+def _llamaparse_result(job: str, key: str, base: str) -> str | None:
+    req = urllib.request.Request(
+        f"{base}/job/{job}/result/markdown",
+        headers={"Authorization": f"Bearer {key}"})
+    with urllib.request.urlopen(req, timeout=60) as resp:
+        payload = json.loads(resp.read().decode()) or {}
+    return payload.get("markdown") or payload.get("text")
+
+
+def _llamaparse_parse(path: str, cfg: dict) -> tuple[str | None, dict]:
+    """Parse a whole document file via LlamaParse (plan U1, KTD3).
+
+    Returns (markdown_text | None, meta). Any failure -- no key, network,
+    unsupported file, job error/timeout -- returns None and never raises (R7).
+    """
+    meta = {"engine": "llamaparse"}
+    key = _llamaparse_key(cfg)
+    if not key:
+        return None, meta
+    base = _llamaparse_base(cfg)
+    try:
+        job = _llamaparse_upload(path, key, base)
+        if not job or not _llamaparse_poll(job, key, base):
+            return None, meta
+        text = _llamaparse_result(job, key, base)
+    except Exception:  # noqa: BLE001 -- any failure degrades to no-parse (R7)
+        return None, meta
+    return (text or None), meta
 
 
 def allowed(app: str, title: str, cfg: dict) -> tuple[bool, str]:

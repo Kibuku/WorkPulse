@@ -70,3 +70,64 @@ def test_ephemeral_capture_is_deleted_and_persists_only_redacted_text(tmp_path, 
     message = coach._content_message(con, date.today())
     assert message["kind"] == "content-placeholder"
     assert "TBD" not in message["text"]
+
+
+# ── LlamaParse deny-gate + adapter (U1) ─────────────────────────────────────────
+
+def test_file_denied_by_extension():
+    cfg = {"content_capture": {"deny_extensions": [".pdf"]}}
+    assert content_capture.file_denied("/x/report.PDF", cfg)[0] is True
+    assert content_capture.file_denied("/x/report.docx", cfg)[0] is False
+
+
+def test_file_denied_by_path_substring():
+    cfg = {"content_capture": {"deny_paths": ["/Private/"]}}
+    assert content_capture.file_denied("/Users/g/private/secret.docx", cfg)[0] is True
+    assert content_capture.file_denied("/Users/g/work/open.docx", cfg)[0] is False
+
+
+def test_file_not_denied_when_no_rules():
+    assert content_capture.file_denied("/x/report.pdf", {"content_capture": {}})[0] is False
+
+
+def test_llamaparse_key_from_env(monkeypatch):
+    monkeypatch.setenv("LLAMAPARSE_API_KEY", "env-key")
+    assert content_capture._llamaparse_key({}) == "env-key"
+
+
+def test_llamaparse_parse_no_key_returns_none(monkeypatch):
+    monkeypatch.setattr(content_capture, "_llamaparse_key", lambda cfg=None: None)
+    called = {"upload": False}
+    monkeypatch.setattr(content_capture, "_llamaparse_upload",
+                        lambda *a, **k: called.__setitem__("upload", True))
+    text, meta = content_capture._llamaparse_parse("/x/doc.pdf", {})
+    assert text is None
+    assert called["upload"] is False  # no key -> never call the API
+
+
+def test_llamaparse_parse_success(monkeypatch):
+    monkeypatch.setattr(content_capture, "_llamaparse_key", lambda cfg=None: "k")
+    monkeypatch.setattr(content_capture, "_llamaparse_upload", lambda path, key, base: "job1")
+    monkeypatch.setattr(content_capture, "_llamaparse_poll", lambda job, key, base: True)
+    monkeypatch.setattr(content_capture, "_llamaparse_result",
+                        lambda job, key, base: "# Concept Note\nSolar water treatment.")
+    text, meta = content_capture._llamaparse_parse("/x/doc.pdf", {})
+    assert "Solar water treatment" in text
+    assert meta["engine"] == "llamaparse"
+
+
+def test_llamaparse_parse_upload_failure_degrades(monkeypatch):
+    monkeypatch.setattr(content_capture, "_llamaparse_key", lambda cfg=None: "k")
+    def boom(*a, **k):
+        raise RuntimeError("network down")
+    monkeypatch.setattr(content_capture, "_llamaparse_upload", boom)
+    text, meta = content_capture._llamaparse_parse("/x/doc.pdf", {})
+    assert text is None  # never raises
+
+
+def test_llamaparse_parse_poll_failure_degrades(monkeypatch):
+    monkeypatch.setattr(content_capture, "_llamaparse_key", lambda cfg=None: "k")
+    monkeypatch.setattr(content_capture, "_llamaparse_upload", lambda path, key, base: "job1")
+    monkeypatch.setattr(content_capture, "_llamaparse_poll", lambda job, key, base: False)
+    text, meta = content_capture._llamaparse_parse("/x/doc.pdf", {})
+    assert text is None  # job never reached SUCCESS
