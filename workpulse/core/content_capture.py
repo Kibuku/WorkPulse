@@ -204,6 +204,7 @@ def parse_and_persist(con, cfg: dict, *, since: str | None = None) -> dict:
     """Parse each eligible file via LlamaParse, redact, and persist into
     content_capture with ocr_engine='llamaparse' (plan U3). A per-file failure
     is skipped, never fatal (R7). Returns counts."""
+    from workpulse.core import search
     content = cfg.get("content_capture") or {}
     parsed = failed = 0
     for cand in find_parse_candidates(con, cfg, since=since):
@@ -216,13 +217,18 @@ def parse_and_persist(con, cfg: dict, *, since: str | None = None) -> dict:
             failed += 1
             continue
         stage = semantics.classify_stage(redacted, "document")
+        cap_id = new_id()
+        ts = datetime.now(timezone.utc).isoformat()
         con.execute(
             "INSERT INTO content_capture(id, ts, app, stage, redacted_text, "
             "ocr_engine, source_path_hash, source_mtime) VALUES (?,?,?,?,?,?,?,?)",
-            (new_id(), datetime.now(timezone.utc).isoformat(), "document", stage,
-             redacted, meta.get("engine", "llamaparse"),
-             cand["path_hash"], cand["mtime"]))
+            (cap_id, ts, "document", stage, redacted,
+             meta.get("engine", "llamaparse"), cand["path_hash"], cand["mtime"]))
         con.commit()
+        # Index just this row so it is retrievable the same pass (KTD5) --
+        # incremental append, never a full reindex that would touch other kinds.
+        search.index_atom(con, kind="content_capture", id=cap_id, ts=ts,
+                          stream=None, content=redacted)
         parsed += 1
     return {"parsed": parsed, "failed": failed}
 
