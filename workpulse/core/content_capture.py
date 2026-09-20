@@ -153,6 +153,80 @@ def _llamaparse_parse(path: str, cfg: dict) -> tuple[str | None, dict]:
     return (text or None), meta
 
 
+_DEFAULT_PARSE_EXTENSIONS = (".pdf", ".docx", ".doc", ".pptx", ".xlsx")
+
+
+def _parse_extensions(cfg: dict | None) -> tuple[str, ...]:
+    content = (cfg or {}).get("content_capture") or {}
+    exts = content.get("parse_extensions")
+    return tuple(str(e).casefold() for e in exts) if exts else _DEFAULT_PARSE_EXTENSIONS
+
+
+def find_parse_candidates(con, cfg: dict, *, since: str | None = None) -> list[dict]:
+    """Recently created/modified document files eligible for LlamaParse (plan
+    U3, R1/R3). Excludes deny-listed paths, non-parseable extensions, files that
+    no longer exist, and files already parsed at their current mtime (dedup)."""
+    exts = _parse_extensions(cfg)
+    where = "WHERE f.kind IN ('created','modified')"
+    params: list = []
+    if since:
+        where += " AND f.ts >= ?"
+        params.append(since)
+    rows = con.execute(
+        f"SELECT fl.raw_path AS raw_path, f.path_hash AS path_hash "
+        f"FROM file_event f JOIN file_event_local fl ON fl.file_event_id = f.id "
+        f"{where} GROUP BY f.path_hash", params).fetchall()
+
+    out, seen = [], set()
+    for r in rows:
+        path = r["raw_path"]
+        if not path or path in seen:
+            continue
+        seen.add(path)
+        if not path.casefold().endswith(exts):
+            continue
+        if file_denied(path, cfg)[0]:
+            continue
+        try:
+            mtime = str(os.path.getmtime(path))
+        except OSError:
+            continue  # file gone -- nothing to parse
+        already = con.execute(
+            "SELECT 1 FROM content_capture WHERE source_path_hash = ? "
+            "AND source_mtime = ? LIMIT 1", (r["path_hash"], mtime)).fetchone()
+        if already:
+            continue
+        out.append({"raw_path": path, "path_hash": r["path_hash"], "mtime": mtime})
+    return out
+
+
+def parse_and_persist(con, cfg: dict, *, since: str | None = None) -> dict:
+    """Parse each eligible file via LlamaParse, redact, and persist into
+    content_capture with ocr_engine='llamaparse' (plan U3). A per-file failure
+    is skipped, never fatal (R7). Returns counts."""
+    content = cfg.get("content_capture") or {}
+    parsed = failed = 0
+    for cand in find_parse_candidates(con, cfg, since=since):
+        text, meta = _llamaparse_parse(cand["raw_path"], cfg)
+        if not text:
+            failed += 1
+            continue
+        redacted = redact(text, content.get("redaction_terms") or [])
+        if len(redacted) < 20:
+            failed += 1
+            continue
+        stage = semantics.classify_stage(redacted, "document")
+        con.execute(
+            "INSERT INTO content_capture(id, ts, app, stage, redacted_text, "
+            "ocr_engine, source_path_hash, source_mtime) VALUES (?,?,?,?,?,?,?,?)",
+            (new_id(), datetime.now(timezone.utc).isoformat(), "document", stage,
+             redacted, meta.get("engine", "llamaparse"),
+             cand["path_hash"], cand["mtime"]))
+        con.commit()
+        parsed += 1
+    return {"parsed": parsed, "failed": failed}
+
+
 def allowed(app: str, title: str, cfg: dict) -> tuple[bool, str]:
     content = cfg.get("content_capture") or {}
     if not content.get("enabled", False):
