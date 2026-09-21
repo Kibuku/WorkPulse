@@ -174,3 +174,107 @@ def test_section_evidence_respects_since(env):
     ev = of.section_evidence(con, section, since=(now - timedelta(days=7)).isoformat())
     bodies = " ".join(a.get("content") or "" for a in ev)
     assert "recent" in bodies and "ancient" not in bodies
+
+
+# ── fill engine (U4, R5/R6/R7/R8/R9/R10) ────────────────────────────────────────
+
+def _confirmed_form(con, *, fill_mode="strict", sections=(("Info", "agenda"),)):
+    fid = of.create_form(con, "F", fill_mode=fill_mode)
+    for i, (name, exp) in enumerate(sections, start=1):
+        of.add_section(con, fid, i, name, exp)
+    of.confirm_form(con, fid)
+    return fid
+
+
+def _no_provider(monkeypatch):
+    monkeypatch.setattr(llm, "_resolve_route", lambda cfg, feat: ("none", None))
+
+
+def test_fill_rejects_unconfirmed_form(env):
+    con = _con()
+    fid = of.create_form(con, "F")  # candidate, not confirmed
+    with pytest.raises(ValueError):
+        of.fill_form(con, fid, cfg={"llm": {}})
+
+
+def test_strict_no_evidence_renders_gap(env, monkeypatch):
+    con = _con()
+    _no_provider(monkeypatch)
+    fid = _confirmed_form(con, fill_mode="strict",
+                          sections=(("Attendees", "attendee names and gender"),))
+    result = of.fill_form(con, fid, cfg={"llm": {}})
+    body = result["sections"][0]["body"]
+    assert "GAP" in body.upper()
+    # nothing invented: no content beyond the gap marker
+    assert "attendee" not in body.lower() or "GAP" in body.upper()
+
+
+def test_scaffold_cites_evidence_atom(env, monkeypatch):
+    con = _con()
+    _no_provider(monkeypatch)
+    atoms.write_capture(con, body="agenda: eCooking pathways discussed",
+                        ts=datetime.now(timezone.utc).isoformat())
+    search.reindex(con)
+    fid = _confirmed_form(con, sections=(("Info", "agenda"),))
+    result = of.fill_form(con, fid, cfg={"llm": {}})
+    assert "[atom:" in result["sections"][0]["body"]
+    assert result["fallback"] is True
+
+
+def test_no_key_returns_scaffold(env, monkeypatch):
+    con = _con()
+    _no_provider(monkeypatch)
+    fid = _confirmed_form(con)
+    result = of.fill_form(con, fid, cfg={"llm": {}})
+    assert result["fallback"] is True
+
+
+def test_strict_gap_vs_fulldraft_inferred(env, monkeypatch):
+    con = _con()
+    # strict: no evidence -> gap, and the LLM is never called
+    called = {"n": 0}
+    def spy(*a, **k):
+        called["n"] += 1
+        return "INFERRED: a plausible attendee list", {"backend": "glm"}
+    monkeypatch.setattr(llm, "_resolve_route", lambda cfg, feat: ("glm", None))
+    monkeypatch.setattr(llm, "ask_text", spy)
+    strict = _confirmed_form(con, fill_mode="strict",
+                             sections=(("Attendees", "attendee names"),))
+    r_strict = of.fill_form(con, strict, cfg={"llm": {}})
+    assert "GAP" in r_strict["sections"][0]["body"].upper()
+    assert called["n"] == 0  # strict + no evidence never calls the model
+
+    draft = _confirmed_form(con, fill_mode="full-draft",
+                            sections=(("Attendees", "attendee names"),))
+    r_draft = of.fill_form(con, draft, cfg={"llm": {}})
+    assert "INFERRED" in r_draft["sections"][0]["body"]
+
+
+def test_document_content_is_filled_and_cited(env, monkeypatch):
+    con = _con()
+    _no_provider(monkeypatch)
+    con.execute(
+        "INSERT INTO content_capture(id, ts, app, redacted_text, ocr_engine) "
+        "VALUES ('doc1', ?, 'document', 'Attendees: Mwangi, Ronoh, Kibuku', "
+        "'llamaparse')", (datetime.now(timezone.utc).isoformat(),))
+    con.commit()
+    search.reindex(con)
+    fid = _confirmed_form(con, sections=(("Attendees", "attendees list"),))
+    result = of.fill_form(con, fid, cfg={"llm": {}})
+    assert "[atom:doc1]" in result["sections"][0]["body"]
+
+
+def test_provider_prompt_is_redacted(env, monkeypatch):
+    con = _con()
+    atoms.write_capture(con, body="contact owner@example.com re agenda",
+                        ts=datetime.now(timezone.utc).isoformat())
+    search.reindex(con)
+    monkeypatch.setattr(llm, "_resolve_route", lambda cfg, feat: ("glm", None))
+    captured = {}
+    def spy(prompt, **k):
+        captured["prompt"] = prompt
+        return "## Answer\n\nagenda covered eCooking [atom:x]\n\n## Gap\n\n-", {"backend": "glm"}
+    monkeypatch.setattr(llm, "ask_text", spy)
+    fid = _confirmed_form(con, sections=(("Info", "agenda"),))
+    of.fill_form(con, fid, cfg={"llm": {}})
+    assert "owner@example.com" not in captured["prompt"]

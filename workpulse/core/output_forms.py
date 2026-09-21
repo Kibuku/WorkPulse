@@ -128,8 +128,97 @@ def section_evidence(con: sqlite3.Connection, section: dict, *,
     Returned atoms carry their ids for citation and span every corpus kind,
     including parsed document content (content_capture)."""
     from workpulse.core import search
-    query = (section.get("expected_evidence") or section.get("name") or "").strip()
-    if not query:
+    from workpulse.core.name_clusters import _tokens
+    raw = (section.get("expected_evidence") or section.get("name") or "").strip()
+    if not raw:
         return []
+    # Recall over precision for evidence-gathering: FTS5 ANDs bare terms, so a
+    # descriptive expected-evidence phrase would rarely match. OR the significant
+    # terms so any of them surfaces evidence; the fill step then cites/filters.
+    toks = _tokens(raw)
+    query = " OR ".join(toks) if toks else raw
     return search.search(con, query, limit=limit, since=since,
                         with_vector=with_vector)
+
+
+# ── fill engine (plan U4) ────────────────────────────────────────────────────────
+
+def _load_fill_skill() -> str:
+    from workpulse.common import PKG
+    try:
+        return (PKG / "skills" / "form_fill.md").read_text(encoding="utf-8")
+    except Exception:
+        return "Fill the section only from cited evidence; flag gaps; never invent."
+
+
+def _gap_line(section: dict) -> str:
+    what = section.get("expected_evidence") or section.get("name") or "this section"
+    return f"> GAP: no evidence for {what}"
+
+
+def _scaffold(section: dict, evidence: list[dict]) -> str:
+    """Deterministic, no-LLM rendering: cited evidence or an explicit gap.
+    Never synthesizes prose, never fabricates (KTD4)."""
+    if not evidence:
+        return _gap_line(section)
+    lines = [f"- [atom:{a['atom_id']}] {(a.get('content') or '').strip()[:200]}"
+             for a in evidence]
+    return "\n".join(lines)
+
+
+def _fill_section(con, section, *, fill_mode, have_provider, cfg):
+    from workpulse.core import llm, content_capture
+    evidence = section_evidence(con, section, since=cfg.get("_since"))
+    citations = [a["atom_id"] for a in evidence]
+
+    # Fabrication-safety floor: strict + nothing to cite is always a gap, and
+    # the model is never asked to fill a section it has no evidence for (KTD5).
+    if fill_mode == "strict" and not evidence:
+        return {"name": section["name"], "body": _gap_line(section),
+                "citations": [], "fallback": True}
+
+    if have_provider:
+        redacted = "\n".join(
+            f"[atom:{a['atom_id']}] ({a.get('atom_kind')}) "
+            f"{content_capture.redact(a.get('content') or '')}"
+            for a in evidence) or "(no evidence retrieved)"
+        prompt = (
+            f"{_load_fill_skill()}\n\n---\n\n"
+            f"FILL MODE: {fill_mode}\n"
+            f"SECTION: {section['name']}\n"
+            f"EXPECTED EVIDENCE: {section.get('expected_evidence') or ''}\n\n"
+            f"EVIDENCE:\n{redacted}\n")
+        text, _meta = llm.ask_text(prompt, feature="form_fill", cfg=cfg)
+        if text:
+            return {"name": section["name"], "body": text.strip(),
+                    "citations": citations, "fallback": False}
+
+    # No provider, or the provider returned nothing: deterministic scaffold.
+    return {"name": section["name"], "body": _scaffold(section, evidence),
+            "citations": citations, "fallback": True}
+
+
+def fill_form(con: sqlite3.Connection, form_id: str, *, project: str | None = None,
+              since: str | None = None, cfg: dict | None = None) -> dict:
+    """Fill a confirmed form from the corpus (plan U4). Each section is filled
+    from cited evidence, per the form's fill mode, with unmet expectations
+    flagged as gaps and nothing fabricated. Degrades to a deterministic
+    cited/gap scaffold with no provider (R10). Pulse renders the form's
+    structure; it never validates the adopted skill's compliance rules (R11)."""
+    cfg = dict(cfg or {})
+    cfg["_since"] = since  # passed through to per-section retrieval
+    form = get_form(con, form_id)
+    if form is None:
+        raise ValueError(f"unknown form {form_id!r}")
+    if form["status"] != "confirmed":
+        raise ValueError(f"form {form_id!r} is {form['status']}, not confirmed")
+
+    from workpulse.core import llm
+    have_provider = llm._resolve_route(cfg, "form_fill")[0] != "none"
+    sections = [_fill_section(con, s, fill_mode=form["fill_mode"],
+                              have_provider=have_provider, cfg=cfg)
+                for s in form["sections"]]
+    md = f"# {form['name']}\n\n" + "\n\n".join(
+        f"## {s['name']}\n\n{s['body']}" for s in sections)
+    return {"markdown": md, "sections": sections, "mode": form["fill_mode"],
+            "fallback": any(s["fallback"] for s in sections)}
