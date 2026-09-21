@@ -134,6 +134,26 @@ def test_run_force_runs_daily(env, monkeypatch):
     assert calls == {"consolidate": 1, "daily": 1, "profile": 1}
 
 
+def test_document_parse_failure_never_blocks_rollup(env, monkeypatch):
+    """A LlamaParse-pass exception is caught by the nightly guard; the daily
+    rollup still runs (R7/AE4 at the rollup level)."""
+    _con()
+    from workpulse.core import cleanup, consolidate, report, profile, content_capture
+    ran = {"consolidate": False}
+    monkeypatch.setattr(consolidate, "consolidate",
+                        lambda con, **kw: ran.__setitem__("consolidate", True))
+    monkeypatch.setattr(report, "daily", lambda con, **kw: None)
+    monkeypatch.setattr(report, "weekly", lambda con, **kw: None)
+    monkeypatch.setattr(profile, "update_profile", lambda con, **kw: None)
+    monkeypatch.setattr(cleanup, "apply_retention", lambda con, **kw: {})
+    monkeypatch.setattr(content_capture, "parse_and_persist",
+                        lambda con, cfg: (_ for _ in ()).throw(RuntimeError("llamaparse down")))
+    result = nightly.run(force=True, cfg={"paths": {}})
+    assert result["daily"] is True
+    assert ran["consolidate"] is True  # rollup continued past the failure
+    assert "error" in result["document_parse"]
+
+
 def test_run_skips_when_not_due(env, monkeypatch):
     con = _con()
     today = datetime.now().astimezone().date().isoformat()

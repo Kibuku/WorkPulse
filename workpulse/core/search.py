@@ -59,7 +59,7 @@ _VEC_DIM = 384                  # bge-small / fastembed default
 # (we're searching for "what was the thread", not for full-text recall on raw
 # file paths).
 
-_KINDS = ("session", "capture", "ai_call", "plan_item")
+_KINDS = ("session", "capture", "ai_call", "plan_item", "content_capture")
 
 
 def _content_query(kind: str, since: str | None) -> tuple[str, tuple]:
@@ -105,6 +105,17 @@ def _content_query(kind: str, since: str | None) -> tuple[str, tuple]:
             WHERE 1=1 {where_ts.replace("ts", "plan_date")}
         """
         params = (since,) if since else ()
+        return q, params
+
+    if kind == "content_capture":
+        # Both OCR sources (tesseract-local screen captures and llamaparse
+        # document parses) are indexed on their already-redacted text -- the raw
+        # form is never stored, so nothing further to redact here.
+        q = f"""
+            SELECT id AS atom_id, ts, NULL AS stream, redacted_text AS content
+            FROM content_capture
+            WHERE 1=1 {where_ts}
+        """
         return q, params
 
     raise ValueError(f"unknown atom kind {kind!r}")
