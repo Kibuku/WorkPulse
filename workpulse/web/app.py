@@ -452,6 +452,28 @@ def api_projects(days: int | None = None):
     return {"projects": attribution.project_time(con, days=days)}
 
 
+# ── output forms (corpus-grounded output generation) ────────────────────────
+
+@app.get("/api/forms")
+def api_forms(status: str | None = None):
+    from workpulse.core import db as wp_db, output_forms
+    con = wp_db.connect(load_config())
+    return {"forms": output_forms.list_forms(con, status=status)}
+
+
+@app.post("/api/forms/{form_id}/fill")
+async def api_fill_form(form_id: str, payload: dict | None = None):
+    from workpulse.core import db as wp_db, output_forms
+    con = wp_db.connect(load_config())
+    payload = payload or {}
+    try:
+        return output_forms.fill_form(
+            con, form_id, project=payload.get("project"),
+            since=payload.get("since"), cfg=load_config())
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
 @app.get("/api/projects/{project_id}")
 def api_project_detail(project_id: str, days: int | None = None):
     from workpulse.core import db as wp_db, attribution
