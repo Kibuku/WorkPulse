@@ -114,6 +114,15 @@ def test_fallback_flags_untagged_atoms(env):
 
 # ── LLM path (monkeypatched) ────────────────────────────────────────────────
 
+def _fake_ask_text(text, *, backend="anthropic", model="claude-x",
+                   in_tok=123, out_tok=45):
+    def _ask(prompt, *, max_tokens=1024, cfg=None, model=None, feature=None):
+        return text, {"backend": backend, "model": model or "claude-x",
+                      "input_tokens": in_tok, "output_tokens": out_tok,
+                      "duration_s": 1.5}
+    return _ask
+
+
 def test_llm_path_parses_sections(env, monkeypatch):
     con = _con()
     _seed_uganda(con)
@@ -125,8 +134,8 @@ def test_llm_path_parses_sections(env, monkeypatch):
         "No update since 2 days ago. The brain hasn't seen what you wrote "
         "yesterday.\n"
     )
-    monkeypatch.setattr(tmod, "_call_anthropic",
-                        lambda prompt, *, model, cfg: (canned, 123, 45, 1.5))
+    import workpulse.core.llm as llm_mod
+    monkeypatch.setattr(llm_mod, "ask_text", _fake_ask_text(canned))
     r = tmod.think(con, "what's the state of Uganda?", model="claude-x")
     assert r["fallback"] is False
     assert r["model"] == "claude-x"
@@ -138,25 +147,51 @@ def test_llm_path_records_ai_call(env, monkeypatch):
     con = _con()
     _seed_uganda(con)
     canned = "## Answer\n\nx\n\n## Gap\n\ny\n"
-    monkeypatch.setattr(tmod, "_call_anthropic",
-                        lambda prompt, *, model, cfg: (canned, 100, 50, 1.0))
+    import workpulse.core.llm as llm_mod
+    monkeypatch.setattr(llm_mod, "ask_text",
+                        _fake_ask_text(canned, in_tok=100, out_tok=50))
     r = tmod.think(con, "ping", model="claude-x")
     ai = con.execute("SELECT * FROM ai_call ORDER BY ts DESC LIMIT 1").fetchone()
     assert ai["prompt_slug"] == "skill:think"
-    assert ai["in_tokens"] == 100 and ai["out_tokens"] == 50
+
+
+# ── provider routing (U3, AE4 routing half) ─────────────────────────────────────
+
+def test_think_routes_through_qa_feature(env, monkeypatch):
+    """think() calls llm.ask_text with feature='qa' and records the mocked
+    provider's backend/model/token counts via _record."""
+    con = _con()
+    _seed_uganda(con)
+    canned = "## Answer\n\nx\n\n## Gap\n\ny\n"
+    captured = {}
+
+    def spy_ask_text(prompt, *, max_tokens=1024, cfg=None, model=None, feature=None):
+        captured["feature"] = feature
+        return canned, {"backend": "glm", "model": "glm-4-flash",
+                        "input_tokens": 10, "output_tokens": 5, "duration_s": 0.5}
+
+    import workpulse.core.llm as llm_mod
+    monkeypatch.setattr(llm_mod, "ask_text", spy_ask_text)
+    r = tmod.think(con, "what's the state of Uganda?")
+    assert captured["feature"] == "qa"
+    assert r["fallback"] is False
+    ai = con.execute("SELECT * FROM ai_call ORDER BY ts DESC LIMIT 1").fetchone()
+    assert ai["provider"] == "glm" and ai["model"] == "glm-4-flash"
+    assert ai["in_tokens"] == 10 and ai["out_tokens"] == 5
     sr = con.execute("SELECT status, model FROM skill_run WHERE id = ?",
                      (r["skill_run"],)).fetchone()
     assert sr["status"] == "ok"
-    assert sr["model"] == "claude-x"
+    assert sr["model"] == "glm-4-flash"
 
 
 def test_llm_failure_falls_back(env, monkeypatch):
-    """If the API call returns None (no key, network down, sdk missing),
-    think() must not raise — it falls back."""
+    """If ask_text returns (None, meta) (no key, network down, all providers
+    failed), think() must not raise — it falls back (KTD4)."""
     con = _con()
     _seed_uganda(con)
-    monkeypatch.setattr(tmod, "_call_anthropic",
-                        lambda prompt, *, model, cfg: None)
+    import workpulse.core.llm as llm_mod
+    monkeypatch.setattr(llm_mod, "ask_text",
+                        lambda prompt, **k: (None, {"backend": "none"}))
     r = tmod.think(con, "Uganda")
     assert r["fallback"] is True
     assert "## Answer" in r["raw"] and "## Gap" in r["raw"]
@@ -168,12 +203,53 @@ def test_skill_file_is_in_prompt(env, monkeypatch):
     con = _con()
     _seed_uganda(con)
     captured = {}
-    def _fake(prompt, *, model, cfg):
+    def _fake(prompt, *, max_tokens=1024, cfg=None, model=None, feature=None):
         captured["prompt"] = prompt
-        return ("## Answer\n\nok\n\n## Gap\n\n-\n", 1, 1, 0.1)
-    monkeypatch.setattr(tmod, "_call_anthropic", _fake)
+        return "## Answer\n\nok\n\n## Gap\n\n-\n", {"backend": "anthropic",
+               "model": "claude-x", "input_tokens": 1, "output_tokens": 1,
+               "duration_s": 0.1}
+    import workpulse.core.llm as llm_mod
+    monkeypatch.setattr(llm_mod, "ask_text", _fake)
     tmod.think(con, "Uganda", model="claude-x")
     p = captured["prompt"]
     assert "## Output contract" in p or "Answer" in p  # the skill content
     assert "USER QUESTION:" in p
     assert "ATOMS" in p
+
+
+# ── redaction before any cloud call (U4, R7) ─────────────────────────────────────
+
+def test_prompt_to_provider_is_redacted(env, monkeypatch):
+    """Covers AE5: a sensitive substring in retrieved content is redacted in
+    the prompt sent to the provider, but the returned atoms stay raw."""
+    con = _con()
+    now = datetime.now(timezone.utc)
+    atoms.write_capture(con, body="ping secret@example.com about the draft",
+                        ts=now.isoformat())
+    search.reindex(con)
+    captured = {}
+
+    def spy(prompt, *, max_tokens=1024, cfg=None, model=None, feature=None):
+        captured["prompt"] = prompt
+        return "## Answer\n\nok\n\n## Gap\n\n-\n", {"backend": "anthropic",
+               "model": "claude-x", "input_tokens": 1, "output_tokens": 1,
+               "duration_s": 0.1}
+
+    import workpulse.core.llm as llm_mod
+    monkeypatch.setattr(llm_mod, "ask_text", spy)
+    r = tmod.think(con, "secret", model="claude-x")
+    assert "secret@example.com" not in captured["prompt"]
+    assert any("secret@example.com" in (a.get("content") or "")
+              for a in r["atoms"])
+
+
+def test_fallback_atoms_are_not_redacted(env):
+    """The zero-key fallback never calls ask_text, so it must see raw
+    content -- redaction only applies on the cloud-call path."""
+    con = _con()
+    now = datetime.now(timezone.utc)
+    atoms.write_capture(con, body="ping secret@example.com about the draft",
+                        ts=now.isoformat())
+    search.reindex(con)
+    r = tmod.think(con, "secret", force_fallback=True)
+    assert "secret@example.com" in r["raw"]
