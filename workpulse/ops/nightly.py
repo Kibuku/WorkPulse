@@ -128,6 +128,14 @@ def run(*, force: bool = False, cfg: dict | None = None) -> dict:
             did["attribution"] = attribution.run_attribution_pass(con, cfg=cfg)
         except Exception as e:  # noqa: BLE001 — attribution never blocks the rollup
             did["attribution"] = {"error": str(e)[:200]}
+        # Parse recently-touched documents via LlamaParse into the corpus.
+        # Guarded exactly like attribution: a failure never blocks the rollup,
+        # and it never touches the Tesseract screen-capture pipeline (R9).
+        from workpulse.core import content_capture
+        try:
+            did["document_parse"] = content_capture.parse_and_persist(con, cfg)
+        except Exception as e:  # noqa: BLE001 — parsing never blocks the rollup
+            did["document_parse"] = {"error": str(e)[:200]}
         consolidate.consolidate(con, cfg=cfg)
         report.daily(con, cfg=cfg, send_email=bool(
             (cfg.get("email") or {}).get("enabled")))
