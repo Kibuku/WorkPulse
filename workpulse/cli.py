@@ -276,6 +276,32 @@ def cmd_doctor(args: argparse.Namespace) -> int:
     return 1 if res.get("verdict") == doctor.FAIL else 0
 
 
+def cmd_form(args: argparse.Namespace) -> int:
+    from pathlib import Path
+    from workpulse.core import db, output_forms
+    from workpulse.common import load_config
+    con = db.connect(load_config())
+    a = list(getattr(args, "form_args", []) or [])
+    action = a[0] if a else "list"
+    if action == "list":
+        for f in output_forms.list_forms(con):
+            print(f"{f['id']}  [{f['status']}] {f['name']}  ({f['fill_mode']})")
+        return 0
+    if action == "fill" and len(a) >= 2:
+        result = output_forms.fill_form(con, a[1], cfg=load_config())
+        print(result["markdown"])
+        return 0
+    if action == "import" and len(a) >= 2:
+        fid = output_forms.import_form_from_skill(
+            con, Path(a[1]).read_text(encoding="utf-8"), load_config(),
+            source_skill=a[1])
+        print(f"imported candidate form {fid} (confirm before use)"
+              if fid else "import needs a configured provider")
+        return 0
+    print("usage: workpulse form [list | fill <form-id> | import <skill-file>]")
+    return 2
+
+
 def cmd_attribute(args: argparse.Namespace) -> int:
     from workpulse.core import attribution, db
     from workpulse.common import load_config
@@ -376,6 +402,7 @@ _COMMANDS = {
     "status":    cmd_status,
     "doctor":    cmd_doctor,
     "attribute": cmd_attribute,
+    "form":      cmd_form,
     "web":       cmd_web,
     "version":   cmd_version,
     "product":   cmd_product,
@@ -399,6 +426,8 @@ def main(argv: list[str] | None = None) -> int:
     sub.add_parser("status",    help="show agents + a health summary")
     sub.add_parser("doctor",    help="run the health checks")
     sub.add_parser("attribute", help="run a project-attribution pass over the backlog")
+    fm = sub.add_parser("form", help="output forms: list | fill <id> | import <skill-file>")
+    fm.add_argument("form_args", nargs=argparse.REMAINDER)
     sub.add_parser("version",   help="print the installed version")
     sub.add_parser("product",   help="show this installation's product and role")
     ca = sub.add_parser("classroom-agent",
