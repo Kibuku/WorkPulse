@@ -116,3 +116,20 @@ def import_form_from_skill(con: sqlite3.Connection, skill_text: str,
         if isinstance(sec, dict) and sec.get("name"):
             add_section(con, fid, i, sec["name"], sec.get("expected_evidence"))
     return fid
+
+
+def section_evidence(con: sqlite3.Connection, section: dict, *,
+                     since: str | None = None, limit: int = 10,
+                     with_vector: bool = False) -> list[dict]:
+    """Corpus evidence relevant to a form section (plan U3, R4).
+
+    Retrieves via the shared hybrid search using the section's expected
+    evidence (falling back to its name) as the query, scoped by ``since``.
+    Returned atoms carry their ids for citation and span every corpus kind,
+    including parsed document content (content_capture)."""
+    from workpulse.core import search
+    query = (section.get("expected_evidence") or section.get("name") or "").strip()
+    if not query:
+        return []
+    return search.search(con, query, limit=limit, since=since,
+                        with_vector=with_vector)

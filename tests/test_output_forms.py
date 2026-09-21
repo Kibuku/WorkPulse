@@ -135,3 +135,42 @@ def test_import_redacts_skill_text(env, monkeypatch):
     of.import_form_from_skill(con, "contact h.abigaba@energy.go.ug for details",
                               {"llm": {}})
     assert "h.abigaba@energy.go.ug" not in captured["prompt"]
+
+
+# ── section retrieval (U3, R4) ──────────────────────────────────────────────────
+
+from datetime import datetime, timedelta, timezone  # noqa: E402
+from workpulse.core import atoms, search  # noqa: E402
+
+
+def test_section_evidence_retrieves_matching_atom(env):
+    con = _con()
+    atoms.write_capture(con, body="The Gulu consultation agenda covered eCooking",
+                        ts=datetime.now(timezone.utc).isoformat())
+    search.reindex(con)
+    section = {"name": "Info", "expected_evidence": "consultation agenda"}
+    ev = of.section_evidence(con, section)
+    assert any("Gulu consultation" in (a.get("content") or "") for a in ev)
+
+
+def test_section_no_match_returns_empty(env):
+    con = _con()
+    atoms.write_capture(con, body="unrelated note about lunch",
+                        ts=datetime.now(timezone.utc).isoformat())
+    search.reindex(con)
+    section = {"name": "X", "expected_evidence": "quantum cryptography"}
+    assert of.section_evidence(con, section) == []
+
+
+def test_section_evidence_respects_since(env):
+    con = _con()
+    now = datetime.now(timezone.utc)
+    atoms.write_capture(con, body="stakeholder engagement register recent",
+                        ts=now.isoformat())
+    atoms.write_capture(con, body="stakeholder engagement register ancient",
+                        ts=(now - timedelta(days=90)).isoformat())
+    search.reindex(con)
+    section = {"expected_evidence": "stakeholder engagement register"}
+    ev = of.section_evidence(con, section, since=(now - timedelta(days=7)).isoformat())
+    bodies = " ".join(a.get("content") or "" for a in ev)
+    assert "recent" in bodies and "ancient" not in bodies
