@@ -79,3 +79,59 @@ def test_default_fill_mode_is_strict(env):
     con = _con()
     fid = of.create_form(con, "Default")
     assert of.get_form(con, fid)["fill_mode"] == "strict"
+
+
+# ── import from skill (U2, R2/KTD2) ─────────────────────────────────────────────
+
+from workpulse.core import llm  # noqa: E402
+
+
+def _provider(monkeypatch, response):
+    monkeypatch.setattr(llm, "_resolve_route", lambda cfg, feat: ("glm", None))
+    monkeypatch.setattr(llm, "ask_json", lambda *a, **k: (response, {"backend": "glm"}))
+
+
+def test_import_creates_candidate_form(env, monkeypatch):
+    con = _con()
+    _provider(monkeypatch, {
+        "name": "LSC Engagement Report", "fill_mode": "strict",
+        "sections": [
+            {"name": "Information Made Available", "expected_evidence": "agenda, NTS"},
+            {"name": "Invitations", "expected_evidence": "invitation dates"},
+        ]})
+    fid = of.import_form_from_skill(con, "# skill: lsc-report\n...", {"llm": {}})
+    assert fid is not None
+    form = of.get_form(con, fid)
+    assert form["status"] == "candidate"
+    assert form["source_skill"] is not None
+    assert [s["name"] for s in form["sections"]] == [
+        "Information Made Available", "Invitations"]
+
+
+def test_import_no_provider_returns_none(env, monkeypatch):
+    con = _con()
+    monkeypatch.setattr(llm, "_resolve_route", lambda cfg, feat: ("none", None))
+    assert of.import_form_from_skill(con, "skill text", {"llm": {}}) is None
+    assert of.list_forms(con) == []  # nothing written
+
+
+def test_import_malformed_response_writes_nothing(env, monkeypatch):
+    con = _con()
+    _provider(monkeypatch, None)  # model returned nothing usable
+    assert of.import_form_from_skill(con, "skill text", {"llm": {}}) is None
+    assert of.list_forms(con) == []
+
+
+def test_import_redacts_skill_text(env, monkeypatch):
+    con = _con()
+    monkeypatch.setattr(llm, "_resolve_route", lambda cfg, feat: ("glm", None))
+    captured = {}
+
+    def spy(prompt, **k):
+        captured["prompt"] = prompt
+        return {"name": "F", "sections": [{"name": "S", "expected_evidence": "x"}]}, {}
+
+    monkeypatch.setattr(llm, "ask_json", spy)
+    of.import_form_from_skill(con, "contact h.abigaba@energy.go.ug for details",
+                              {"llm": {}})
+    assert "h.abigaba@energy.go.ug" not in captured["prompt"]

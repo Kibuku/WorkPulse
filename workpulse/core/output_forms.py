@@ -78,3 +78,41 @@ def confirm_form(con: sqlite3.Connection, form_id: str) -> None:
         "confirmed_at = COALESCE(confirmed_at, ?) WHERE id = ?",
         (_now(), form_id))
     con.commit()
+
+
+def import_form_from_skill(con: sqlite3.Connection, skill_text: str,
+                           cfg: dict, *, source_skill: str = "skill") -> str | None:
+    """Propose a candidate form from a skill definition (plan U2, KTD2).
+
+    The model reads the skill's text and returns a form spec
+    {name, fill_mode, sections:[{name, expected_evidence}]}; it is stored as a
+    candidate for the user to confirm. Needs a provider -- with none, returns
+    None (manual authoring stays the keyless path). A malformed response writes
+    nothing. The skill text is redacted before it leaves the machine.
+    """
+    from workpulse.core import llm, content_capture
+    backend, _ = llm._resolve_route(cfg, "form_import")
+    if backend == "none":
+        return None
+    prompt = (
+        "Read this skill/methodology definition and describe the OUTPUT FORM it "
+        "produces. Reply ONLY as JSON: "
+        '{"name": str, "fill_mode": "strict"|"full-draft", '
+        '"sections": [{"name": str, "expected_evidence": str}]}. '
+        "expected_evidence = what data would be needed to fill that section.\n\n"
+        + content_capture.redact(skill_text))
+    obj, _meta = llm.ask_json(prompt, feature="form_import", cfg=cfg)
+    if not isinstance(obj, dict):
+        return None
+    name = obj.get("name")
+    sections = obj.get("sections")
+    if not name or not isinstance(sections, list) or not sections:
+        return None
+    fill_mode = obj.get("fill_mode")
+    if fill_mode not in ("strict", "full-draft"):
+        fill_mode = "strict"
+    fid = create_form(con, name, fill_mode=fill_mode, source_skill=source_skill)
+    for i, sec in enumerate(sections, start=1):
+        if isinstance(sec, dict) and sec.get("name"):
+            add_section(con, fid, i, sec["name"], sec.get("expected_evidence"))
+    return fid
